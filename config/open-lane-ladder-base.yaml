@@ -1,0 +1,38 @@
+# Parked (10 November 2026): the pilots run on one network (config/pilot/); runs over several sizes are kept
+# here, unused, in case sizes are varied later.
+# The open-lane pilot on a ladder of sizes, without its model: what every such run shares. Not a run by
+# itself. A run on one model is a file that extends this one and names the model:
+#   config/open-lane-pilot-max2-ladder.yaml       the linear max-of-2 network (tests/max2_ladder)
+#   config/open-lane-pilot-attn-maxn-tiny.yaml    the attention max-of-n network (tests/attn_maxn_tiny)
+# The worked example, the further Lean sources and the notes about the kernel are facts about an architecture
+# and come from the model folder's config.yaml (open_lane there), so nothing below depends on the model
+# (docs/OPEN_LANE.md, docs/decisions/one-network-pilot.md).
+# Edit open_lane.lean_project to where the Lean project is on this machine, and build it there first:
+# lake build CompactCheck.Soundness CompactCheck.CountedOps CompactCheck.CountedGeneralSound compactcheck acceptcheck
+backend: claude_code
+agent_model: claude-fable-5-1   # the earlier pilots' model, for comparison with them
+effort: xhigh
+prompt_template: open_lane_v4
+# The fixed rules lane (round 0's baselines) limited to single and skip; explicit, as the ticket asks.
+rule_set: [single, skip]
+# The score the agent is shown and asked to raise: B over the cheapest way to finish a network from the checked
+# proofs (a proof's length plus brute force on every correct input it leaves out), as the geometric mean over
+# the run's networks. Brute force on any subset of the inputs scores 1, and so does a network without a proof.
+metric: cost_of_finishing
+baselines: [brute_force]
+networks: all                   # the model's development networks; the held-out ones are never shown
+rounds_max: 7
+patience: 4
+api_retries: {tries: 12, first_wait_s: 60, max_wait_s: 1800, timeout_s: 3600}
+sandbox: auto   # hardened once Docker or Landlock is available; the receipts record the isolation
+open_lane:
+  enabled: true
+  lean_project: ~/Desktop/VerifiedMechanisms/LeanFormalisations/CompactCheck
+  knowledge: minimal
+  # Six networks in a run: a submission per network and two to spare.
+  compile_calls: 60
+  python_calls: 40
+  submissions: 8
+  max_turns: 200
+  worker_seconds: 10800
+  stall_rounds: 2

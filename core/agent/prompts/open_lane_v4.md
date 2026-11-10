@@ -125,16 +125,14 @@ Getting the instance through the kernel:
   accepted in about 25 s, one of 30,000 in about 70 s.
 - Memory is the limit that remains. Within one theorem the kernel's
   memory grows with the work and is released only when the theorem is
-  done (about 0.1 GB per forward pass of an attention network; 60,000
-  one-unit charges did not fit in 7 GB). For many expensive calls, prove
-  one small decided fact per call and combine the facts with the run
-  lemmas (`run_bind`, `run_pure`, and for the general single rule
-  `CostM.gsingle_run_of`), as the worked example below does. The
-  statement stays the same.
+  done (60,000 one-unit charges did not fit in 7 GB). For a long run,
+  prove one small decided fact per part and combine the facts with the
+  run lemmas (`run_bind`, `run_pure`). The statement stays the same.
 - In the soundness proof, prove your lemmas for every list of inputs or
   indices and only then apply them to D's own list. A proof step about
   the concrete run (a `simp` or `split` on it) can make the kernel
   evaluate the run while checking the proof.
+{MODEL_NOTES}
 
 A worked example, a scored brute-force proof (the baseline you should
 beat):

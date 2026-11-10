@@ -164,12 +164,16 @@ def metric_text(cfg: dict, folder: ModelFolder, entries: list[dict]) -> str:
             "length, in both cases only above the line. Cost of finishing breaks ties and is reported separately."
         )
     elif cfg["metric"] == "cost_of_finishing":
+        several = len(entries) != 1
         head = (
-            "Your score is the cost of finishing: the geometric mean over the networks of the run (each size "
-            "setting and the worst network are reported too). For one network, take a proof's length plus, for "
+            ("Your score is the cost of finishing: the geometric mean over the networks of the run (each size "
+             "setting and the worst network are reported too). For one network, take " if several else
+             "Your score is the cost of finishing. Take ") +
+            "a proof's length plus, for "
             "every input the network answers correctly that the proof leaves uncertified, what certifying that "
             "input alone by brute force costs (the single rule's charge, read from round 0's brute-force proof; B "
-            "divided by the number of inputs when there is none). The network's score is B divided by the smallest "
+            "divided by the number of inputs when there is none). The " + ("network's score" if several else "score") +
+            " is B divided by the smallest "
             "such total over the checked proofs: how many times shorter than brute force the cheapest complete "
             "proof built on your work is. Brute force scores 1, and so does a network without a proof. Every proof "
             "counts for what it saves: a partial proof helps as far as it certifies its inputs for less than brute "

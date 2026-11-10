@@ -512,19 +512,22 @@ def test_the_open_lane_prompt_builds_for_every_metric(tmp_path, monkeypatch, met
     assert "YOUR WORKSPACE" in p.part2 and "- Candidate/Tables.lean (1 lines; round 1, submission 2" in p.part2
     assert "tables_ok" not in p.part2 and "ACCEPTED LEMMAS" not in p.part2
     assert "Raise the score. It stands at: " + metric in p.part2
-    assert (" mean " in p.part2.split("Raise the score", 1)[1]) == (metric in ("Q_exact", "Q_above", "cost_of_finishing"))
+    # one network: Q_exact and Q_above are means over a size setting's networks; cost of finishing is that
+    # network's ratio, with no mean to speak of
+    assert (" mean " in p.part2.split("Raise the score", 1)[1]) == (metric in ("Q_exact", "Q_above"))
     assert "-- general" in p.part1 and "{" + "EXTRA_SOURCES}" not in p.part1
     if metric == "cost_of_finishing":
         # one score and nothing else; per network the cheapest way to finish; the receipts say what finishing
         # from each proof costs (a brute-force subset: exactly B, so nothing)
-        assert "Score: 1.188 (cost of finishing, the geometric mean over the 1 network of the run" in p.part2
+        assert "Score: 1.188 (cost of finishing; brute force is 1.000)" in p.part2 and "geometric mean" not in p.part2
         assert not any(other in p.part2 for other in ("Q_above", "Q_exact", "Q median", "brute-force line"))
         assert ("Cheapest way to finish: 10,404 = a proof of length 2,000 certifying 20 of the 64 correct inputs, plus 44 "
                 "inputs by brute force at 191 each (B = 12,360)") in p.part2
         assert "finishing from it costs 12,360, no less than brute force (12,360): it adds nothing to the score" in p.part2
         assert "finishing from it costs 10,404, against 12,360 for brute force (a ratio of 1.188)" in p.part2
-        assert "It stands at: cost_of_finishing: 1.188, the geometric mean over the run's 1 network." in p.part2
-        assert "geometric mean over the networks of the run" in p.part1 and "There are no budgets to aim at." in p.part1
+        assert "It stands at: cost_of_finishing: 1.188. Before writing" in p.part2
+        assert "Your score is the cost of finishing. Take a proof's length" in p.part1 and "geometric mean" not in p.part1
+        assert "There are no budgets to aim at." in p.part1
         return
     # the receipts say which proofs beat brute force; the scoreboard shows the line
     assert "not above the brute-force line (which certifies 10 at this length): scores nothing" in p.part2
@@ -539,40 +542,70 @@ LADDER_FILES = {"scripts/accept.py": "", "CompactCheck/Spec.lean": "-- spec", "C
                 "CompactCheck/CountedOps.lean": "-- ops", "CompactCheck/CountedGeneral.lean": "-- general",
                 "CompactCheck/CountedGeneralSound.lean": "-- sound",
                 "examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean": "-- example",
+                "examples/open_lane/max2_tiny_scored/Candidate/Max2TinyScored.lean": "-- the linear example",
                 "examples/open_lane/pilot2_max2_tiny/r1_ColFull/Candidate/ColFull.lean": "-- the column proof",
                 "examples/open_lane/pilot2_max2_tiny/r4_Full64/Candidate/Full64.lean": "-- another proof"}
 
 
-def ladder_pilot_config(tmp_path: Path, project: Path) -> dict:
-    """config/open-lane-pilot-attn-maxn-tiny.yaml as a run would read it, with this machine's paths and the
-    fake backend (no model is called)."""
-    import yaml
+# The ladder pilots: one shared base (config/open-lane-ladder-base.yaml) and a file of three lines per model.
+# Per pilot: the model folder, its development networks (size setting, seed), and what its prompt must and
+# must not say about the architecture.
+LADDER_PILOTS = {
+    "open-lane-pilot-max2-ladder": {
+        "model": "tests/max2_ladder",
+        "dev": [("n2v24d8", 0), ("n2v24d8", 3), ("n2v32d8", 1), ("n2v32d8", 2), ("n2v48d8", 0), ("n2v48d8", 3)],
+        "example": "examples/open_lane/max2_tiny_scored/Candidate/Max2TinyScored.lean", "extra_sources": [],
+        "says": ["-- the linear example", "which is not one\n  of this run's networks"],
+        "never": ["gsingle", "attention", "-- general", "-- sound"],
+    },
+    "open-lane-pilot-attn-maxn-tiny": {
+        "model": "tests/attn_maxn_tiny",
+        "dev": [("n2v8d4", 1), ("n2v8d4", 2), ("n3v4d4", 0), ("n3v4d4", 2), ("n4v4d4", 0), ("n4v4d4", 2)],
+        "example": "examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean",
+        "extra_sources": ["CompactCheck/CountedGeneral.lean", "CompactCheck/CountedGeneralSound.lean"],
+        "says": ["-- example", "-- general", "-- sound", "`CostM.gsingle_run_of` is its run\n  lemma"],
+        "never": ["-- the linear example"],
+    },
+}
 
-    raw = yaml.safe_load((REPO_ROOT / "config" / "open-lane-pilot-attn-maxn-tiny.yaml").read_text())
+
+def ladder_pilot_config(tmp_path: Path, project: Path, name: str = "open-lane-pilot-attn-maxn-tiny") -> dict:
+    """A ladder pilot's config as a run would read it (the file and the base it extends), with this machine's
+    paths and the fake backend (no model is called)."""
+    from core.run_config import read_run_config_file
+
+    raw = read_run_config_file(REPO_ROOT / "config" / f"{name}.yaml")
     raw.update(backend="fake", runs_dir=str(tmp_path / "runs"), sandbox="auto")
-    raw["open_lane"].update(lean_project=str(project), work_dir=str(tmp_path / "work"), fake_scripts=[])
+    raw["open_lane"] = {**raw["open_lane"], "lean_project": str(project), "work_dir": str(tmp_path / "work"), "fake_scripts": []}
     return raw
 
 
-def test_the_ladder_pilot_scores_six_networks_on_cost_of_finishing_with_prompt_v4(tmp_path, monkeypatch):
-    """The pilot of 10 November 2026: three sizes of the tiny attention network (context lengths 2, 3, 4),
-    two development seeds each, scored on cost of finishing as the geometric mean over the six; prompt
-    template v4. Part 1 puts the score before the rules and says what is wanted (the mechanism: one checker
-    for every size and seed); part 2 shows that one score, each network's cheapest way to finish, and how
-    many networks no proof has reached. From a fake Lean project; no service and no model."""
+@pytest.mark.parametrize("name", list(LADDER_PILOTS))
+def test_the_ladder_pilot_scores_six_networks_on_cost_of_finishing_with_prompt_v4(tmp_path, monkeypatch, name):
+    """The pilots of 10 November 2026, the linear ladder first (three vocabulary sizes of the linear max-of-2
+    network) and the attention one (context lengths 2, 3, 4 of the tiny attention network): two development
+    seeds per size, scored on cost of finishing as the geometric mean over the six; prompt template v4. The
+    two differ in the model alone: the pilot is one shared config, and the worked example, the further
+    sources and the notes about the kernel come from the model folder, so the linear prompt says nothing
+    about attention. Part 1 puts the score before the rules and says what is wanted (the mechanism: one
+    checker for every size and seed); part 2 shows that one score, each network's cheapest way to finish,
+    and how many networks no proof has reached. From a fake Lean project; no service and no model."""
     from core.archive import RunDir
     from core.loop import select_networks
     from core.model_folder import load_model_folder
     from core.open_lane.prompt import build_open_lane_prompt
 
+    pilot = LADDER_PILOTS[name]
     project = fake_project(tmp_path, LADDER_FILES)
-    cfg = merge(ladder_pilot_config(tmp_path, project))
+    cfg = merge(ladder_pilot_config(tmp_path, project, name))
+    assert (cfg["run_id"], cfg["model"]) == (name, pilot["model"])
     assert (cfg["metric"], cfg["prompt_template"], cfg["open_lane"]["knowledge"], cfg["open_lane"]["second_example"]) == (
         "cost_of_finishing", "open_lane_v4", "minimal", None)
+    assert (cfg["open_lane"]["example"], cfg["open_lane"]["extra_sources"]) == (pilot["example"], pilot["extra_sources"])
     folder = load_model_folder(REPO_ROOT / cfg["model"])
     entries = select_networks(folder, cfg)
-    assert [(e["setting"], e["seed"], e["split"]) for e in entries] == [
-        ("n2v8d4", 1, "dev"), ("n2v8d4", 2, "dev"), ("n3v4d4", 0, "dev"), ("n3v4d4", 2, "dev"), ("n4v4d4", 0, "dev"), ("n4v4d4", 2, "dev")]
+    assert [(e["setting"], e["seed"], e["split"]) for e in entries] == [(s, k, "dev") for s, k in pilot["dev"]]
+    assert all(e["real_correct"] == e["n_inputs"] for e in entries)  # every development network at full accuracy
     assert cfg["open_lane"]["submissions"] >= len(entries)  # a submission per network each round
     run = RunDir(tmp_path / "runs", cfg["run_id"])
     run.create(cfg)
@@ -593,6 +626,8 @@ def test_the_ladder_pilot_scores_six_networks_on_cost_of_finishing_with_prompt_v
     assert "the geometric mean over the networks of the run" in p1 and "Q_above" not in p1 and "budget grid" not in p1
     assert "set_option maxRecDepth 1000000 in\n    theorem D_instance" in p1 and "8192 + 4E" in p1
     assert "read the sizes with `I.weightShape`" in p1 and "Get a scored proof through the service early" in p1
+    assert "{" + "MODEL_NOTES}" not in p1 and all(text in p1 for text in pilot["says"])
+    assert not any(text in p1 for text in pilot["never"])
     for e in entries:
         assert f"- {e['id']} ({e['setting']}): correct" in p1
     assert "Score: 1.000 (cost of finishing, the geometric mean over the 6 networks of the run" in first.part2
@@ -605,15 +640,83 @@ def test_the_ladder_pilot_scores_six_networks_on_cost_of_finishing_with_prompt_v
                 "knob": 1.0}
 
     run.round_path(1).mkdir(parents=True, exist_ok=True)  # the first prompt opened round 1's session there
-    run.append_archive([scored(0, entries[0], 64, 3090), scored(1, entries[1], 40, 1800)])
+    first_net, second_net = entries[0], entries[1]  # the two seeds of the smallest size
+    n, B = first_net["n_inputs"], first_net["B"]
+    per_input = (B - first_net["E"]) // n  # brute force: E plus one forward pass per input, exactly
+    assert B == first_net["E"] + n * per_input and B % 4 == 0
+    run.append_archive([scored(0, first_net, n, B // 4), scored(1, second_net, n - 24, 1800)])
     run.mark_done(1)
     p2 = build_open_lane_prompt(cfg, folder, entries, run, 2).part2
-    sibling = 12360 / (1800 + 24 * 191)
+    sibling = B / (1800 + 24 * per_input)
     assert f"Score: {(4.0 * sibling) ** (1 / 6):.3f} (cost of finishing" in p2
-    assert f"n2v8d4: geometric mean {(4.0 * sibling) ** 0.5:.3f}" in p2 and "n4v4d4: geometric mean 1.000" in p2
-    assert f"{entries[0]['id']}: 4.000. Cheapest complete proof: length 3,090, certifying all 64 correct inputs" in p2
-    assert "plus 24 inputs by brute force at 191 each" in p2 and "4 of the 6 networks still stand at 1.000" in p2
+    assert f"{first_net['setting']}: geometric mean {(4.0 * sibling) ** 0.5:.3f}" in p2
+    assert f"{entries[-1]['setting']}: geometric mean 1.000" in p2
+    assert f"{first_net['id']}: 4.000. Cheapest complete proof: length {B // 4:,}, certifying all {n:,} correct inputs" in p2
+    assert f"plus 24 inputs by brute force at {per_input} each" in p2 and "4 of the 6 networks still stand at 1.000" in p2
     assert not any(other in p2 for other in ("Q_above", "Q_exact", "Q median", "brute-force line"))
+
+
+def test_a_run_config_extends_another_so_a_run_on_another_model_is_a_few_lines(tmp_path):
+    """`extends: <file>` (a path next to the config): the extended file's settings underneath, the file's own
+    on top; a setting that is a mapping in both is merged entry by entry; a chain is followed; a file that is
+    missing or leads back to itself is refused. The ladder pilots are written this way: one base without a
+    model, which is not a run by itself."""
+    from core.run_config import RunConfigError, load_run_config, read_run_config_file
+
+    (tmp_path / "base.yaml").write_text("rounds_max: 7\npatience: 4\nrule_set: [single, skip]\n"
+                                        "open_lane:\n  enabled: false\n  submissions: 8\n")
+    (tmp_path / "run.yaml").write_text("extends: base.yaml\nrun_id: r\nmodel: tests/max2_tiny\npatience: 2\n"
+                                       "open_lane:\n  submissions: 3\n")
+    (tmp_path / "next.yaml").write_text("extends: run.yaml\nrun_id: r2\n")
+    raw = read_run_config_file(tmp_path / "run.yaml")
+    assert "extends" not in raw and (raw["rounds_max"], raw["patience"], raw["model"]) == (7, 2, "tests/max2_tiny")
+    assert raw["open_lane"] == {"enabled": False, "submissions": 3}
+    chained = load_run_config(tmp_path / "next.yaml")
+    assert (chained["run_id"], chained["patience"], chained["open_lane"]["submissions"]) == ("r2", 2, 3)
+    assert "extends" not in chained
+    for text, why in (("extends: nowhere.yaml\nrun_id: r\nmodel: m\n", "not a file"), ("extends: loop.yaml\nrun_id: r\nmodel: m\n", "leads back"),
+                      ("extends: [base.yaml]\nrun_id: r\nmodel: m\n", "must be the path")):
+        (tmp_path / "loop.yaml").write_text(text)
+        with pytest.raises(RunConfigError, match=why):
+            read_run_config_file(tmp_path / "loop.yaml")
+    with pytest.raises(RunConfigError, match="missing"):
+        load_run_config(REPO_ROOT / "config" / "open-lane-ladder-base.yaml")
+
+
+def test_a_model_folder_states_its_open_lane_facts_and_a_run_config_may_override_them(tmp_path):
+    """The worked example, the further Lean sources and the notes about the kernel are facts about an
+    architecture: a model folder's config.yaml carries them under open_lane and every run on the model takes
+    them from there. A run config that sets one of them itself wins; a folder that states nothing leaves the
+    defaults; a setting given on the command line does not bring the defaults back over the folder's."""
+    import shutil
+
+    from core.model_folder import ModelFolderError, load_model_folder
+    from core.run_config import apply_overrides, defaults
+
+    plain = tmp_path / "plain"
+    shutil.copytree(REPO_ROOT / "tests" / "stub_model", plain, ignore=shutil.ignore_patterns("zoo", "__pycache__"))
+    stated = tmp_path / "stated"
+    shutil.copytree(plain, stated)
+    block = "open_lane:\n  example: examples/its/Example.lean\n  extra_sources: [CompactCheck/Its.lean]\n  notes: |\n    - A note.\n"
+    (stated / "config.yaml").write_text((stated / "config.yaml").read_text() + block)
+    load_model_folder(stated)
+    base = defaults()["open_lane"]
+
+    def ol(model, **run):
+        return merge({"run_id": "r", "model": str(model), **run})["open_lane"]
+
+    assert (ol(plain)["example"], ol(plain)["extra_sources"], ol(plain)["notes"]) == (base["example"], base["extra_sources"], "")
+    mine = ol(stated)
+    assert (mine["example"], mine["extra_sources"], mine["notes"]) == ("examples/its/Example.lean", ["CompactCheck/Its.lean"], "- A note.\n")
+    assert mine["submissions"] == base["submissions"]  # only the three facts come from the folder
+    over = ol(stated, open_lane={"example": "examples/other/Other.lean"})
+    assert (over["example"], over["extra_sources"]) == ("examples/other/Other.lean", ["CompactCheck/Its.lean"])
+    set_ = merge(apply_overrides({"run_id": "r", "model": str(stated)}, {"open_lane.submissions": 2}))["open_lane"]
+    assert (set_["submissions"], set_["example"]) == (2, "examples/its/Example.lean")
+    for bad in ("open_lane:\n  submissions: 3\n", "open_lane:\n  example: [a]\n", "open_lane: yes\n", "open_lane:\n  extra_sources: [1]\n"):
+        (stated / "config.yaml").write_text((plain / "config.yaml").read_text() + bad)
+        with pytest.raises(ModelFolderError, match="open_lane"):
+            load_model_folder(stated)
 
 
 def test_a_second_worked_example_is_named_and_readable_only_when_the_run_config_says_so(tmp_path):

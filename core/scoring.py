@@ -61,11 +61,14 @@ def q_grid(points: list[dict], E: float, B: float, ratio: float | None = None) -
 
 
 def scored(records: list[dict]) -> list[dict]:
-    """Records that count: checked proofs the checker accepted."""
+    """Records that count: checked proofs the checker accepted. A record of a session after an open-lane
+    run's proof rounds (`stage`: the seed check on another network, the scaling question) never counts: it
+    is reported on its own (core.open_lane.stages)."""
     return [
         r
         for r in records
         if r.get("status") == "ok" and r.get("network") and r.get("length") is not None and r.get("certified") is not None
+        and not r.get("stage")
     ]
 
 
@@ -235,12 +238,18 @@ def q_above(points: list[dict], entry: dict, line: dict) -> float:
 def fallback_cost_per_input(entry: dict, records: list[dict] | None) -> tuple[float, str]:
     """What one uncovered input costs to certify by the fallback rule, exactly: the single rule's charge
     per input, read from the run's brute-force baseline record for this network (its `single` charge over
-    its inputs). When no such record exists, B over the number of inputs, and the result says so."""
+    its inputs). A brute-force record is one whose every input has its own single leaf, whether the network
+    answers it correctly or not: the forward pass is paid either way, so a network with a few misclassified
+    inputs has an exact charge too. When no such record exists, B over the number of inputs, and the result
+    says so."""
     n = entry.get("n_inputs") or 0
     for r in records or []:
         if r.get("network") == entry.get("id") and r.get("round") == 0 and r.get("status") == "ok":
             by_rule = r.get("length_by_rule") or {}
-            if by_rule.get("single") and n and r.get("certified") == n:
+            leaves = r.get("leaves") or {}
+            every_input = r.get("certified") == n or (leaves.get("total") == n and not leaves.get("skipped")
+                                                      and not set(by_rule) - {"single", "extract", "read", "tree", "symmetry"})
+            if by_rule.get("single") and n and every_input:
                 return by_rule["single"] / n, "exact: the single rule's charge per input"
     B = entry.get("B") or 0.0
     return (B / n if n else 0.0), "estimate: B over the number of inputs (no brute-force baseline record)"

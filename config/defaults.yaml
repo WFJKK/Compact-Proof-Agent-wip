@@ -125,8 +125,23 @@ open_lane:
   # Networks beyond linear maps (attention) need the general single rule's sources and its example:
   #   example: examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean
   #   extra_sources: [CompactCheck/CountedGeneral.lean, CompactCheck/CountedGeneralSound.lean]
+  # These are facts about an architecture, so a model folder may state them itself, under open_lane in its
+  # config.yaml (example, extra_sources, notes); they then apply to every run on that model, and a run config
+  # that sets one of them here overrides the folder. The values below are for a folder that states nothing.
   example: examples/open_lane/max2_tiny_scored/Candidate/Max2TinyScored.lean
   extra_sources: []
+  # Notes for the agent about this architecture in Lean's kernel (prompt templates open_lane_v4 and v5 show them
+  # with their advice on getting an instance through the kernel); a model folder's to state, empty otherwise.
+  notes: ""
+  # After the proof rounds (docs/OPEN_LANE.md, "After the proof rounds"; both off by default). Each is one more
+  # session, a round of the run, with the checker of the run's best scored proof locked.
+  # seed_check: {network: <id>} runs the locked checker on a second network: a development network of the model,
+  # of the run's size setting, another seed. The agent writes that network's instance and nothing else. For a run
+  # on one network.
+  seed_check: null
+  # scaling: true then asks how the locked checker's cost grows with the sizes, against brute force's, with
+  # whatever the agent can prove of it as lemmas. Never scored.
+  scaling: false
   # A second worked example, off by default: a scored proof that is not brute force, as a path in the Lean
   # project (for example examples/open_lane/pilot2_max2_tiny/r1_ColFull/Candidate/ColFull.lean, the column proof
   # of the linear max-of-2 network). Prompt template open_lane_v4 names it and read_file may read its folder; its

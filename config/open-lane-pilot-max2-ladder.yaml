@@ -1,0 +1,13 @@
+# Parked (10 November 2026): the pilots run on one network (config/pilot/); see config/open-lane-ladder-base.yaml.
+# The open-lane pilot on the ladder of linear max-of-2 networks (tests/max2_ladder: the tokens' one-hot vectors
+# summed, then three linear maps; hidden width 8, three vocabulary sizes, two development seeds each, six
+# networks):
+#   n2v24d8: 24 tokens, 576 inputs,   B 170,368
+#   n2v32d8: 32 tokens, 1,024 inputs, B 376,384
+#   n2v48d8: 48 tokens, 2,304 inputs, B 1,178,176
+# Everything but the model is config/open-lane-ladder-base.yaml: cost of finishing as the geometric mean over
+# the six networks, prompt template v4, minimal knowledge. The worked example (brute force on the tiny network
+# of tests/max2_tiny) comes from the model folder.
+extends: open-lane-ladder-base.yaml
+run_id: open-lane-pilot-max2-ladder
+model: tests/max2_ladder

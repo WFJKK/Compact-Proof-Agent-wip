@@ -1,0 +1,43 @@
+# The open-lane pilot, without its model: what every pilot run shares. Not a run by itself. A run is a file
+# next to this one that extends it and names a model, one network of it and a second seed for the seed check:
+#   config/pilot/linear-max2.yaml    the linear max-of-2 network at 64 tokens, width 8
+# Further ones (linear or attention; max or min of 2 or 4) are a file of the same few lines each, once their
+# model folder has a size at which a copy of the weights does not fit a checker
+# (docs/decisions/one-network-pilot.md). The worked example, the further Lean sources and the notes about the
+# kernel are facts about an architecture and come from the model folder's config.yaml (open_lane there), so
+# nothing below depends on the model.
+#
+# A run has three parts (docs/OPEN_LANE.md):
+#   1. the proof rounds, on one network, scored on cost of finishing;
+#   2. the seed check: the best proof's checker, locked, on a second seed of the same sizes;
+#   3. the scaling question: how the checker's cost grows with the sizes, against brute force's.
+#
+# Edit open_lane.lean_project to where the Lean project is on this machine, and build it there first:
+# lake build CompactCheck.Soundness CompactCheck.CountedOps CompactCheck.CountedGeneralSound compactcheck acceptcheck
+backend: claude_code
+agent_model: claude-fable-5-1   # the earlier pilots' model, for comparison with them
+effort: xhigh
+prompt_template: open_lane_v5
+# The fixed rules lane (round 0's baselines) limited to single and skip; explicit, as the ticket asks.
+rule_set: [single, skip]
+# The score the agent is shown and asked to raise: B over the cheapest way to finish the network from the
+# checked proofs (a proof's length plus brute force on every correct input it leaves out). Brute force on any
+# subset of the inputs scores 1.
+metric: cost_of_finishing
+baselines: [brute_force]
+rounds_max: 7
+patience: 4
+api_retries: {tries: 12, first_wait_s: 60, max_wait_s: 1800, timeout_s: 3600}
+sandbox: auto   # hardened once Docker or Landlock is available; the receipts record the isolation
+open_lane:
+  enabled: true
+  lean_project: ~/Desktop/VerifiedMechanisms/LeanFormalisations/CompactCheck
+  knowledge: minimal
+  scaling: true             # part 3; part 2 (seed_check) names a network, so it is in the model's file
+  # Per session, the two sessions after the proof rounds included:
+  compile_calls: 60
+  python_calls: 40
+  submissions: 4
+  max_turns: 200
+  worker_seconds: 10800
+  stall_rounds: 2

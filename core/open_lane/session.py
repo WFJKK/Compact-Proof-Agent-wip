@@ -201,8 +201,13 @@ class Session:
 
     # creation ------------------------------------------------------------------------------
     @classmethod
-    def create(cls, path: Path, cfg: dict, model: str, entries: list[dict], run_path: Path) -> "Session":
-        """Make (or reopen) the session folder of an attempt. Budgets carry over if it exists."""
+    def create(cls, path: Path, cfg: dict, model: str, entries: list[dict], run_path: Path, stage: dict | None = None) -> "Session":
+        """Make (or reopen) the session folder of an attempt. Budgets carry over if it exists.
+
+        `stage` makes it a session after the proof rounds (core.open_lane.stages): its name (seed_check or
+        scaling), the lock of the proof it is about (core.open_lane.lock) and that proof's submission folder.
+        Such a session starts from the locked proof's modules alone, the locked ones cannot be changed in it,
+        and `entries` are the networks it works on (for the seed check, the second network)."""
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
         state_path = path / "session.json"
@@ -231,15 +236,60 @@ class Session:
             "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         }
         k = round_of(path)
-        carried = carried_modules(Path(run_path), k) if k else []
+        carried = carried_modules(Path(run_path), k) if k and not stage else []
         state["carried"] = "pending" if carried else []
+        if stage:
+            state["stage"] = stage
         tmp = path / "session.json.tmp"
         tmp.write_text(json.dumps(state, indent=1))
         tmp.replace(state_path)
         session = cls(path)
-        if carried:
+        if stage:
+            session._seed_stage()
+        elif carried:
             session._carry(carried)
         return session
+
+    # a session after the proof rounds: the locked proof --------------------------------------
+    def _lock(self) -> dict | None:
+        return (self.state.get("stage") or {}).get("lock")
+
+    def _seed_stage(self) -> None:
+        """The locked proof in the workspace: its locked modules as they were submitted, and its other
+        modules (the instance for the network it was proved on) to read and adapt. Nothing is compiled."""
+        stage = self.state["stage"]
+        for rel, text in stage["lock"]["modules"].items():
+            dst = self.workspace / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(text)
+        for rel in stage["lock"]["free"]:
+            src = Path(stage["submission"]) / rel
+            if MODULE_PATH.match(rel) and src.is_file() and not src.is_symlink():
+                dst = self.workspace / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes(src.read_bytes())
+
+    def _apply_lock(self, network: str, claimed_count: int, certificate: list | None) -> dict | None:
+        """Before anything is compiled or submitted in a session with a lock: every locked module is written
+        into the workspace again from the lock, for this network (the protected module's name replaced,
+        nothing else). So what the service sees of the checker is the locked text whatever the session did.
+        Returns what was applied, for the submission's record."""
+        lock = self._lock()
+        if not lock:
+            return None
+        from .lock import LockError, protected_name, renamed
+
+        new = None
+        if lock["protected"]:
+            try:
+                new = protected_name(self.lean_project, network, claimed_count, certificate)
+            except LockError as exc:
+                raise ToolError(str(exc))
+        for rel, text in lock["modules"].items():
+            dst = self.workspace / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(renamed(text, lock["protected"], new) if new else text)
+        return {"digest": lock["digest"], "protected_from": lock["protected"], "protected_to": new, "modules": sorted(lock["modules"])}
 
     def _carry(self, carried: list[dict]) -> None:
         """Put the carried modules in the workspace and compile them there, in import order (not charged)."""
@@ -324,10 +374,14 @@ class Session:
             self._network(network)
             if isinstance(claimed_count, bool) or not isinstance(claimed_count, int) or claimed_count < 0:
                 raise ToolError("claimed_count must be a natural number")
+            if path in ((self._lock() or {}).get("modules") or {}):
+                raise ToolError(f"{path} is locked: this session runs the accepted checker unchanged. Write in another "
+                                "module, which may import it.")
             self._spend("lean_check")
             src = self.workspace / path
             src.parent.mkdir(parents=True, exist_ok=True)
             src.write_text(source)
+            self._apply_lock(network, claimed_count, certificate)
             cmd = ["compile", str(self.workspace), path, "--model", self.state["model"], "--network", network, "--claimed", str(claimed_count)]
             if certificate:
                 cpath = self.path / "certificate.json"
@@ -464,6 +518,18 @@ class Session:
                     raise ToolError(f"{m} is not in the workspace; save it with lean_check first")
             if not isinstance(theorem, str) or not theorem.startswith("Candidate."):
                 raise ToolError("theorem must be the full name of the theorem proving Target, under Candidate.")
+            stage, lock = self.state.get("stage") or {}, self._lock()
+            if stage.get("name") == "seed_check":
+                if kind != "performance" or not isinstance(scored, dict):
+                    raise ToolError("the seed check takes scored proofs only: a performance submission with a scored block")
+                for key in ("checker", "sound"):
+                    if scored.get(key) != lock[key]:
+                        raise ToolError(f"scored.{key} must be {lock[key]}: the seed check runs the locked checker")
+            elif stage.get("name") == "scaling" and kind != "auxiliary":
+                raise ToolError("this session takes lemmas only (kind auxiliary): the proof rounds are over")
+            applied = self._apply_lock(network, claimed_count, (scored or {}).get("certificate") if isinstance(scored, dict) else None)
+            if lock:  # the locked modules always go along, so the constants the manifest names are the locked ones
+                modules = list(dict.fromkeys(list(modules) + list(lock["modules"])))
             modules = self.with_imports(modules)
             self._spend("submit_candidate")
             n = len(list((self.path / "submissions").glob("*"))) if (self.path / "submissions").is_dir() else 0
@@ -487,6 +553,20 @@ class Session:
                 receipt["reason"] = receipt.get("error")
             receipt["submission"] = n
             (cdir / "receipt.json").write_text(json.dumps(receipt, indent=1))
+            if applied:
+                # the locked modules as they went to the service: the lock's text, renamed for this network. The
+                # receipt carries the hash of every module the service compiled, so it says the same.
+                import hashlib
+
+                from .lock import renamed
+
+                seen = (receipt.get("digests") or {}).get("modules") or {}
+                expected = {rel: renamed(text, lock["protected"], applied["protected_to"]) if applied["protected_to"] else text
+                            for rel, text in lock["modules"].items()}
+                applied["intact"] = all((cdir / rel).is_file() and (cdir / rel).read_text() == text for rel, text in expected.items())
+                applied["in_receipt"] = bool(seen) and all(
+                    seen.get(module_name(rel)) == hashlib.sha256(text.encode()).hexdigest() for rel, text in expected.items())
+                (cdir / "lock.json").write_text(json.dumps(applied, indent=1))
             out = {k: receipt.get(k) for k in ("status", "reason", "claim_kind", "certified_count", "domain_size", "claimed_count",
                                                 "network", "statement", "axioms", "score_eligible", "execution_assurance", "scoring", "seconds")}
             out["submission"] = n

@@ -293,9 +293,20 @@ def open_context(run: RunDir, cfg: dict, log=print) -> Context:
     )
 
 
+def seed_check_entry(cfg: dict, folder, entries: list[dict]) -> dict | None:
+    """The network of the run's seed check (open_lane.seed_check), checked; None when the run has none."""
+    from .open_lane.stages import StageError, check_network
+
+    try:
+        return check_network(cfg, folder, entries, networks(folder, "dev"))
+    except StageError as exc:
+        raise LoopError(str(exc)) from exc
+
+
 def preflight(cfg: dict, folder) -> None:
     """Checks that must pass before a run folder is made."""
-    select_networks(folder, cfg)
+    entries = select_networks(folder, cfg)
+    seed_check_entry(cfg, folder, entries)  # a seed check on the wrong network fails here
     baseline_files(folder, cfg["baselines"])  # a misspelt baseline name fails here
     if cfg["lean_spot_check"] and lean_command(folder) is None:
         raise LoopError(f"lean_spot_check is on, but {folder.name} has no Lean checker (lean_check in its config.yaml)")
@@ -435,8 +446,14 @@ def drive(ctx: Context) -> None:
     if hasattr(backend, "bind"):
         backend.bind(cfg, cfg["model"], ctx.entries, run.path)
     per_round = cfg["recipes_per_round"]
+    # after the proof rounds of an open-lane run: the seed check and the scaling question (core.open_lane.stages)
+    from .open_lane import stages
+
+    after = bool(stages.planned(cfg))
+    check_entry = seed_check_entry(cfg, folder, ctx.entries)
+    ended = f"the round limit ({cfg['rounds_max']})"  # why the proof rounds ended, when they ended for good
     k = max(run.next_round(), 1)
-    while k <= cfg["rounds_max"]:
+    while k <= cfg["rounds_max"] and not (after and stages.started(run)):
         first = (k - 1) * per_round
         fresh = not run.round_done(k) and run.read(k, "attempt_0/response.md") is None
         if fresh:
@@ -448,13 +465,16 @@ def drive(ctx: Context) -> None:
                 what = "no gain"
             if stale >= cfg["patience"]:
                 ctx.log(f"{what} in {stale} rounds (patience {cfg['patience']}); stopping after round {k - 1}")
+                ended = f"{what} in {stale} rounds (patience {cfg['patience']})"
                 break
             refused = consecutive_refusals(run)
             if refused >= cfg["max_consecutive_refusals"]:
                 ctx.log(f"the model declined {refused} attempts in a row; stopping after round {k - 1}")
+                ended = None  # not an end of the proof rounds: nothing is locked
                 break
             if not backend.available(first):
                 ctx.log(f"the {backend.name} backend has no more responses; stopping after round {k - 1}")
+                ended = None
                 break
         before = {p["record_id"] for pts in frontier(run.read_archive()).values() for p in pts}
         run_round(ctx, k, backend, first, per_round, "agent", prompt=round_prompt(ctx, k))
@@ -463,6 +483,11 @@ def drive(ctx: Context) -> None:
             new_points = {p["record_id"] for pts in frontier(run.read_archive()).values() for p in pts}
             spot_check(ctx, k, [r for r in entered if r["record_id"] in new_points])
         k += 1
+    if after and (stages.started(run) or ended):
+        try:
+            stages.run_stages(ctx, backend, check_entry, ended or "", run_round)
+        except stages.StageError as exc:
+            raise LoopError(str(exc)) from exc
 
 
 # status ------------------------------------------------------------------------
@@ -509,6 +534,10 @@ def status_text(run: RunDir, diagnostics: bool = False) -> str:
                 f"the brute-force line), best certified accuracy {m['best_accuracy']:.5f} of {real}, "
                 f"shortest full-accuracy proof {full}"
             )
+    if (cfg.get("open_lane") or {}).get("enabled"):
+        from .open_lane.stages import status_lines
+
+        lines += status_lines(run)
     return "\n".join(lines)
 
 

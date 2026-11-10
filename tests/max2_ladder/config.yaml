@@ -1,0 +1,54 @@
+# A ladder of sizes of the linear max-of-2 network (models/max2/model.py and task.py, copied: the two tokens'
+# one-hot vectors summed, then three linear maps without biases), for runs that score a method on several
+# networks at once (docs/decisions/one-network-pilot.md). The vocabulary takes three values at a
+# fixed hidden width, so a checker written for one size does not serve the others, and from the smallest to
+# the largest it doubles:
+#   n2v24d8: 24 tokens, 576 inputs
+#   n2v32d8: 32 tokens, 1,024 inputs
+#   n2v48d8: 48 tokens, 2,304 inputs
+# The sizes are chosen so that a copy of a network's weights cannot fit in a checker: written out, a
+# network's weights measure 13,115 to 27,233 units (one per bit, the least any encoding can measure) against
+# the Lean service's description budget of 8,192 + 4E, which is 9,984 to 11,520 here. At 16 tokens a copy is
+# at the budget (8,932 to 9,522 against 9,472), and on the tiny networks of tests/ it fits several times over.
+# Four seeds per size, two for development and two held out, drawn as in every folder (split.seed). Training
+# is models/max2's. Trained by core.train.
+size_settings:
+  n2v24d8:
+    n_ctx: 2
+    d_vocab: 24
+    d_model: 8
+  n2v32d8:
+    n_ctx: 2
+    d_vocab: 32
+    d_model: 8
+  n2v48d8:
+    n_ctx: 2
+    d_vocab: 48
+    d_model: 8
+seeds: [0, 1, 2, 3]
+split:
+  held_out_per_setting: 2
+  seed: 7
+training:
+  optimizer: AdamW
+  lr: 0.001
+  weight_decay: 0.01
+  batch_size: 1024
+  steps: 4000
+zoo_path: zoo
+cost_model: cost-v4
+control_networks: []
+# Strings the agent's prompt must never contain: the prompt never names the paper this work follows.
+hygiene: ["Gross", "Compact Proofs of Model Performance"]
+# What an open-lane run on this model takes from the Lean project and tells the agent (a run config may set
+# any of these itself). The worked example is brute force on the tiny network of tests/max2_tiny, the same
+# architecture at 8 tokens: none of this folder's networks.
+open_lane:
+  example: examples/open_lane/max2_tiny_scored/Candidate/Max2TinyScored.lean
+  extra_sources: []
+  notes: |
+    - The worked example below is brute force on a smaller network of this
+      architecture (8 tokens, hidden width 4, 64 inputs), which is not one
+      of this run's networks. Its checker and its soundness proof hold for
+      any size; its instance is one theorem, and brute force on this run's
+      networks (B above) is far beyond what one theorem holds.

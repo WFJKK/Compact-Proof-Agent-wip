@@ -13,7 +13,7 @@ there). This document is the pipeline side: how a run uses it.
 With `open_lane.enabled: true` in the run config, an agent round is a session with tools instead of one
 response:
 
-- The prompt (`core/agent/prompts/open_lane_v1.md`, `open_lane_v2.md`, `open_lane_v3.md` or `open_lane_v4.md`, built by
+- The prompt (`core/agent/prompts/open_lane_v1.md` to `open_lane_v5.md`, built by
   `core/open_lane/prompt.py`) gives the specification (Spec.lean), the protected module's interface, the
   counted language with its prices (Counted.lean, CountedOps.lean), a scored brute-force proof as the worked
   example (`open_lane.example`), the tools and their budgets, the scoreboard, the receipts so far, the sources
@@ -25,12 +25,15 @@ response:
   run with `set_option maxRecDepth 1000000 in` before it: Lean's default recursion limit stops the kernel's
   evaluation of a bill after a few thousand charges, and the server pilot of 26 October built a model of its
   checker and run lemmas to get past it (the Lean project's docs/COUNTED.md, "The instance in one theorem").
-  Template v4 (10 November 2026) is for a run over several networks scored on cost of finishing: the goal
-  names the mechanism shared by seeds and sizes, the score comes before the rules, the rules of scoring are
-  lists, there is advice on how to work, and the answer's WHY IT HELPS asks for the mechanism, the checker
-  step that relies on it, what would make the proof fail on a network, and which networks it covers. Under
-  `metric: cost_of_finishing` the scoreboard, the receipts and the aim show that one score and, per network,
-  the cheapest way to finish; under the other metrics they are what they were.
+  Template v5 (10 November 2026, the pilot's) is for a run on one network scored on cost of finishing: the
+  goal says what follows the rounds (the seed check and the scaling question, below) and what that asks of a
+  proof, the score comes before the rules, the rules of scoring are lists, there is advice on how to work
+  (the checker's modules apart from the instance's), and the answer's WHY IT HELPS asks for the mechanism,
+  the checker step that relies on it and what would make the checker certify less on another network.
+  Template v4 is its counterpart for a run over several networks (parked). Under `metric: cost_of_finishing`
+  the scoreboard, the receipts and the aim show that one score and the cheapest way to finish; under the
+  other metrics they are what they were. Neither template says anything about an architecture: that comes
+  from the model folder (`open_lane.notes`, below).
 - The tools (`core/open_lane/session.py`): `lean_check` saves a module in the session's workspace and
   compiles it through the service against the protected module of a network and claim;
   `run_python` runs code in the recipe sandbox with the network's weights; `search_library` searches the
@@ -77,6 +80,7 @@ Layout of an open-lane attempt:
 
     round_003/attempt_0/
         open_lane/session.json, tools.jsonl, workspace/, submissions/000/{manifest.json, Candidate/, receipt.json}
+                                 (and lock.json in a session after the proof rounds: the lock as applied)
         mcp.json                 the CLI's MCP configuration (claude_code backend)
         response.md              the session's final text (CLAIM, WHY IT HELPS, NOTES)
         response_meta.json       tokens, turns, tools used, submissions
@@ -120,13 +124,40 @@ such subsets, which scored 0.15 with no compression at all. Under Q_above they s
 agent whether each proof is above the line, and a scored proof keeps the loop's patience alive only if it
 raised Q_above (lemmas as before). `python -m core.rescore --run <run>` re-scores a finished run.
 
-Since 10 November the pilot is driven by cost of finishing (docs/decisions/cost-of-finishing-and-ladder.md):
-per network, B over the cheapest way to finish from the checked proofs (a proof's length plus brute force on
-every correct input it leaves out, at the single rule's exact charge), a network counting at least 1, and
-for the run the geometric mean over all its networks (`core.scoring.run_cost_of_finishing`). There are no
-budgets to land under and no points to place; brute force on any subset of the inputs is exactly 1; a scored
-proof keeps the loop's patience alive only if it raised the score of its size setting. The agent is shown
-this score alone. Q, Q_grid, Q_exact and Q_above are still computed for the reports.
+Since 10 November the pilot is driven by cost of finishing (docs/decisions/one-network-pilot.md): B over
+the cheapest way to finish the network from the checked proofs (a proof's length plus brute force on every
+correct input it leaves out, at the single rule's exact charge), never below 1. A run on several networks
+takes the geometric mean (`core.scoring.run_cost_of_finishing`). There are no budgets to land under and no
+points to place; brute force on any subset of the inputs is 1; a scored proof keeps the loop's patience
+alive only if it raised the score. The agent is shown this score alone. Q, Q_grid, Q_exact and Q_above are
+still computed for the reports.
+
+## After the proof rounds
+
+A pilot run is about one network and has two more sessions after its proof rounds
+(`core/open_lane/stages.py`), each a round of the run, resumable like any round:
+
+- The seed check (`open_lane.seed_check: {network: <id>}`). The checker of the run's best scored proof is
+  locked and run, unchanged, on a second network: a development network of the same model and size
+  setting, another seed. The agent writes that network's instance and nothing else. The lock is by module
+  (`core/open_lane/lock.py`): the modules that declare the checker and the soundness theorem, with what
+  they import, are locked; the instance must be declared outside them, in a module that imports them; a
+  constant is taken to be declared in the module it is named after. In the session the locked modules
+  cannot be saved over, they are written into the workspace again from the lock before every compile and
+  submission (with the protected module's name replaced by the second network's, and nothing else), the
+  submission must name the locked checker and soundness theorem, and the record says whether the hashes in
+  the receipt are the locked text's. During the proof rounds the receipts say of every scored proof
+  whether it can be locked, and why not.
+- The scaling question (`open_lane.scaling: true`). The agent states how the locked checker's cost grows
+  with the sizes, against brute force's, and submits what it can prove of that as lemmas. The session
+  takes lemmas only, and nothing in it is scored.
+
+`stages.json` in the run folder records when and why the proof rounds ended, which proof was locked (and
+any better proof passed over because it could not be), each stage's round and what it found. Once it
+exists the run makes no more proof rounds: the proof rounds end at the round limit or by patience, not
+when a backend runs out or the model declines. The stages' records carry `stage` and never enter a
+frontier or a score; the report has a section for them, with the cost of finishing on both networks side
+by side.
 
 ## The reference count
 
@@ -187,13 +218,28 @@ model's architecture at 4 positions, 4 tokens, width 4, 256 inputs, both seeds a
 leaf costs 51, E is 48). Their worked example is the linear scored brute force. All the tiny pilots run up
 to 7 rounds.
 
-The ladder pilot (`config/open-lane-pilot-attn-maxn-tiny.yaml`, model `tests/attn_maxn_tiny`): the attention
-max-of-n network at three sizes (2 positions and 8 tokens, 3 positions and 4 tokens, 4 positions and 4
-tokens), two development seeds each, six networks in one run, scored on cost of finishing with template v4
-and minimal knowledge. Two more seeds per size are held out and never shown; `core.final` still refuses an
-open-lane run, so running the frozen general layer on them is done by hand after the pilot. A second worked
-example (`open_lane.second_example`, a scored proof that is not brute force; the prompt points to it and
-`read_file` may read it) is off in the config: it is more knowledge than the earlier pilots had.
+The pilot (10 November 2026) is written once, `config/pilot/base.yaml` (cost of finishing, template v5,
+minimal knowledge, the scaling question on), and a run is a file next to it that extends it
+(`extends: <file>`, a path next to the config; the file's own settings go on top) and names the model, one
+network and the seed check's network:
+
+- `config/pilot/linear-max2.yaml`: the linear max-of-2 network at 64 tokens and hidden width 8
+  (`models/max2`), proof rounds on `max2-v64-s0`, the seed check on `max2-v64-s1`.
+
+What an open-lane run needs to know about an architecture is the model folder's to state, under `open_lane`
+in its `config.yaml`: the worked example and the further Lean sources (`example`, `extra_sources`) and notes
+for the agent about the architecture in Lean's kernel (`notes`, shown by templates v4 and v5). A run config
+that sets one of these itself overrides the folder; a folder that states nothing leaves the defaults. So a
+pilot on another model (linear or attention; max or min of 2 or 4) is a model folder and a config of a few
+lines. Its size must be one at which a copy of the weights does not fit a checker: at least one unit per bit
+of the weights against the service's description budget of 8,192 + 4E (34,044 against 12,544 for the linear
+network at 64 tokens; on the tiny networks a copy fits).
+
+Parked, unused by the pilot: runs over several sizes (`config/open-lane-ladder-base.yaml` and the two
+configs that extend it, template v4, the model folders `tests/max2_ladder` and `tests/attn_maxn_tiny`). A
+second worked example (`open_lane.second_example`, a scored proof that is not brute force; the prompt
+points to it and `read_file` may read it) is off: it is more knowledge than the earlier pilots had, and on
+a linear model the proof it would show is the linear network's own.
 
 The receipts record the isolation the service had: Landlock on Linux, `process (weak)` on a Mac, where
 Docker is not used by the service. The pilot's gate (the ticket): one agent-produced open-lane candidate

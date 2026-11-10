@@ -1,6 +1,6 @@
 # A small ladder of sizes of the attention max-of-n network (models/attn-max2/model.py and task.py, copied:
 # Gross et al.'s one-layer, one-head, attention-only transformer), for runs that score a method on several
-# networks at once (docs/decisions/cost-of-finishing-and-ladder.md). Every size is small enough for Lean's
+# networks at once (docs/decisions/one-network-pilot.md). Every size is small enough for Lean's
 # kernel to run its forward passes one theorem at a time, and the head size 4 makes the attention scale
 # 1/sqrt(4) exactly 1/2. The context length takes three values, so a checker written for one size does not
 # serve the others:
@@ -47,8 +47,20 @@ training:
 zoo_path: zoo
 cost_model: cost-v4
 control_networks: []
-hygiene: []
+# Strings the agent's prompt must never contain: the prompt never names the paper this work follows.
+hygiene: ["Gross", "Compact Proofs of Model Performance"]
 # The Lean checker for the fixed rules lane's proof files (core.lean: a spot check of frontier entries during a run,
 # with lean_spot_check: true; scripts/check_run.py of the Lean project checks every proof afterwards). The Lean
 # project is COMPACT_PROOF_LEAN or the pilots' default path, built with `lake build compactcheck`.
 lean_check: [python3, ../../scripts/lean_check_proof.py, "{proof}", "{weights}"]
+# What an open-lane run on this model takes from the Lean project and tells the agent (a run config may set
+# any of these itself): the attention brute force as the worked example (on the network of
+# tests/attn_max2_tiny, which is n2v8d4 seed 1 here), and the general single rule's sources.
+open_lane:
+  example: examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean
+  extra_sources: [CompactCheck/CountedGeneral.lean, CompactCheck/CountedGeneralSound.lean]
+  notes: |
+    - On these networks a forward pass by the general single rule
+      (`I.gsingle`) takes about 0.1 GB of the kernel's memory and about 2 s
+      as a decided fact of its own. `CostM.gsingle_run_of` is its run
+      lemma, and the worked example below proves one fact per input with it.

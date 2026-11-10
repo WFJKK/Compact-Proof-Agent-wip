@@ -7,6 +7,15 @@ a default. Relative paths are relative to the repository root.
 A run may also set values when it starts (`python -m core.loop run ... --set
 rounds_max=5`): they go on top of the run config before the merge, under the
 same checks, and the run folder's config.yaml records the result.
+
+A run config may build on another: `extends: <file>` (a path next to it) takes
+that file's settings and puts its own on top, so what several runs share is
+written once and a run on another model is a file of a few lines.
+
+What an open-lane run takes from the Lean project for one architecture (the
+worked example, further sources, notes for the agent) belongs to the model: a
+model folder's config.yaml may carry them under `open_lane`, and they apply
+unless the run config sets the same entry itself.
 """
 
 from __future__ import annotations
@@ -45,10 +54,50 @@ def defaults() -> dict:
     return dict(read_yaml(DEFAULTS_PATH))
 
 
-def load_run_config(path: str | Path, run_id: str | None = None, overrides: dict | None = None) -> dict:
-    raw = read_yaml(Path(path))
+def read_run_config_file(path: str | Path, _seen: tuple = ()) -> dict:
+    """A run config file as written, with the file it extends underneath (`extends: <file>`, a path relative
+    to the file's own folder; a chain is followed). A setting that is a mapping in both (open_lane,
+    api_retries) is merged entry by entry; anything else the extending file replaces."""
+    path = Path(path)
+    raw = read_yaml(path)
     if not isinstance(raw, dict):
         raise RunConfigError(f"{path}: a run config is a mapping")
+    raw = dict(raw)
+    parent = raw.pop("extends", None)
+    if parent is None:
+        return raw
+    if not isinstance(parent, str) or not parent:
+        raise RunConfigError(f"{path}: extends must be the path of another run config")
+    parent_path = (path.parent / Path(parent).expanduser()).resolve()
+    if parent_path in _seen or parent_path == path.resolve():
+        raise RunConfigError(f"{path}: extends leads back to {parent_path.name}")
+    if not parent_path.is_file():
+        raise RunConfigError(f"{path}: extends {parent!r}, which is not a file")
+    base = read_run_config_file(parent_path, (*_seen, path.resolve()))
+    out = dict(base)
+    for key, value in raw.items():
+        out[key] = {**base[key], **value} if isinstance(value, dict) and isinstance(base.get(key), dict) else value
+    return out
+
+
+MODEL_OPEN_LANE_KEYS = ("example", "extra_sources", "notes")
+
+
+def model_open_lane(model: object) -> dict:
+    """The open-lane facts a model folder carries in its config.yaml (`open_lane`: the worked example and
+    further sources in the Lean project, notes for the agent); empty without them. The folder's own loader
+    checks their form (core.model_folder)."""
+    if not isinstance(model, str):
+        return {}
+    path = resolve(model) / "config.yaml"
+    if not path.is_file():
+        return {}
+    block = (read_yaml(path) or {}).get("open_lane")
+    return {k: v for k, v in block.items() if k in MODEL_OPEN_LANE_KEYS} if isinstance(block, dict) else {}
+
+
+def load_run_config(path: str | Path, run_id: str | None = None, overrides: dict | None = None) -> dict:
+    raw = read_run_config_file(path)
     if run_id is not None:
         raw = {**raw, "run_id": run_id}
     if overrides:
@@ -91,6 +140,8 @@ def apply_overrides(raw: dict, overrides: dict) -> dict:
         current = out.get(head, base.get(head))
         if "." in entry or not isinstance(current, dict):
             raise RunConfigError(f"--set {key}: write a setting, or <setting>.<entry> for a setting that is a mapping")
+        if head == "open_lane" and head not in out:
+            current = {}  # the merge lays open_lane over the defaults and the model folder's entries itself
         out[head] = {**current, entry: value}
     return out
 
@@ -104,8 +155,9 @@ def merge(raw: dict, source: str = "run config") -> dict:
     if missing:
         raise RunConfigError(f"{source}: missing {missing}")
     cfg = {**base, **raw}
-    if isinstance(raw.get("open_lane"), dict):
-        cfg["open_lane"] = {**base["open_lane"], **raw["open_lane"]}
+    if isinstance(raw.get("open_lane", {}), dict):
+        # the defaults, then what the model folder says about itself, then the run config
+        cfg["open_lane"] = {**base["open_lane"], **model_open_lane(raw.get("model")), **raw.get("open_lane", {})}
     validate(cfg, source)
     if cfg["open_lane"]["enabled"] and "rule_set" not in raw:
         raise RunConfigError(f"{source}: with the open lane on, rule_set must be written in the run config (no implicit default)")
@@ -206,7 +258,8 @@ def validate(cfg: dict, source: str = "run config") -> None:
 
 
 OPEN_LANE_KEYS = {"enabled", "lean_project", "work_dir", "python", "compile_calls", "python_calls", "submissions", "max_turns",
-                  "worker_seconds", "stall_rounds", "fake_scripts", "example", "extra_sources", "knowledge", "second_example"}
+                  "worker_seconds", "stall_rounds", "fake_scripts", "example", "extra_sources", "knowledge", "second_example", "notes",
+                  "seed_check", "scaling"}
 KNOWLEDGE_CONDITIONS = ("minimal", "maximum")
 
 
@@ -235,6 +288,13 @@ def open_lane_errors(cfg: dict) -> list[str]:
     second = ol.get("second_example")
     if second is not None and (not isinstance(second, str) or not second.startswith("examples/") or ".." in second):
         errors.append("open_lane.second_example must be null or a path under examples/ in the Lean project")
+    if not isinstance(ol.get("notes", ""), str):
+        errors.append("open_lane.notes must be text")
+    check = ol.get("seed_check")
+    if check is not None and not (isinstance(check, dict) and set(check) == {"network"} and isinstance(check["network"], str)):
+        errors.append("open_lane.seed_check must be null or {network: <a development network of the model>}")
+    if not isinstance(ol.get("scaling", False), bool):
+        errors.append("open_lane.scaling must be true or false")
     if ol.get("knowledge") not in KNOWLEDGE_CONDITIONS:
         errors.append(f"open_lane.knowledge must be one of {', '.join(KNOWLEDGE_CONDITIONS)}")
     errors = [f"open_lane: {e}" if not e.startswith("open_lane") else e for e in errors]

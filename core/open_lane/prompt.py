@@ -55,6 +55,29 @@ AIM_UNCOVERED_TEXT = (
 )
 
 
+# In a run with a seed check, when the proof the score rests on cannot be taken there.
+NOT_READY_TEXT = (
+    "The proof your score rests on (length {length:,}) cannot be taken to the seed check as it is: {why} Before "
+    "the rounds end, submit it again with the checker and its soundness proof in modules apart from the instance."
+)
+
+
+def not_ready_line(records: list[dict], entries: list[dict], ready: dict | None) -> str:
+    """For a run on one network with a seed check: a line for the aim when the best scored proof (the one
+    that finishes the network cheapest) cannot be locked; empty otherwise."""
+    if ready is None or len(entries) != 1:
+        return ""
+    entry, best = entries[0], None
+    for r in records:
+        if r.get("record_id") in ready and r.get("network") == entry["id"]:
+            d = finishing_detail([{"length": r["length"], "certified": r["certified"], "n_inputs": entry["n_inputs"]}], entry, records)
+            if d is not None and (best is None or d["total"] <= best[0]):
+                best = (d["total"], r)
+    if best is None or ready[best[1]["record_id"]] is None:
+        return ""
+    return NOT_READY_TEXT.format(length=best[1]["length"], why=ready[best[1]["record_id"]][:MAX_REASON].rstrip(".") + ".")
+
+
 def lean_project(cfg: dict) -> Path:
     return Path(cfg["open_lane"]["lean_project"]).expanduser().resolve()
 
@@ -135,6 +158,63 @@ SECOND_EXAMPLE_TEXT = (
 )
 
 
+# What template open_lane_v5 says about the sessions after the proof rounds (core.open_lane.stages), each only
+# when the run has it.
+AFTER_HEAD = {0: "This run is about one network.",
+              1: "This run is about one network. One thing comes after its rounds, and\nit says what a good proof is:",
+              2: "This run is about one network. Two things come after its rounds, and\nthey say what a good proof is:"}
+AFTER_SEED_CHECK = """- The seed check. The checker of your best scored proof, and its
+  soundness proof, are locked and run unchanged on a second network: the
+  same architecture and sizes, trained from another seed. You then write
+  only the instance for that network. A checker that rests on how such a
+  network computes certifies as much there. One that rests on this
+  network's numbers certifies little, and that is what the check
+  measures. Numbers that belong to one network reach a checker through
+  the charged certificate, never through its code."""
+AFTER_SCALING = """- The scaling question. {when} you are asked how your checker's cost
+  grows with the sizes of the network, whether it grows more slowly than
+  brute force, and to prove as much of the answer as you can. Nothing
+  here asks for a proof at another size. But a checker that reads its
+  sizes from the weights, not from numbers written into it, is one this
+  question can be asked of."""
+MODULES_RULE = """- Keep the checker and the instance in separate modules, from your
+  first scored submission on. One or more modules hold `D`, `D_sound`
+  and everything they use. A module of its own, which imports them,
+  holds `D_instance`, the facts it is built from and the theorem proving
+  `Target`. Name each constant after its module (`Candidate.Col.D` in
+  `Candidate/Col.lean`). The checker's modules may import the protected
+  module for `graph` and `task`.
+"""
+MODULES_WHY = {
+    "seed_check": """  The seed check locks the first kind and you rewrite the second for the
+  other network, where the protected module's name is replaced for you.
+  A proof kept in one module cannot be taken there; the receipts below
+  say of each scored proof whether it can.
+""",
+    "scaling": """  The scaling question is asked of the first kind, locked. A proof kept
+  in one module cannot be asked it.
+""",
+}
+
+
+def after_rounds_text(ol: dict) -> str:
+    """Part 1's account of what follows the proof rounds: the seed check and the scaling question, as the
+    run has them."""
+    parts = []
+    if ol.get("seed_check"):
+        parts.append(AFTER_SEED_CHECK)
+    if ol.get("scaling"):
+        parts.append(AFTER_SCALING.format(when="Last," if parts else "Then"))
+    return "\n".join([AFTER_HEAD[len(parts)]] + parts)
+
+
+def modules_rule_text(ol: dict) -> str:
+    """The advice to keep the checker's modules apart from the instance's: only a run with a session after
+    its proof rounds needs it."""
+    why = MODULES_WHY["seed_check"] if ol.get("seed_check") else MODULES_WHY["scaling"] if ol.get("scaling") else None
+    return MODULES_RULE + why if why else ""
+
+
 def second_example_text(rel: str | None) -> str:
     """Part 1's pointer to open_lane.second_example (prompt template open_lane_v4); empty without one."""
     return SECOND_EXAMPLE_TEXT.format(path=rel) if rel else ""
@@ -193,6 +273,9 @@ def static_values(cfg: dict, folder: ModelFolder, entries: list[dict]) -> dict:
         "EXAMPLE": lean_block(elide_repeats(_read(project, ol["example"]))),
         "EXTRA_SOURCES": extra_sources_text(project, ol["extra_sources"]),
         "SECOND_EXAMPLE": second_example_text(ol.get("second_example")),
+        "MODEL_NOTES": (ol.get("notes") or "").strip(),
+        "AFTER_ROUNDS": after_rounds_text(ol),
+        "MODULES_RULE": modules_rule_text(ol),
         "KNOWLEDGE": KNOWLEDGE_TEXT[ol.get("knowledge", "minimal")],
         "TOOLS": tools_text(),
         "BUDGETS": budgets,
@@ -216,10 +299,14 @@ def finishing_scoreboard(records: list[dict], entries: list[dict], budget_ratio)
     fr = frontier(records)
     by_id = {e["id"]: e for e in entries}
     n = sum(len(v["networks"]) for v in summary.values())
-    lines = [f"Score: {run_cost_of_finishing(summary):.3f} (cost of finishing, the geometric mean over the {n} "
-             f"network{'s' if n != 1 else ''} of the run; brute force everywhere is 1.000)"]
+    if n == 1:
+        lines = [f"Score: {run_cost_of_finishing(summary):.3f} (cost of finishing; brute force is 1.000)"]
+    else:
+        lines = [f"Score: {run_cost_of_finishing(summary):.3f} (cost of finishing, the geometric mean over the {n} "
+                 f"networks of the run; brute force everywhere is 1.000)"]
     for setting, v in summary.items():
-        lines.append(f"{setting}: geometric mean {v['cost_of_finishing_geomean']:.3f}")
+        if n != 1:
+            lines.append(f"{setting}: geometric mean {v['cost_of_finishing_geomean']:.3f}")
         for nid in v["networks"]:
             e = by_id[nid]
             d = finishing_detail(fr.get(nid, []), e, records)
@@ -256,10 +343,25 @@ def scoreboard(records: list[dict], entries: list[dict], budget_ratio, metric: s
     return "\n".join(lines) if lines else "nothing checked yet"
 
 
-def receipts_text(records: list[dict], entries: list[dict] | None = None, metric: str | None = None) -> str:
+def lock_readiness(run: RunDir, records: list[dict]) -> dict:
+    """For a run with a seed check: per scored open-lane proof, None if its checker can be locked and taken
+    to the second network, else the reason it cannot (core.open_lane.lock)."""
+    from .lock import lockable
+
+    out = {}
+    for r in records:
+        if r.get("lane") == "open" and r.get("status") == "ok" and not r.get("stage"):
+            d = run.round_path(r["round"]) / f"attempt_{r['attempt']}" / "open_lane" / "submissions" / f"{int(r.get('submission') or 0):03d}"
+            out[r["record_id"]] = lockable(d)
+    return out
+
+
+def receipts_text(records: list[dict], entries: list[dict] | None = None, metric: str | None = None,
+                  ready: dict | None = None) -> str:
     """The agent's submissions so far, one line each. A scored proof's line says what it is worth under the
     run's metric: under cost of finishing, what finishing from it costs against brute force; otherwise,
-    whether it lies above the brute-force line."""
+    whether it lies above the brute-force line. In a run with a seed check (`ready`, lock_readiness) it
+    also says whether the proof can be taken there."""
     lines = []
     finishing = metric == "cost_of_finishing"
     by_id = {e["id"]: e for e in entries or []}
@@ -282,6 +384,9 @@ def receipts_text(records: list[dict], entries: list[dict] | None = None, metric
                 k = line_certified(line, r["length"])
                 above = (f"; above the brute-force line (which certifies {k} at this length)" if r["certified"] > k
                          else f"; not above the brute-force line (which certifies {k} at this length): scores nothing")
+            if ready is not None and r.get("record_id") in ready:
+                why = ready[r["record_id"]]
+                above += "; ready for the seed check" if why is None else f"; not ready for the seed check: {why[:MAX_REASON]}"
             lines.append(f"{head}, certified {r['certified']}, length {r['length']:,} (bill {r['length_by_rule']['bill']:,}){above}")
         elif r["status"] == "lemma":
             lines.append(f"{head} (auxiliary lemma accepted): {(r.get('statement') or '')[:MAX_REASON]}")
@@ -365,8 +470,11 @@ def aim(records: list[dict], entries: list[dict], cfg: dict, k: int) -> str:
     summary = summarize(records, entries, cfg.get("budget_ratio"))
     if cfg["metric"] == "cost_of_finishing":
         ratios = [finishing_ratio(m["cost_of_finishing"]) for v in summary.values() for m in v["networks"].values()]
-        text = AIM_FINISHING_TEXT.format(scores=f"cost_of_finishing: {run_cost_of_finishing(summary):.3f}, the geometric mean over "
-                                                f"the run's {len(ratios)} network{'s' if len(ratios) != 1 else ''}")
+        if len(ratios) == 1:  # one network: no talk of a mean, or of a checker for several networks
+            text = AIM_TEXT.format(scores=f"cost_of_finishing: {run_cost_of_finishing(summary):.3f}")
+        else:
+            text = AIM_FINISHING_TEXT.format(scores=f"cost_of_finishing: {run_cost_of_finishing(summary):.3f}, the geometric mean "
+                                                    f"over the run's {len(ratios)} networks")
         at_one = sum(1 for x in ratios if x <= 1.0)
         if at_one and len(ratios) > 1:
             text += "\n" + AIM_UNCOVERED_TEXT.format(n=at_one, total=len(ratios))
@@ -391,10 +499,12 @@ def build_open_lane_prompt(cfg: dict, folder: ModelFolder, entries: list[dict], 
     # the round's first session, made now so that the prompt can say what was carried into its workspace and
     # whether it compiled; the backend opens the same session (Session.create returns an existing one)
     session = Session.create(run.round_path(k) / "attempt_0" / "open_lane", cfg, cfg["model"], entries, run.path)
+    ready = lock_readiness(run, records) if cfg["open_lane"].get("seed_check") else None
+    nudge = not_ready_line(records, entries, ready)
     values = {
         "SCOREBOARD": scoreboard(records, entries, cfg.get("budget_ratio"), cfg["metric"]),
-        "RECEIPTS": receipts_text(records, entries, cfg["metric"]),
-        "AIM": aim(records, entries, cfg, k),
+        "RECEIPTS": receipts_text(records, entries, cfg["metric"], ready),
+        "AIM": aim(records, entries, cfg, k) + ("\n" + nudge if nudge else ""),
         "WORKSPACE": workspace_text(session.state.get("carried")),
     }
     while True:

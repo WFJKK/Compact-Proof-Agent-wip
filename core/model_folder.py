@@ -59,6 +59,12 @@ CONFIG_KEYS = {
 
 TRAINING_KEYS = ("optimizer", "lr", "batch_size", "steps")
 
+# Optional, under `open_lane` in config.yaml: what an open-lane run on this model takes from the Lean project
+# and tells the agent, facts about the architecture and so the folder's to state (a run config may still set
+# any of them itself): the worked example and further sources as paths in the Lean project, and notes for the
+# prompt (what is known about running this architecture in Lean's kernel).
+OPEN_LANE_FACTS = {"example": str, "extra_sources": list, "notes": str}
+
 
 class ModelFolderError(ValueError):
     pass
@@ -192,6 +198,15 @@ def load_model_folder(path: str | Path) -> ModelFolder:
     for setting, chosen in named.items():
         if not isinstance(chosen, list) or len(set(chosen)) != held or not set(chosen) <= set(seeds):
             raise ModelFolderError(f"{path.name}: split.held_out_seeds of {setting!r} must be {held} distinct seeds of the folder")
+
+    block = config.get("open_lane", {})
+    if not isinstance(block, dict) or not set(block) <= set(OPEN_LANE_FACTS):
+        raise ModelFolderError(f"{path.name}: config.yaml open_lane may hold {', '.join(OPEN_LANE_FACTS)} and nothing else")
+    for key, typ in OPEN_LANE_FACTS.items():
+        if key in block and not isinstance(block[key], typ):
+            raise ModelFolderError(f"{path.name}: config.yaml open_lane.{key} must be a {typ.__name__}")
+    if not all(isinstance(p, str) for p in block.get("extra_sources", [])):
+        raise ModelFolderError(f"{path.name}: config.yaml open_lane.extra_sources must be a list of paths")
 
     model_mod = _import_file(path / "model.py", "model")
     import torch

@@ -7,12 +7,19 @@ frontier does not see it. `lemma` is an accepted auxiliary submission (a stateme
 statuses are the receipt's (rejected, unsupported, timeout, error). An attempt that submitted nothing gets
 one record of status `no_submission`, so the round is never empty.
 
+A session after the proof rounds (core.open_lane.stages: the seed check, the scaling question) marks its
+records with `stage`, and a submission made under a lock with `lock`: the lock's digest, the proof it locks,
+and whether the locked modules reached the service unchanged (the pipeline's own comparison and the hashes
+in the receipt). Records with a stage are never part of the run's frontier or score.
+
 A count above the exact reference count of the zoo (`checked_correct` with `checked_semantics` exact, from
 `python -m core.check.exact_counts`) halts the run; above the float count alone it is flagged, since the
 float count only approximates the real-semantics count.
 """
 
 from __future__ import annotations
+
+import json
 
 from ..archive import record_id
 from .session import Session
@@ -57,10 +64,14 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
         return []
     session = Session(path)
     base = {"run_id": ctx.run.run_id, "round": k, "attempt": j, "source": source, "model": ctx.folder.name, "lane": "open"}
+    stage = session.state.get("stage") or {}
+    if stage:
+        base["stage"] = stage["name"]
     by_id = {e["id"]: e for e in ctx.entries}
     out = []
     for receipt in session.receipts():
         n = receipt.get("submission", len(out))
+        lock_file = path / "submissions" / f"{int(n):03d}" / "lock.json"
         nid = receipt.get("network")
         entry = by_id.get(nid)
         rec = {
@@ -85,6 +96,10 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
             "receipt": {k_: receipt.get(k_) for k_ in ("status", "reason", "scoring", "digests", "receipt_path")},
             "versions": ctx.versions,
         }
+        if stage and lock_file.is_file():
+            applied = json.loads(lock_file.read_text())
+            rec["lock"] = {"digest": applied.get("digest"), "of": stage.get("of"), "intact": bool(applied.get("intact")),
+                           "in_receipt": bool(applied.get("in_receipt"))}
         if entry:
             rec.update(n_inputs=entry["n_inputs"], real_correct=entry.get("real_correct"), real_accuracy=entry.get("real_accuracy"),
                        E=entry.get("E"), B=entry.get("B"))
@@ -129,3 +144,8 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
                     "budget": None, "status": "no_submission", "error": "the session submitted no candidate", "runtime_s": 0.0,
                     "peak_rss_mb": None, "sandbox": None, **_fields(), "versions": ctx.versions})
     return out
+
+
+def proof_records(records: list[dict]) -> list[dict]:
+    """The records that count for a run's frontier and score: everything but the stages after the proof rounds."""
+    return [r for r in records if not r.get("stage")]

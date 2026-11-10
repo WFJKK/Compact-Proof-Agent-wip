@@ -34,3 +34,23 @@ control_networks: []
 # Strings the agent's prompt must never contain.
 # The prompt never names the paper this work follows: part 1 refuses these, part 2 removes them.
 hygiene: ["Gross", "Compact Proofs of Model Performance"]
+
+# What an open-lane run on this model takes from the Lean project and tells the agent (a run config may set
+# any of these itself). The worked example is brute force on the tiny network of tests/max2_tiny, the same
+# architecture at 8 tokens: none of this folder's networks.
+open_lane:
+  example: examples/open_lane/max2_tiny_scored/Candidate/Max2TinyScored.lean
+  extra_sources: []
+  notes: |
+    - The worked example below is brute force on a smaller network of this
+      architecture (8 tokens, hidden width 4, 64 inputs), not this
+      session's network. Its checker and its soundness proof hold for any
+      size. Its instance is one theorem, and brute force on this session's
+      network (B above) is far beyond what one theorem holds.
+    - On a network of this size no instance has fitted one theorem: one
+      `decide +kernel` over a whole run ran out of memory at 6 GB, for a
+      checker many times shorter than brute force. Build the instance from
+      small decided facts and combine them with lemmas about the run.
+    - Time: at 64 tokens the service has taken about 15 minutes to accept
+      a scored proof (about 5 of them in the kernel). Plan your compiles
+      and submissions with that in mind.

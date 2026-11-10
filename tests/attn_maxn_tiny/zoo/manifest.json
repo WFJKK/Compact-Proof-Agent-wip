@@ -4,6 +4,9 @@
     {
       "B": 12360,
       "E": 136,
+      "checked_correct": 64,
+      "checked_cost_model": "cost-v4",
+      "checked_semantics": "enclosure",
       "correct": "attn_maxn_tiny-n2v8d4-s0.correct.npy",
       "cost_model": "cost-v4",
       "final_loss": 0.0021549733355641365,
@@ -22,6 +25,9 @@
     {
       "B": 12360,
       "E": 136,
+      "checked_correct": 64,
+      "checked_cost_model": "cost-v4",
+      "checked_semantics": "enclosure",
       "correct": "attn_maxn_tiny-n2v8d4-s1.correct.npy",
       "cost_model": "cost-v4",
       "final_loss": 0.0002731602289713919,
@@ -40,6 +46,9 @@
     {
       "B": 12360,
       "E": 136,
+      "checked_correct": 64,
+      "checked_cost_model": "cost-v4",
+      "checked_semantics": "enclosure",
       "correct": "attn_maxn_tiny-n2v8d4-s2.correct.npy",
       "cost_model": "cost-v4",
       "final_loss": 0.00020324272918514907,
@@ -58,6 +67,9 @@
     {
       "B": 12360,
       "E": 136,
+      "checked_correct": 64,
+      "checked_cost_model": "cost-v4",
+      "checked_semantics": "enclosure",
       "correct": "attn_maxn_tiny-n2v8d4-s3.correct.npy",
       "cost_model": "cost-v4",
       "final_loss": 0.0003766310401260853,
@@ -76,6 +88,9 @@
     {
       "B": 14764,
       "E": 108,
+      "checked_correct": 64,
+      "checked_cost_model": "cost-v4",
+      "checked_semantics": "enclosure",
       "correct": "attn_maxn_tiny-n3v4d4-s0.correct.npy",
       "cost_model": "cost-v4",
       "final_loss": 0.00012838146358262748,
@@ -94,6 +109,9 @@
     {
       "B": 14764,
       "E": 108,
+      "checked_correct": 64,
+      "checked_cost_model": "cost-v4",
+      "checked_semantics": "enclosure",
       "correct": "attn_maxn_tiny-n3v4d4-s1.correct.npy",
       "cost_model": "cost-v4",
       "final_loss": 0.00010618556552799419,
@@ -112,6 +130,9 @@
     {
       "B": 14764,
       "E": 108,
+      "checked_correct": 64,
+      "checked_cost_model": "cost-v4",
+      "checked_semantics": "enclosure",
       "correct": "attn_maxn_tiny-n3v4d4-s2.correct.npy",
       "cost_model": "cost-v4",
       "final_loss": 0.00010125314292963594,
@@ -130,6 +151,9 @@
     {
       "B": 14764,
       "E": 108,
+      "checked_correct": 64,
+      "checked_cost_model": "cost-v4",
+      "checked_semantics": "enclosure",
       "correct": "attn_maxn_tiny-n3v4d4-s3.correct.npy",
       "cost_model": "cost-v4",
       "final_loss": 0.000540875073056668,
@@ -148,6 +172,9 @@
     {
       "B": 73584,
       "E": 112,
+      "checked_correct": 256,
+      "checked_cost_model": "cost-v4",
+      "checked_semantics": "enclosure",
       "correct": "attn_maxn_tiny-n4v4d4-s0.correct.npy",
       "cost_model": "cost-v4",
       "final_loss": 0.0002971569774672389,
@@ -166,6 +193,9 @@
     {
       "B": 73584,
       "E": 112,
+      "checked_correct": 256,
+      "checked_cost_model": "cost-v4",
+      "checked_semantics": "enclosure",
       "correct": "attn_maxn_tiny-n4v4d4-s1.correct.npy",
       "cost_model": "cost-v4",
       "final_loss": 0.0001319601433351636,
@@ -184,6 +214,9 @@
     {
       "B": 73584,
       "E": 112,
+      "checked_correct": 256,
+      "checked_cost_model": "cost-v4",
+      "checked_semantics": "enclosure",
       "correct": "attn_maxn_tiny-n4v4d4-s2.correct.npy",
       "cost_model": "cost-v4",
       "final_loss": 0.001417606370523572,
@@ -202,6 +235,9 @@
     {
       "B": 73584,
       "E": 112,
+      "checked_correct": 256,
+      "checked_cost_model": "cost-v4",
+      "checked_semantics": "enclosure",
       "correct": "attn_maxn_tiny-n4v4d4-s3.correct.npy",
       "cost_model": "cost-v4",
       "final_loss": 0.0005374685861170292,
