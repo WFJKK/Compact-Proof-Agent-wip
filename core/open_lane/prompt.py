@@ -3,9 +3,13 @@ the receipts so far, the agent's accepted lemmas from earlier rounds and its lat
 descriptions: the agent is told what a proof is and what it costs, not which argument shapes to use.
 
 Templates: core/agent/prompts/open_lane_v1.md (the pilot's), open_lane_v2.md (adds the further sources
-and the split instance) and open_lane_v3.md (the modules carried into the workspace listed instead of the
+and the split instance), open_lane_v3.md (the modules carried into the workspace listed instead of the
 accepted sources pasted in; the instance as one `decide +kernel` with Lean's recursion limit raised, which
-is what the kernel needs to compute a bill of thousands of charges). Part 1 is the same every round; part 2
+is what the kernel needs to compute a bill of thousands of charges) and open_lane_v4.md (for runs over
+several networks scored on cost of finishing: the goal is the mechanism shared by seeds and sizes, the
+score comes before the rules, the rules of scoring are lists, and there is advice on how to work). Under
+the metric cost_of_finishing the scoreboard shows that one score and, per network, the cheapest way to
+finish; under the other metrics it is unchanged. Part 1 is the same every round; part 2
 is rebuilt from the archive. Building it opens the round's first session, which carries
 the earlier rounds' accepted modules into its workspace (core.open_lane.session). The Lean
 sources shown (Spec.lean, Counted.lean, CountedOps.lean, the scored example of `open_lane.example`, the
@@ -21,7 +25,8 @@ from pathlib import Path
 from ..agent.build_prompt import CHARS_PER_TOKEN, Prompt, PromptError, fill, forbidden, grid_text, load_template, metric_scores, metric_text
 from ..archive import RunDir
 from ..model_folder import ModelFolder
-from ..scoring import brute_force_line, line_certified, summarize
+from ..scoring import (brute_force_line, finishing_detail, finishing_ratio, frontier, line_certified, run_cost_of_finishing,
+                       summarize)
 from ..util import REPO_ROOT
 from .session import Session
 
@@ -37,6 +42,16 @@ AIM_TEXT = (
     "Raise the score. It stands at: {scores}. Before writing, weigh several approaches (a better account of "
     "how the network computes, a cheaper checker for the same inputs, covering inputs still uncertified) and "
     "pursue the one you expect to raise it most."
+)
+# The aim of a run scored on cost of finishing (the geometric mean over its networks).
+AIM_FINISHING_TEXT = (
+    "Raise the score. It stands at: {scores}. Before writing, weigh several approaches (a better account of "
+    "how the network computes, one checker that serves every network and size, a cheaper checker for the same "
+    "inputs, covering inputs still uncertified) and pursue the one you expect to raise it most."
+)
+AIM_UNCOVERED_TEXT = (
+    "{n} of the {total} networks still stand at 1.000 (no proof beats brute force there). Under a geometric mean "
+    "a given factor counts the same on every network, and a network at 1.000 usually has the largest factor left."
 )
 
 
@@ -112,6 +127,19 @@ KNOWLEDGE_TEXT = {
 }
 
 
+SECOND_EXAMPLE_TEXT = (
+    "A second worked example, a scored proof that is not brute force, is in the Lean project at {path} (its "
+    "source is not pasted here: read it with read_file). It is a proof of another network, which need not be of "
+    "this run's architecture. Take from it how a compact scored proof is put together (what the checker computes "
+    "once, the cheap test per input, the lemmas its soundness proof is made of), not its argument."
+)
+
+
+def second_example_text(rel: str | None) -> str:
+    """Part 1's pointer to open_lane.second_example (prompt template open_lane_v4); empty without one."""
+    return SECOND_EXAMPLE_TEXT.format(path=rel) if rel else ""
+
+
 def extra_sources_text(project: Path, rels: list[str]) -> str:
     if not rels:
         return ""
@@ -164,6 +192,7 @@ def static_values(cfg: dict, folder: ModelFolder, entries: list[dict]) -> dict:
         "COUNTED_OPS": lean_block(_read(project, "CompactCheck/CountedOps.lean")),
         "EXAMPLE": lean_block(elide_repeats(_read(project, ol["example"]))),
         "EXTRA_SOURCES": extra_sources_text(project, ol["extra_sources"]),
+        "SECOND_EXAMPLE": second_example_text(ol.get("second_example")),
         "KNOWLEDGE": KNOWLEDGE_TEXT[ol.get("knowledge", "minimal")],
         "TOOLS": tools_text(),
         "BUDGETS": budgets,
@@ -173,7 +202,45 @@ def static_values(cfg: dict, folder: ModelFolder, entries: list[dict]) -> dict:
 
 
 # part 2 ------------------------------------------------------------------------------------
-def scoreboard(records: list[dict], entries: list[dict], budget_ratio) -> str:
+def _num(x: float) -> str:
+    return f"{x:,.0f}" if float(x).is_integer() else f"{x:,.1f}"
+
+
+def finishing_scoreboard(records: list[dict], entries: list[dict], budget_ratio) -> str:
+    """The scoreboard of a run scored on cost of finishing: the one score, then per network the cheapest way
+    to finish from the checked proofs (the proof used, and what is left to brute force). No other metric is
+    shown: the agent is asked to raise this number and nothing else."""
+    summary = summarize(records, entries, budget_ratio)
+    if not summary:
+        return "nothing checked yet"
+    fr = frontier(records)
+    by_id = {e["id"]: e for e in entries}
+    n = sum(len(v["networks"]) for v in summary.values())
+    lines = [f"Score: {run_cost_of_finishing(summary):.3f} (cost of finishing, the geometric mean over the {n} "
+             f"network{'s' if n != 1 else ''} of the run; brute force everywhere is 1.000)"]
+    for setting, v in summary.items():
+        lines.append(f"{setting}: geometric mean {v['cost_of_finishing_geomean']:.3f}")
+        for nid in v["networks"]:
+            e = by_id[nid]
+            d = finishing_detail(fr.get(nid, []), e, records)
+            if d is None:
+                lines.append(f"  {nid}: 1.000. No proof yet: finishing is brute force, B = {e['B']:,}.")
+            elif d["total"] >= e["B"]:
+                lines.append(f"  {nid}: 1.000. No proof beats brute force yet (B = {e['B']:,}; one input by brute force "
+                             f"costs {_num(d['per_input'])}).")
+            elif d["uncovered"] == 0:
+                lines.append(f"  {nid}: {d['ratio']:.3f}. Cheapest complete proof: length {d['length']:,}, certifying all "
+                             f"{e['real_correct']:,} correct inputs (B = {e['B']:,}).")
+            else:
+                lines.append(f"  {nid}: {d['ratio']:.3f}. Cheapest way to finish: {_num(d['total'])} = a proof of length "
+                             f"{d['length']:,} certifying {d['certified']:,} of the {e['real_correct']:,} correct inputs, plus "
+                             f"{d['uncovered']:,} inputs by brute force at {_num(d['per_input'])} each (B = {e['B']:,}).")
+    return "\n".join(lines)
+
+
+def scoreboard(records: list[dict], entries: list[dict], budget_ratio, metric: str | None = None) -> str:
+    if metric == "cost_of_finishing":
+        return finishing_scoreboard(records, entries, budget_ratio)
     lines = []
     for setting, s in summarize(records, entries, budget_ratio).items():
         lines.append(f"{setting}: Q_above mean {s['Q_above_mean']:.4f}, worst {s['Q_above_worst']:.4f}; "
@@ -189,9 +256,14 @@ def scoreboard(records: list[dict], entries: list[dict], budget_ratio) -> str:
     return "\n".join(lines) if lines else "nothing checked yet"
 
 
-def receipts_text(records: list[dict], entries: list[dict] | None = None) -> str:
+def receipts_text(records: list[dict], entries: list[dict] | None = None, metric: str | None = None) -> str:
+    """The agent's submissions so far, one line each. A scored proof's line says what it is worth under the
+    run's metric: under cost of finishing, what finishing from it costs against brute force; otherwise,
+    whether it lies above the brute-force line."""
     lines = []
-    lines_by_net = {e["id"]: brute_force_line(e, records) for e in entries or []}
+    finishing = metric == "cost_of_finishing"
+    by_id = {e["id"]: e for e in entries or []}
+    lines_by_net = {} if finishing else {e["id"]: brute_force_line(e, records) for e in entries or []}
     for r in records:
         if r.get("lane") != "open" or r.get("status") == "no_submission":
             continue
@@ -199,7 +271,14 @@ def receipts_text(records: list[dict], entries: list[dict] | None = None) -> str
         if r["status"] == "ok":
             line = lines_by_net.get(r.get("network"))
             above = ""
-            if line is not None:
+            e = by_id.get(r.get("network"))
+            if finishing and e is not None:
+                d = finishing_detail([{"length": r["length"], "certified": r["certified"], "n_inputs": e["n_inputs"]}], e, records)
+                if d is not None:
+                    above = (f"; finishing from it costs {_num(d['total'])}, against {e['B']:,} for brute force (a ratio of {d['ratio']:.3f})"
+                             if d["total"] < e["B"] else
+                             f"; finishing from it costs {_num(d['total'])}, no less than brute force ({e['B']:,}): it adds nothing to the score")
+            elif line is not None:
                 k = line_certified(line, r["length"])
                 above = (f"; above the brute-force line (which certifies {k} at this length)" if r["certified"] > k
                          else f"; not above the brute-force line (which certifies {k} at this length): scores nothing")
@@ -284,7 +363,15 @@ def stalled(records: list[dict], k: int, n: int) -> bool:
 
 def aim(records: list[dict], entries: list[dict], cfg: dict, k: int) -> str:
     summary = summarize(records, entries, cfg.get("budget_ratio"))
-    text = AIM_TEXT.format(scores=f"{cfg['metric']}: " + metric_scores(summary, cfg["metric"]))
+    if cfg["metric"] == "cost_of_finishing":
+        ratios = [finishing_ratio(m["cost_of_finishing"]) for v in summary.values() for m in v["networks"].values()]
+        text = AIM_FINISHING_TEXT.format(scores=f"cost_of_finishing: {run_cost_of_finishing(summary):.3f}, the geometric mean over "
+                                                f"the run's {len(ratios)} network{'s' if len(ratios) != 1 else ''}")
+        at_one = sum(1 for x in ratios if x <= 1.0)
+        if at_one and len(ratios) > 1:
+            text += "\n" + AIM_UNCOVERED_TEXT.format(n=at_one, total=len(ratios))
+    else:
+        text = AIM_TEXT.format(scores=f"{cfg['metric']}: " + metric_scores(summary, cfg["metric"]))
     if stalled(records, k, cfg["open_lane"]["stall_rounds"]):
         text += "\n" + STALL_TEXT.format(n=cfg["open_lane"]["stall_rounds"])
     return text
@@ -305,8 +392,8 @@ def build_open_lane_prompt(cfg: dict, folder: ModelFolder, entries: list[dict], 
     # whether it compiled; the backend opens the same session (Session.create returns an existing one)
     session = Session.create(run.round_path(k) / "attempt_0" / "open_lane", cfg, cfg["model"], entries, run.path)
     values = {
-        "SCOREBOARD": scoreboard(records, entries, cfg.get("budget_ratio")),
-        "RECEIPTS": receipts_text(records, entries),
+        "SCOREBOARD": scoreboard(records, entries, cfg.get("budget_ratio"), cfg["metric"]),
+        "RECEIPTS": receipts_text(records, entries, cfg["metric"]),
         "AIM": aim(records, entries, cfg, k),
         "WORKSPACE": workspace_text(session.state.get("carried")),
     }

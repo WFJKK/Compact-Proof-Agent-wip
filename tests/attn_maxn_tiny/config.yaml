@@ -1,0 +1,54 @@
+# A small ladder of sizes of the attention max-of-n network (models/attn-max2/model.py and task.py, copied:
+# Gross et al.'s one-layer, one-head, attention-only transformer), for runs that score a method on several
+# networks at once (docs/decisions/cost-of-finishing-and-ladder.md). Every size is small enough for Lean's
+# kernel to run its forward passes one theorem at a time, and the head size 4 makes the attention scale
+# 1/sqrt(4) exactly 1/2. The context length takes three values, so a checker written for one size does not
+# serve the others:
+#   n2v8d4: 2 positions, 8 tokens, 64 inputs   (the size of tests/attn_max2_tiny)
+#   n3v4d4: 3 positions, 4 tokens, 64 inputs
+#   n4v4d4: 4 positions, 4 tokens, 256 inputs  (the size of tests/attn_max4_tiny)
+# n3v4d4 and n4v4d4 differ in the context length alone. Four seeds per size, two for development and two held
+# out. Training depends only on the sizes, the seed and the settings below (core.train), which are those of
+# tests/attn_max2_tiny and tests/attn_max4_tiny, so seeds 0 and 1 of n2v8d4 and n4v4d4 are those folders'
+# networks trained again: the same weights, bit for bit. Trained by core.train.
+size_settings:
+  n2v8d4:
+    n_ctx: 2
+    d_vocab: 8
+    d_model: 4
+    d_head: 4
+  n3v4d4:
+    n_ctx: 3
+    d_vocab: 4
+    d_model: 4
+    d_head: 4
+  n4v4d4:
+    n_ctx: 4
+    d_vocab: 4
+    d_model: 4
+    d_head: 4
+seeds: [0, 1, 2, 3]
+# The split is named, not drawn: the networks earlier pilots developed on (seed 1 of n2v8d4, seed 0 of n4v4d4)
+# stay development networks, the ones those folders held out (seed 0 of n2v8d4, seed 1 of n4v4d4) stay held out,
+# and of the new seeds 2 is for development and 3 held out. Fixed before the new networks were trained.
+split:
+  held_out_per_setting: 2
+  seed: 7
+  held_out_seeds:
+    n2v8d4: [0, 3]
+    n3v4d4: [1, 3]
+    n4v4d4: [1, 3]
+training:
+  optimizer: AdamW
+  lr: 0.001
+  weight_decay: 0.01
+  batch_size: 512
+  steps: 4000
+zoo_path: zoo
+cost_model: cost-v4
+control_networks: []
+hygiene: []
+# The Lean checker for the fixed rules lane's proof files (core.lean: a spot check of frontier entries during a run,
+# with lean_spot_check: true; scripts/check_run.py of the Lean project checks every proof afterwards). The Lean
+# project is COMPACT_PROOF_LEAN or the pilots' default path, built with `lake build compactcheck`.
+lean_check: [python3, ../../scripts/lean_check_proof.py, "{proof}", "{weights}"]

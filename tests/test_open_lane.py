@@ -234,20 +234,23 @@ def test_patience_counts_claims_not_files(tmp_path):
     assert loop.claim_identity(rounds[5][2]) is None
 
 
-def test_patience_under_q_above_needs_a_gain_or_a_new_lemma(tmp_path):
+@pytest.mark.parametrize("metric,B,plan", [("Q_above", 12571, {"read": 138, "tree": 73}), ("cost_of_finishing", 12360, {})])
+def test_patience_under_q_above_needs_a_gain_or_a_new_lemma(tmp_path, metric, B, plan):
     """Under the metric Q_above (26 October 2026) a scored proof keeps the loop alive only if it raised
     Q_above: a brute-force subset (a new count and length at the line) is not progress, nor is a proof
-    worse than an earlier one; a new lemma still is, and a proof above the line is."""
+    worse than an earlier one; a new lemma still is, and a proof above the line is. The same under cost of
+    finishing (10 November 2026), where finishing from a brute-force subset costs exactly B (cost-v4's B,
+    E plus one forward pass per input; the Q_above case keeps its cost-v3 record, plan charges and all)."""
     from core.archive import RunDir
 
     run = RunDir(tmp_path / "runs", "patience-q")
     run.create({"run_id": "patience-q"})
     base = {"run_id": "patience-q", "lane": "open", "network": "n1", "attempt": 0, "n_inputs": 64, "knob": 1.0,
             "length_by_rule": {"bill": 0, "extract": 136, "read": 0}}
-    entries = [{"id": "n1", "setting": "v8", "n_inputs": 64, "E": 136, "B": 12571, "real_correct": 64}]
+    entries = [{"id": "n1", "setting": "v8", "n_inputs": 64, "E": 136, "B": B, "real_correct": 64}]
     round0 = {"run_id": "patience-q", "round": 0, "attempt": 0, "network": "n1", "status": "ok", "certified": 64, "n_inputs": 64,
-              "length": 12571, "knob": 0.0, "record_id": "patience-q/r000/a0/n1/k0", "source": "baseline",
-              "length_by_rule": {"extract": 136, "read": 138, "single": 12224, "tree": 73},
+              "length": B, "knob": 0.0, "record_id": "patience-q/r000/a0/n1/k0", "source": "baseline",
+              "length_by_rule": {"extract": 136, "single": 12224, **plan},
               "leaves": {"accepted": 64, "rejected": 0, "skipped": 0, "total": 64}}
     run.round_path(0).mkdir(parents=True)
     run.append_archive([round0])
@@ -269,7 +272,7 @@ def test_patience_under_q_above_needs_a_gain_or_a_new_lemma(tmp_path):
         run.round_path(k).mkdir(parents=True)
         run.append_archive(rounds[k])
         run.mark_done(k)
-        assert loop.rounds_without_new_artifact(run, entries, "Q_above") == expected[k], k
+        assert loop.rounds_without_new_artifact(run, entries, metric) == expected[k], k
     # under the claim rule alone, round 5's new length would have counted as progress
     assert loop.rounds_without_new_artifact(run) == 0
 
@@ -509,8 +512,20 @@ def test_the_open_lane_prompt_builds_for_every_metric(tmp_path, monkeypatch, met
     assert "YOUR WORKSPACE" in p.part2 and "- Candidate/Tables.lean (1 lines; round 1, submission 2" in p.part2
     assert "tables_ok" not in p.part2 and "ACCEPTED LEMMAS" not in p.part2
     assert "Raise the score. It stands at: " + metric in p.part2
-    assert (" mean " in p.part2.split("Raise the score", 1)[1]) == (metric in ("Q_exact", "Q_above"))
+    assert (" mean " in p.part2.split("Raise the score", 1)[1]) == (metric in ("Q_exact", "Q_above", "cost_of_finishing"))
     assert "-- general" in p.part1 and "{" + "EXTRA_SOURCES}" not in p.part1
+    if metric == "cost_of_finishing":
+        # one score and nothing else; per network the cheapest way to finish; the receipts say what finishing
+        # from each proof costs (a brute-force subset: exactly B, so nothing)
+        assert "Score: 1.188 (cost of finishing, the geometric mean over the 1 network of the run" in p.part2
+        assert not any(other in p.part2 for other in ("Q_above", "Q_exact", "Q median", "brute-force line"))
+        assert ("Cheapest way to finish: 10,404 = a proof of length 2,000 certifying 20 of the 64 correct inputs, plus 44 "
+                "inputs by brute force at 191 each (B = 12,360)") in p.part2
+        assert "finishing from it costs 12,360, no less than brute force (12,360): it adds nothing to the score" in p.part2
+        assert "finishing from it costs 10,404, against 12,360 for brute force (a ratio of 1.188)" in p.part2
+        assert "It stands at: cost_of_finishing: 1.188, the geometric mean over the run's 1 network." in p.part2
+        assert "geometric mean over the networks of the run" in p.part1 and "There are no budgets to aim at." in p.part1
+        return
     # the receipts say which proofs beat brute force; the scoreboard shows the line
     assert "not above the brute-force line (which certifies 10 at this length): scores nothing" in p.part2
     assert "above the brute-force line (which certifies 9 at this length)" in p.part2
@@ -518,6 +533,126 @@ def test_the_open_lane_prompt_builds_for_every_metric(tmp_path, monkeypatch, met
     if metric == "Q_above":
         assert "brute force on any subset of the inputs scores exactly 0" in p.part1
 
+
+
+LADDER_FILES = {"scripts/accept.py": "", "CompactCheck/Spec.lean": "-- spec", "CompactCheck/Counted.lean": "-- counted",
+                "CompactCheck/CountedOps.lean": "-- ops", "CompactCheck/CountedGeneral.lean": "-- general",
+                "CompactCheck/CountedGeneralSound.lean": "-- sound",
+                "examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean": "-- example",
+                "examples/open_lane/pilot2_max2_tiny/r1_ColFull/Candidate/ColFull.lean": "-- the column proof",
+                "examples/open_lane/pilot2_max2_tiny/r4_Full64/Candidate/Full64.lean": "-- another proof"}
+
+
+def ladder_pilot_config(tmp_path: Path, project: Path) -> dict:
+    """config/open-lane-pilot-attn-maxn-tiny.yaml as a run would read it, with this machine's paths and the
+    fake backend (no model is called)."""
+    import yaml
+
+    raw = yaml.safe_load((REPO_ROOT / "config" / "open-lane-pilot-attn-maxn-tiny.yaml").read_text())
+    raw.update(backend="fake", runs_dir=str(tmp_path / "runs"), sandbox="auto")
+    raw["open_lane"].update(lean_project=str(project), work_dir=str(tmp_path / "work"), fake_scripts=[])
+    return raw
+
+
+def test_the_ladder_pilot_scores_six_networks_on_cost_of_finishing_with_prompt_v4(tmp_path, monkeypatch):
+    """The pilot of 10 November 2026: three sizes of the tiny attention network (context lengths 2, 3, 4),
+    two development seeds each, scored on cost of finishing as the geometric mean over the six; prompt
+    template v4. Part 1 puts the score before the rules and says what is wanted (the mechanism: one checker
+    for every size and seed); part 2 shows that one score, each network's cheapest way to finish, and how
+    many networks no proof has reached. From a fake Lean project; no service and no model."""
+    from core.archive import RunDir
+    from core.loop import select_networks
+    from core.model_folder import load_model_folder
+    from core.open_lane.prompt import build_open_lane_prompt
+
+    project = fake_project(tmp_path, LADDER_FILES)
+    cfg = merge(ladder_pilot_config(tmp_path, project))
+    assert (cfg["metric"], cfg["prompt_template"], cfg["open_lane"]["knowledge"], cfg["open_lane"]["second_example"]) == (
+        "cost_of_finishing", "open_lane_v4", "minimal", None)
+    folder = load_model_folder(REPO_ROOT / cfg["model"])
+    entries = select_networks(folder, cfg)
+    assert [(e["setting"], e["seed"], e["split"]) for e in entries] == [
+        ("n2v8d4", 1, "dev"), ("n2v8d4", 2, "dev"), ("n3v4d4", 0, "dev"), ("n3v4d4", 2, "dev"), ("n4v4d4", 0, "dev"), ("n4v4d4", 2, "dev")]
+    assert cfg["open_lane"]["submissions"] >= len(entries)  # a submission per network each round
+    run = RunDir(tmp_path / "runs", cfg["run_id"])
+    run.create(cfg)
+    run.round_path(0).mkdir(parents=True)
+    run.append_archive([{"run_id": run.run_id, "round": 0, "attempt": 0, "record_id": f"r0/{e['id']}", "network": e["id"],
+                         "setting": e["setting"], "status": "ok", "certified": e["n_inputs"], "n_inputs": e["n_inputs"],
+                         "length": e["B"], "length_by_rule": {"single": e["B"] - e["E"], "extract": e["E"]}, "knob": 1.0,
+                         "leaves": {"accepted": e["n_inputs"], "rejected": 0, "skipped": 0, "total": e["n_inputs"]}} for e in entries])
+    run.mark_done(0)
+    monkeypatch.setattr(Session, "_service", lambda self, args, timeout_s: {"ok": True, "messages": ""})
+    first = build_open_lane_prompt(cfg, folder, entries, run, 1)
+    p1 = first.part1
+    assert first.stats["template"] == "open_lane_v4" and "{" + "SECOND_EXAMPLE}" not in p1 and "second worked example" not in p1
+    order = [p1.index(h) for h in ("GOAL", "What we are after is the mechanism", "THE NETWORKS", "SCORING", "WHAT A PROOF IS",
+                                   "WHAT A PROOF COSTS", "What a checker may use.", "Limits on the general layer",
+                                   "Getting the instance through the kernel:", "YOUR TOOLS", "HOW TO WORK", "HOW TO ANSWER")]
+    assert order == sorted(order)
+    assert "the geometric mean over the networks of the run" in p1 and "Q_above" not in p1 and "budget grid" not in p1
+    assert "set_option maxRecDepth 1000000 in\n    theorem D_instance" in p1 and "8192 + 4E" in p1
+    assert "read the sizes with `I.weightShape`" in p1 and "Get a scored proof through the service early" in p1
+    for e in entries:
+        assert f"- {e['id']} ({e['setting']}): correct" in p1
+    assert "Score: 1.000 (cost of finishing, the geometric mean over the 6 networks of the run" in first.part2
+    assert "6 of the 6 networks still stand at 1.000" in first.part2
+    # round 1: a complete proof on one network, a partial one on its sibling seed
+    def scored(i, e, certified, length):
+        return {"run_id": run.run_id, "round": 1, "attempt": 0, "record_id": f"r1/{i}", "network": e["id"], "lane": "open",
+                "submission": i, "claimed_count": certified, "setting": e["setting"], "status": "ok", "certified": certified,
+                "n_inputs": e["n_inputs"], "length": length, "length_by_rule": {"bill": length - e["E"], "extract": e["E"], "read": 0},
+                "knob": 1.0}
+
+    run.round_path(1).mkdir(parents=True, exist_ok=True)  # the first prompt opened round 1's session there
+    run.append_archive([scored(0, entries[0], 64, 3090), scored(1, entries[1], 40, 1800)])
+    run.mark_done(1)
+    p2 = build_open_lane_prompt(cfg, folder, entries, run, 2).part2
+    sibling = 12360 / (1800 + 24 * 191)
+    assert f"Score: {(4.0 * sibling) ** (1 / 6):.3f} (cost of finishing" in p2
+    assert f"n2v8d4: geometric mean {(4.0 * sibling) ** 0.5:.3f}" in p2 and "n4v4d4: geometric mean 1.000" in p2
+    assert f"{entries[0]['id']}: 4.000. Cheapest complete proof: length 3,090, certifying all 64 correct inputs" in p2
+    assert "plus 24 inputs by brute force at 191 each" in p2 and "4 of the 6 networks still stand at 1.000" in p2
+    assert not any(other in p2 for other in ("Q_above", "Q_exact", "Q median", "brute-force line"))
+
+
+def test_a_second_worked_example_is_named_and_readable_only_when_the_run_config_says_so(tmp_path):
+    """open_lane.second_example (off by default): a scored proof that is not brute force, named in prompt v4
+    and readable with read_file, its source not pasted. Only that proof's folder becomes readable; its
+    neighbours (other proofs of the same pilot) stay out of reach. It must be a file under examples/."""
+    from core.model_folder import load_model_folder
+    from core.open_lane.prompt import static_values
+    from core.open_lane.session import readable_paths
+    from core.run_config import RunConfigError
+
+    project = fake_project(tmp_path, LADDER_FILES)
+    second = "examples/open_lane/pilot2_max2_tiny/r1_ColFull/Candidate/ColFull.lean"
+    off = merge(ladder_pilot_config(tmp_path, project))
+    on = ladder_pilot_config(tmp_path, project)
+    on["open_lane"]["second_example"] = second
+    on = merge(on)
+    folder = load_model_folder(REPO_ROOT / on["model"])
+    entries = [{"id": "attn_maxn_tiny-n2v8d4-s1", "setting": "n2v8d4", "n_inputs": 64, "E": 136, "B": 12360, "real_correct": 64}]
+    assert static_values(off, folder, entries)["SECOND_EXAMPLE"] == ""
+    text = static_values(on, folder, entries)["SECOND_EXAMPLE"]
+    assert second in text and "read it with read_file" in text and "the column proof" not in text
+    example = on["open_lane"]["example"]
+    assert "examples/open_lane/pilot2_max2_tiny/r1_ColFull/" not in readable_paths(example)
+    readable = readable_paths(example, second)
+    assert "examples/open_lane/pilot2_max2_tiny/r1_ColFull/" in readable
+    assert not "examples/open_lane/pilot2_max2_tiny/r4_Full64/Candidate/Full64.lean".startswith(tuple(readable))
+    session = Session.create(tmp_path / "attempt" / "open_lane", on, on["model"], entries, tmp_path / "run")
+    assert "the column proof" in session.read_file(second)["text"]
+    from core.open_lane.session import ToolError
+
+    with pytest.raises(ToolError):
+        session.read_file("examples/open_lane/pilot2_max2_tiny/r4_Full64/Candidate/Full64.lean")
+    for bad, match in (("CompactCheck/Spec.lean", "under examples/"), ("examples/open_lane/none/Candidate/X.lean", "has no examples/open_lane/none"),
+                       ("examples/../scripts/accept.py", "under examples/")):
+        cfg = ladder_pilot_config(tmp_path, project)
+        cfg["open_lane"]["second_example"] = bad
+        with pytest.raises(RunConfigError, match=match):
+            merge(cfg)
 
 
 def test_the_knowledge_condition_reaches_every_service_call_and_the_prompt(tmp_path):

@@ -24,7 +24,7 @@ REQUIRED = ("run_id", "model")
 BACKENDS = ("fake", "manual", "api", "claude_code")
 METRICS = ("Q", "Q_grid", "Q_exact", "Q_above", "cost_of_finishing")
 METRIC_KEYS = {"Q": "Q_median", "Q_grid": "Q_grid_median", "Q_exact": "Q_exact_mean", "Q_above": "Q_above_mean",
-               "cost_of_finishing": "cost_of_finishing_median"}
+               "cost_of_finishing": "cost_of_finishing_geomean"}
 SANDBOX_MODES = ("auto", "hardened", "container", "landlock", "process")
 THINKING_TYPES = ("adaptive", "enabled", "disabled")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -206,7 +206,7 @@ def validate(cfg: dict, source: str = "run config") -> None:
 
 
 OPEN_LANE_KEYS = {"enabled", "lean_project", "work_dir", "python", "compile_calls", "python_calls", "submissions", "max_turns",
-                  "worker_seconds", "stall_rounds", "fake_scripts", "example", "extra_sources", "knowledge"}
+                  "worker_seconds", "stall_rounds", "fake_scripts", "example", "extra_sources", "knowledge", "second_example"}
 KNOWLEDGE_CONDITIONS = ("minimal", "maximum")
 
 
@@ -232,6 +232,9 @@ def open_lane_errors(cfg: dict) -> list[str]:
         errors.append("open_lane.example must be a path in the Lean project")
     if not isinstance(ol.get("extra_sources"), list) or not all(isinstance(p, str) for p in ol["extra_sources"]):
         errors.append("open_lane.extra_sources must be a list of paths in the Lean project")
+    second = ol.get("second_example")
+    if second is not None and (not isinstance(second, str) or not second.startswith("examples/") or ".." in second):
+        errors.append("open_lane.second_example must be null or a path under examples/ in the Lean project")
     if ol.get("knowledge") not in KNOWLEDGE_CONDITIONS:
         errors.append(f"open_lane.knowledge must be one of {', '.join(KNOWLEDGE_CONDITIONS)}")
     errors = [f"open_lane: {e}" if not e.startswith("open_lane") else e for e in errors]
@@ -240,9 +243,9 @@ def open_lane_errors(cfg: dict) -> list[str]:
         if not project or not (Path(project).expanduser() / "scripts" / "accept.py").is_file():
             errors.append("open_lane.lean_project must be the Lean project (with scripts/accept.py)")
         else:
-            for rel in [ol["example"], *ol["extra_sources"]]:
+            for rel in [ol["example"], *ol["extra_sources"], *([second] if second else [])]:
                 if not (Path(project).expanduser() / rel).is_file():
-                    errors.append(f"the Lean project has no {rel} (open_lane.example, open_lane.extra_sources)")
+                    errors.append(f"the Lean project has no {rel} (open_lane.example, open_lane.extra_sources, open_lane.second_example)")
         if cfg["backend"] not in ("fake", "claude_code"):
             errors.append("the open lane runs with backend fake or claude_code")
         tpl = REPO_ROOT / "core" / "agent" / "prompts" / f"{cfg['prompt_template']}.md"

@@ -54,6 +54,23 @@ def test_bad_held_out_count_is_refused(stub_path):
         load_model_folder(stub_path)
 
 
+def test_a_named_split_holds_out_exactly_the_seeds_it_names(stub_path):
+    """split.held_out_seeds names a size setting's held-out seeds instead of drawing them (for a folder that
+    takes over networks other runs have developed on); it must name held_out_per_setting seeds of the folder."""
+    from core.zoo import split_assignment
+
+    base = (stub_path / "config.yaml").read_text()
+    drawn = split_assignment(load_model_folder(stub_path))
+    for held in (0, 1, 2):
+        (stub_path / "config.yaml").write_text(base.replace("  seed: 7\n", f"  seed: 7\n  held_out_seeds:\n    tiny: [{held}]\n"))
+        split = split_assignment(load_model_folder(stub_path))
+        assert {seed for (setting, seed), v in split.items() if v == "held_out"} == {held} and len(split) == len(drawn)
+    for bad in ("tiny: [0, 1]", "tiny: [5]", "tiny: 0", "huge: [0]"):
+        (stub_path / "config.yaml").write_text(base.replace("  seed: 7\n", f"  seed: 7\n  held_out_seeds:\n    {bad}\n"))
+        with pytest.raises(ModelFolderError, match="held_out_seeds"):
+            load_model_folder(stub_path)
+
+
 def test_size_setting_that_does_not_build_is_refused(stub_path):
     text = (stub_path / "config.yaml").read_text().replace("d_hidden: 5", "d_hiddn: 5")
     (stub_path / "config.yaml").write_text(text)

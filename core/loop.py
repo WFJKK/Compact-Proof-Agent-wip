@@ -172,20 +172,26 @@ def claim_identity(record: dict) -> tuple | None:
     return None
 
 
+# The metrics under which an open-lane scored proof is progress only if it raised the metric: both score
+# brute force on any subset of the inputs as no gain (Q_above 0, cost of finishing 1).
+GAIN_METRICS = ("Q_above", "cost_of_finishing")
+
+
 def rounds_without_new_artifact(run: RunDir, entries: list[dict] | None = None, metric: str | None = None,
                                 budget_ratio: float | None = None) -> int:
     """For the open lane: agent rounds in a row, counting back from the last, that accepted nothing new. An
     accepted submission (scored, verified or a lemma) counts only if its claim (claim_identity) differs
     from every earlier accepted one, so resubmitting a lemma, or a proof with a comment changed, does not
-    keep the loop alive, while a new statement, count or length does. Under the metric Q_above a scored
-    proof counts only if it raised the metric in its size setting (a new count and length at or below the
-    brute-force line, or worse than an earlier proof, is not progress); lemmas and verified proofs count as
-    before. The hard budgets (rounds, the session's calls and clock) are unchanged."""
+    keep the loop alive, while a new statement, count or length does. Under the metrics Q_above and
+    cost_of_finishing a scored proof counts only if it raised the metric in its size setting (a new count
+    and length at or below the brute-force line, or worse than an earlier proof, is not progress); lemmas
+    and verified proofs count as before. The hard budgets (rounds, the session's calls and clock) are
+    unchanged."""
     records = run.read_archive()
     done = [k for k in run.done_rounds() if k > 0]
     seen: set = set()  # identities
     counts: set = set()  # (network, count) with a scored or verified proof: a verified proof of it is not new
-    by_gain = metric == "Q_above" and entries is not None
+    by_gain = metric in GAIN_METRICS and entries is not None
     best = metric_by_setting([r for r in records if r["round"] == 0], entries, metric, budget_ratio) if by_gain else {}
     since = 0
     for k in done:
@@ -436,7 +442,7 @@ def drive(ctx: Context) -> None:
         if fresh:
             if cfg.get("open_lane", {}).get("enabled"):
                 stale = rounds_without_new_artifact(run, ctx.entries, cfg["metric"], cfg.get("budget_ratio"))
-                what = "no new accepted submission" + (" and no gain in Q_above" if cfg["metric"] == "Q_above" else "")
+                what = "no new accepted submission" + (f" and no gain in {cfg['metric']}" if cfg["metric"] in GAIN_METRICS else "")
             else:
                 stale = rounds_without_gain(run, ctx.entries, cfg["metric"], cfg.get("budget_ratio"))
                 what = "no gain"

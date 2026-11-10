@@ -13,7 +13,7 @@ there). This document is the pipeline side: how a run uses it.
 With `open_lane.enabled: true` in the run config, an agent round is a session with tools instead of one
 response:
 
-- The prompt (`core/agent/prompts/open_lane_v1.md`, `open_lane_v2.md` or `open_lane_v3.md`, built by
+- The prompt (`core/agent/prompts/open_lane_v1.md`, `open_lane_v2.md`, `open_lane_v3.md` or `open_lane_v4.md`, built by
   `core/open_lane/prompt.py`) gives the specification (Spec.lean), the protected module's interface, the
   counted language with its prices (Counted.lean, CountedOps.lean), a scored brute-force proof as the worked
   example (`open_lane.example`), the tools and their budgets, the scoreboard, the receipts so far, the sources
@@ -25,12 +25,19 @@ response:
   run with `set_option maxRecDepth 1000000 in` before it: Lean's default recursion limit stops the kernel's
   evaluation of a bill after a few thousand charges, and the server pilot of 26 October built a model of its
   checker and run lemmas to get past it (the Lean project's docs/COUNTED.md, "The instance in one theorem").
+  Template v4 (10 November 2026) is for a run over several networks scored on cost of finishing: the goal
+  names the mechanism shared by seeds and sizes, the score comes before the rules, the rules of scoring are
+  lists, there is advice on how to work, and the answer's WHY IT HELPS asks for the mechanism, the checker
+  step that relies on it, what would make the proof fail on a network, and which networks it covers. Under
+  `metric: cost_of_finishing` the scoreboard, the receipts and the aim show that one score and, per network,
+  the cheapest way to finish; under the other metrics they are what they were.
 - The tools (`core/open_lane/session.py`): `lean_check` saves a module in the session's workspace and
   compiles it through the service against the protected module of a network and claim;
   `run_python` runs code in the recipe sandbox with the network's weights; `search_library` searches the
   Lean project's sources and docs and `read_file` reads a stretch of one of them, or of the examples the
-  prompt shows (the two brute-force examples and the run's worked example; never another example: the rest
-  are earlier proofs of the pilots' own networks, and reading one would be copying, not research);
+  prompt shows (the two brute-force examples, the run's worked example and, when the run config names one,
+  `open_lane.second_example`; never another example: the rest are earlier proofs of the pilots' own networks,
+  and reading one would be copying, not research);
   `submit_candidate` hands
   modules to the acceptance service and returns the receipt. Each call is logged append-only (`tools.jsonl`); the budgets (`compile_calls`,
   `python_calls`, `submissions`) persist in `session.json`, so a session that is started again continues
@@ -55,7 +62,8 @@ response:
   run separately (`config/open-lane-baseline-tiny.yaml`).
 - The stall trigger: after `stall_rounds` agent rounds without an accepted submission, the prompt asks
   for a change of approach rather than a refinement. Patience stops an open-lane run after `patience`
-  agent rounds without a new accepted artifact, not after rounds without a metric gain; an artifact is
+  agent rounds without a new accepted artifact, not after rounds without a metric gain (under Q_above and
+  cost of finishing a scored proof counts only if it raised the score, below); an artifact is
   new by its claim (`core.loop.claim_identity`: a scored proof's network, count and length; a verified
   proof's network and count, when no proof of that count exists; a lemma's network and statement), never
   by its files or its theorem's name, so a resubmission with a comment changed is not progress and a
@@ -111,6 +119,14 @@ and Q_exact counted its area as score; the first attention pilot spent four of i
 such subsets, which scored 0.15 with no compression at all. Under Q_above they score 0, the receipts tell the
 agent whether each proof is above the line, and a scored proof keeps the loop's patience alive only if it
 raised Q_above (lemmas as before). `python -m core.rescore --run <run>` re-scores a finished run.
+
+Since 10 November the pilot is driven by cost of finishing (docs/decisions/cost-of-finishing-and-ladder.md):
+per network, B over the cheapest way to finish from the checked proofs (a proof's length plus brute force on
+every correct input it leaves out, at the single rule's exact charge), a network counting at least 1, and
+for the run the geometric mean over all its networks (`core.scoring.run_cost_of_finishing`). There are no
+budgets to land under and no points to place; brute force on any subset of the inputs is exactly 1; a scored
+proof keeps the loop's patience alive only if it raised the score of its size setting. The agent is shown
+this score alone. Q, Q_grid, Q_exact and Q_above are still computed for the reports.
 
 ## The reference count
 
@@ -170,6 +186,14 @@ Next to the attention max4 and min4 pilots, linear ones on the same task and siz
 model's architecture at 4 positions, 4 tokens, width 4, 256 inputs, both seeds at full accuracy; a single
 leaf costs 51, E is 48). Their worked example is the linear scored brute force. All the tiny pilots run up
 to 7 rounds.
+
+The ladder pilot (`config/open-lane-pilot-attn-maxn-tiny.yaml`, model `tests/attn_maxn_tiny`): the attention
+max-of-n network at three sizes (2 positions and 8 tokens, 3 positions and 4 tokens, 4 positions and 4
+tokens), two development seeds each, six networks in one run, scored on cost of finishing with template v4
+and minimal knowledge. Two more seeds per size are held out and never shown; `core.final` still refuses an
+open-lane run, so running the frozen general layer on them is done by hand after the pilot. A second worked
+example (`open_lane.second_example`, a scored proof that is not brute force; the prompt points to it and
+`read_file` may read it) is off in the config: it is more knowledge than the earlier pilots had.
 
 The receipts record the isolation the service had: Landlock on Linux, `process (weak)` on a Mac, where
 Docker is not used by the service. The pilot's gate (the ticket): one agent-produced open-lane candidate

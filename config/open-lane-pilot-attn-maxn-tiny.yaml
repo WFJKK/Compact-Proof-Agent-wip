@@ -1,0 +1,46 @@
+# The open-lane pilot on the ladder of tiny attention max-of-n networks (tests/attn_maxn_tiny: Gross et al.'s
+# one-layer, one-head, attention-only transformer at three sizes, two development seeds each, six networks;
+# docs/OPEN_LANE.md, docs/decisions/cost-of-finishing-and-ladder.md):
+#   n2v8d4: 2 positions, 8 tokens, 64 inputs,  B 12,360 (seed 1 is the network of the earlier max-of-2 pilots)
+#   n3v4d4: 3 positions, 4 tokens, 64 inputs,  B 14,764
+#   n4v4d4: 4 positions, 4 tokens, 256 inputs, B 73,584 (seed 0 is the network of tests/attn_max4_tiny)
+# What is new against open-lane-pilot-attn-max2-tiny: the score is the cost of finishing, the geometric mean
+# over the six networks, so there are no budgets to aim at and a proof that handles one size or one seed earns
+# its score there alone; prompt template v4 says so, shows that one score, and asks for a checker written for
+# every size. Edit open_lane.lean_project to where the Lean project is on this machine, and build it there first:
+# lake build CompactCheck.Soundness CompactCheck.CountedOps CompactCheck.CountedGeneralSound compactcheck acceptcheck
+run_id: open-lane-pilot-attn-maxn-tiny
+model: tests/attn_maxn_tiny
+backend: claude_code
+agent_model: claude-fable-5-1   # the earlier pilots' model, for comparison with them
+effort: xhigh
+prompt_template: open_lane_v4
+# The fixed rules lane (round 0's baselines) limited to single and skip; explicit, as the ticket asks.
+rule_set: [single, skip]
+# The score the agent is shown and asked to raise: B over the cheapest way to finish a network from the checked
+# proofs (a proof's length plus brute force on every correct input it leaves out), as the geometric mean over
+# the run's networks. Brute force on any subset of the inputs scores 1, and so does a network without a proof.
+metric: cost_of_finishing
+baselines: [brute_force]
+networks: all                   # the six development networks; the six held-out ones are never shown
+rounds_max: 7
+patience: 4
+api_retries: {tries: 12, first_wait_s: 60, max_wait_s: 1800, timeout_s: 3600}
+sandbox: auto   # hardened once Docker or Landlock is available; the receipts record the isolation
+open_lane:
+  enabled: true
+  lean_project: ~/Desktop/VerifiedMechanisms/LeanFormalisations/CompactCheck
+  example: examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean
+  extra_sources: [CompactCheck/CountedGeneral.lean, CompactCheck/CountedGeneralSound.lean]
+  knowledge: minimal
+  # A second worked example, off: the column proof of the linear max-of-2 network, a scored proof that is not
+  # brute force. It would show the agent how a compact scored proof is put together, which is more than the
+  # earlier pilots knew. To turn it on, remove the "# " of the next line.
+  # second_example: examples/open_lane/pilot2_max2_tiny/r1_ColFull/Candidate/ColFull.lean
+  # Six networks instead of one: a submission per network and two to spare, and more calls and time.
+  compile_calls: 60
+  python_calls: 40
+  submissions: 8
+  max_turns: 200
+  worker_seconds: 10800     # a forward pass is about 2.3 s as a kernel-decided fact at 4 positions, 256 inputs
+  stall_rounds: 2

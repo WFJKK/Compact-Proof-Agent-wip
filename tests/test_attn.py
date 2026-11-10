@@ -141,3 +141,27 @@ def make_proof(weights, info, knob):
     s = summarize(records, ctx.entries, cfg.get("budget_ratio"))["v8d4"]
     assert s["Q_above_mean"] > 0 and s["networks"]["attn_max2_tiny-v8d4-s1"]["points_above_line"] == 1
     assert any("Lean spot check: 1 of 1 agree" in l for l in lines)
+
+
+def test_the_ladder_folder_has_three_context_lengths_and_takes_over_the_tiny_networks():
+    """tests/attn_maxn_tiny (10 November 2026): three sizes whose context length differs, four seeds each, two
+    for development and two held out, all at full accuracy with cost-v4's B (E plus one forward pass per input).
+    Training depends only on sizes, seed and settings, so seeds 0 and 1 of n2v8d4 and n4v4d4 are the networks of
+    tests/attn_max2_tiny and tests/attn_max4_tiny, weight for weight, and keep the roles they have there."""
+    from core.model_folder import load_model_folder
+    from core.zoo import networks
+
+    root = Path(__file__).resolve().parent
+    ladder = load_model_folder(root / "attn_maxn_tiny")
+    assert [ladder.sizes(s)["n_ctx"] for s in ladder.setting_names()] == [2, 3, 4]
+    nets = networks(ladder, None)  # both splits
+    assert len(nets) == 12 and all(n["real_correct"] == n["n_inputs"] and n["cost_model"] == "cost-v4" for n in nets)
+    for setting in ladder.setting_names():
+        mine = [n for n in nets if n["setting"] == setting]
+        assert sorted(n["split"] for n in mine) == ["dev", "dev", "held_out", "held_out"]
+        assert all((n["B"] - n["E"]) % n["n_inputs"] == 0 for n in mine)  # no plan in B
+    by = {(n["setting"], n["seed"]): n for n in nets}
+    for folder, theirs, mine in (("attn_max2_tiny", "v8d4", "n2v8d4"), ("attn_max4_tiny", "v4d4", "n4v4d4")):
+        for old in networks(load_model_folder(root / folder), None):
+            new = by[(mine, old["seed"])]
+            assert (new["sha256"], new["split"], new["E"], new["B"]) == (old["sha256"], old["split"], old["E"], old["B"])

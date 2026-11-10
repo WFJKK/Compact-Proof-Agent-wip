@@ -165,11 +165,15 @@ def metric_text(cfg: dict, folder: ModelFolder, entries: list[dict]) -> str:
         )
     elif cfg["metric"] == "cost_of_finishing":
         head = (
-            "Your score is the cost of finishing, per size setting the median over its networks (the worst network "
-            "is reported too). For one network, take a proof's length plus, for every input it classifies correctly "
-            "but leaves uncertified, what certifying that input alone costs (the single rule's charge, read from "
-            "round 0's brute-force proof; B divided by the number of inputs when there is none); the score is B "
-            "divided by the smallest such total over your proofs. Higher is better; brute force scores 1."
+            "Your score is the cost of finishing: the geometric mean over the networks of the run (each size "
+            "setting and the worst network are reported too). For one network, take a proof's length plus, for "
+            "every input the network answers correctly that the proof leaves uncertified, what certifying that "
+            "input alone by brute force costs (the single rule's charge, read from round 0's brute-force proof; B "
+            "divided by the number of inputs when there is none). The network's score is B divided by the smallest "
+            "such total over the checked proofs: how many times shorter than brute force the cheapest complete "
+            "proof built on your work is. Brute force scores 1, and so does a network without a proof. Every proof "
+            "counts for what it saves: a partial proof helps as far as it certifies its inputs for less than brute "
+            "force would, and any shorter proof raises the score. There are no budgets to aim at."
         )
     else:
         head = (
@@ -262,7 +266,7 @@ def render_frontier(records: list[dict], entries: list[dict], run: RunDir, per_r
         s = summary[setting]
         real = statistics.median(e["real_accuracy"] for e in nets)
         if metric == "cost_of_finishing":
-            score = f"cost of finishing median {s['cost_of_finishing_median']:.2f}, worst {s['cost_of_finishing_worst']:.2f}"
+            score = f"cost of finishing geometric mean {s['cost_of_finishing_geomean']:.2f}, worst {s['cost_of_finishing_worst']:.2f}"
         elif metric == "Q_grid":
             score = f"Q_grid median {s['Q_grid_median']:.4f}, worst {s['Q_grid_worst']:.4f}"
         elif metric == "Q_exact":
@@ -319,14 +323,19 @@ AIM_TEXT = (
 
 
 def metric_scores(summary: dict, metric: str) -> str:
-    """Per size setting, the metric as the run scores it (the median over networks, or for Q_exact the mean:
-    run_config.METRIC_KEYS) and its worst network."""
+    """Per size setting, the metric as the run scores it (the median over networks, for Q_exact and Q_above
+    the mean, for cost of finishing the geometric mean: run_config.METRIC_KEYS) and its worst network."""
     from ..run_config import METRIC_KEYS
 
     centre = METRIC_KEYS[metric]
-    label = "mean" if centre.endswith("_mean") else "median"
+    label = "geometric mean" if centre.endswith("_geomean") else "mean" if centre.endswith("_mean") else "median"
     fmt = "{:.2f}" if metric == "cost_of_finishing" else "{:.4f}"
-    return "; ".join(f"{setting} {label} {fmt.format(s[centre])}, worst {fmt.format(s[metric + '_worst'])}"
+    from ..scoring import finishing_ratio
+
+    def worst(s):  # a run on cost of finishing counts a network at least 1 (brute force), so its worst is too
+        return finishing_ratio(s[metric + "_worst"]) if metric == "cost_of_finishing" else s[metric + "_worst"]
+
+    return "; ".join(f"{setting} {label} {fmt.format(s[centre])}, worst {fmt.format(worst(s))}"
                      for setting, s in summary.items())
 
 

@@ -45,7 +45,7 @@ def rescore(run_path: Path) -> dict:
         s = summarize([r for r in records if r["round"] <= k], entries, cfg.get("budget_ratio"))
         per_round.append({"after_round": k, "by_setting": {
             setting: {m: v[m] for m in ("Q_median", "Q_grid_median", "Q_exact_mean", "Q_above_mean", "Q_above_worst",
-                                        "cost_of_finishing_median")}
+                                        "cost_of_finishing_median", "cost_of_finishing_geomean")}
             for setting, v in s.items()}})
     final = summarize(records, entries, cfg.get("budget_ratio"))
     versions = read_json(run_path / "versions.json") if (run_path / "versions.json").exists() else None

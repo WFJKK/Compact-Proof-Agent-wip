@@ -20,14 +20,20 @@ class ZooError(RuntimeError):
 
 
 def split_assignment(folder: ModelFolder) -> dict[tuple[str, int], str]:
-    """Deterministic development/held-out split, drawn once per size setting from split.seed."""
+    """Deterministic development/held-out split, drawn once per size setting from split.seed. A size setting
+    listed in split.held_out_seeds holds out exactly the seeds named there instead (for a folder that takes
+    over networks other runs have already developed on: those stay development networks)."""
     split = folder.config["split"]
     seeds = list(folder.config["seeds"])
+    named = split.get("held_out_seeds") or {}
     out = {}
     for setting in folder.setting_names():
-        salt = int(sha256_bytes(setting.encode())[:8], 16)
-        rng = np.random.default_rng([split["seed"], salt])
-        held = set(rng.choice(seeds, size=split["held_out_per_setting"], replace=False).tolist())
+        if setting in named:
+            held = set(named[setting])
+        else:
+            salt = int(sha256_bytes(setting.encode())[:8], 16)
+            rng = np.random.default_rng([split["seed"], salt])
+            held = set(rng.choice(seeds, size=split["held_out_per_setting"], replace=False).tolist())
         for s in seeds:
             out[(setting, s)] = "held_out" if s in held else "dev"
     return out

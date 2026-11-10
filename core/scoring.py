@@ -9,13 +9,18 @@ length at most b. The metrics:
   its proofs between grid points earns nothing (docs/SPEC.md, section 5).
 - shortest_full: the shortest proof that certifies the network's real accuracy.
 - within: the best certified accuracy within B/10, B/100 and B/1000.
-- cost_of_finishing: B divided by (length + uncertified correct inputs x B/n),
-  for the best proof.
+- cost_of_finishing: B divided by (length + uncertified correct inputs x the
+  cost of certifying one input by brute force), for the best proof. Any proof
+  counts, whatever it certifies; there are no budgets to aim at. A run scored on
+  it takes the geometric mean over networks, a network counting at least 1
+  (brute force alone always finishes at B): finishing_ratio, geometric_mean,
+  run_cost_of_finishing.
 - Q_above: the improvement over the brute-force line, normalised by the room
   above it (below). Brute force on any subset of the inputs scores 0.
 
-Per size setting, the median and the worst network. All numbers are
-Python-checked until rules have Lean proofs.
+Per size setting, the median and the worst network (for cost of finishing also
+the geometric mean, which is what a run on that metric is scored by). All numbers
+are Python-checked until rules have Lean proofs.
 """
 
 from __future__ import annotations
@@ -256,6 +261,43 @@ def cost_of_finishing(points: list[dict], real_correct: int, B: float, per_input
     return B / best
 
 
+def finishing_detail(points: list[dict], entry: dict, records: list[dict] | None = None) -> dict | None:
+    """The cheapest way to finish a network from its proofs: the proof used, what it leaves uncertified and
+    what that costs by brute force. None when there is no proof, or no B. `ratio` is B over the total, the
+    network's cost of finishing."""
+    real, B = entry.get("real_correct"), entry.get("B")
+    if not points or not real or not B:
+        return None
+    unit, how = fallback_cost_per_input(entry, records)
+    best = None
+    for p in points:
+        left = max(0, real - p["certified"])
+        total = p["length"] + left * unit
+        if best is None or total < best["total"]:
+            best = {"total": total, "length": p["length"], "certified": p["certified"], "uncovered": left,
+                    "per_input": unit, "per_input_how": how, "ratio": B / total}
+    return best
+
+
+def finishing_ratio(cost_of_finishing_value: float) -> float:
+    """A network's cost of finishing as a run is scored on it: at least 1. Brute force alone always finishes
+    at B, so a network with no proof yet, or only proofs that finish above B, counts 1 and never less."""
+    return max(1.0, cost_of_finishing_value or 0.0)
+
+
+def geometric_mean(values: list[float]) -> float:
+    """The geometric mean of positive numbers (ratios average on the log scale); 0 for an empty list."""
+    if not values:
+        return 0.0
+    return math.exp(sum(math.log(v) for v in values) / len(values))
+
+
+def run_cost_of_finishing(summary: dict) -> float:
+    """The score of a run on cost of finishing: the geometric mean over all its networks, every size setting
+    together, each network counting at least 1 (finishing_ratio)."""
+    return geometric_mean([finishing_ratio(m["cost_of_finishing"]) for s in summary.values() for m in s["networks"].values()])
+
+
 def network_metrics(points: list[dict], entry: dict, budget_ratio: float | None = None, records: list[dict] | None = None) -> dict:
     E, B, real = entry.get("E"), entry.get("B"), entry.get("real_correct")
     ratio = budget_ratio if budget_ratio is not None else default_budget_ratio()
@@ -312,6 +354,9 @@ def summarize(records: list[dict], entries: list[dict], budget_ratio: float | No
             "Q_above_worst": min(qa),
             "cost_of_finishing_median": statistics.median(cof),
             "cost_of_finishing_worst": min(cof),
+            # what a run on cost of finishing is scored by: ratios average on the log scale, and a network
+            # without a proof counts as brute force (1), not 0
+            "cost_of_finishing_geomean": geometric_mean([finishing_ratio(c) for c in cof]),
             "shortest_full_over_B_median": statistics.median(full) if all(f is not None for f in full) else None,
         }
     return out

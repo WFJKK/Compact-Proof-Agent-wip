@@ -186,6 +186,12 @@ def load_model_folder(path: str | Path) -> ModelFolder:
         raise ModelFolderError(f"{path.name}: split.held_out_per_setting must be an integer below the number of seeds")
     if not isinstance(config["split"].get("seed"), int):
         raise ModelFolderError(f"{path.name}: split.seed must be an integer")
+    named = config["split"].get("held_out_seeds") or {}
+    if not isinstance(named, dict) or not set(named) <= set(config["size_settings"]):
+        raise ModelFolderError(f"{path.name}: split.held_out_seeds must map size settings to their held-out seeds")
+    for setting, chosen in named.items():
+        if not isinstance(chosen, list) or len(set(chosen)) != held or not set(chosen) <= set(seeds):
+            raise ModelFolderError(f"{path.name}: split.held_out_seeds of {setting!r} must be {held} distinct seeds of the folder")
 
     model_mod = _import_file(path / "model.py", "model")
     import torch

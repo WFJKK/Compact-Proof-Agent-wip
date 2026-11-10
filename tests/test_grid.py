@@ -246,3 +246,39 @@ def test_q_above_counts_only_what_beats_the_brute_force_line():
     # a baseline that is not brute force (another rule charged, or skipped leaves) does not define the line
     other = {**round0, "length_by_rule": {"extract": 136, "single": 191, "token_convex": 500}}
     assert brute_force_line(entry, [other])["how"].startswith("estimate")
+
+
+def test_a_run_on_cost_of_finishing_is_scored_by_the_geometric_mean_over_its_networks():
+    """10 November 2026: cost of finishing drives a run as the geometric mean over its networks (ratios average
+    on the log scale). A network counts at least 1, since brute force alone always finishes at B: no proof, or
+    only proofs that finish above B, is 1 and never 0. Per network nothing changes: any proof counts for what
+    it saves, a brute-force subset finishes at exactly B, and there is no budget whose crossing matters."""
+    from core.run_config import METRIC_KEYS
+    from core.scoring import finishing_detail, finishing_ratio, geometric_mean, run_cost_of_finishing, summarize
+
+    assert METRIC_KEYS["cost_of_finishing"] == "cost_of_finishing_geomean"
+    assert geometric_mean([4.0, 1.0]) == 2.0 and geometric_mean([]) == 0.0 and abs(geometric_mean([2.0, 4.0, 8.0]) - 4.0) < 1e-12
+    assert finishing_ratio(0.0) == 1.0 and finishing_ratio(0.4) == 1.0 and finishing_ratio(4.5) == 4.5
+    entries = [{"id": f"n{i}", "setting": s, "n_inputs": 64, "E": 136, "B": 12360, "real_correct": 64}
+               for i, s in enumerate(("small", "small", "large"))]
+
+    def rec(net, k, certified, length, by_rule):
+        return {"record_id": f"{net}/{k}/{length}", "network": net, "round": k, "attempt": 0, "status": "ok", "certified": certified,
+                "n_inputs": 64, "length": length, "length_by_rule": by_rule, "knob": 1.0}
+
+    brute = [rec(e["id"], 0, 64, 12360, {"extract": 136, "single": 12224}) for e in entries[:2]]  # n2 has no proof at all
+    s0 = summarize(brute, entries)
+    assert s0["small"]["cost_of_finishing_geomean"] == 1.0 and s0["large"]["cost_of_finishing_geomean"] == 1.0
+    assert s0["large"]["cost_of_finishing_median"] == 0.0 and run_cost_of_finishing(s0) == 1.0
+    records = brute + [rec("n0", 1, 64, 3090, {"bill": 2954, "extract": 136, "read": 0}),        # complete: B / 3090 = 4
+                       rec("n1", 1, 10, 2046, {"bill": 1910, "extract": 136, "read": 0}),        # a brute-force subset: B
+                       rec("n1", 2, 20, 9000, {"bill": 8864, "extract": 136, "read": 0})]        # finishes above B
+    s1 = summarize(records, entries)
+    assert s1["small"]["networks"]["n0"]["cost_of_finishing"] == 4.0 and s1["small"]["networks"]["n1"]["cost_of_finishing"] == 1.0
+    assert abs(s1["small"]["cost_of_finishing_geomean"] - 2.0) < 1e-12 and s1["small"]["cost_of_finishing_median"] == 2.5
+    assert abs(run_cost_of_finishing(s1) - 4.0 ** (1 / 3)) < 1e-12
+    d = finishing_detail([{"length": 2000, "certified": 20, "n_inputs": 64}], entries[0], records)
+    assert (d["total"], d["uncovered"], d["per_input"]) == (2000 + 44 * 191, 44, 191.0) and finishing_detail([], entries[0], records) is None
+    # a shorter complete proof always counts, however little: nothing waits for a budget to be crossed
+    s2 = summarize(records + [rec("n0", 3, 64, 3089, {"bill": 2953, "extract": 136, "read": 0})], entries)
+    assert s2["small"]["cost_of_finishing_geomean"] > s1["small"]["cost_of_finishing_geomean"]

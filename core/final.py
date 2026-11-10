@@ -34,7 +34,7 @@ from .versions import changed
 from .zoo import networks
 
 METRICS = ("Q_median", "Q_worst", "Q_grid_median", "Q_grid_worst", "Q_exact_mean", "Q_exact_worst", "Q_above_mean", "Q_above_worst",
-           "cost_of_finishing_median", "cost_of_finishing_worst", "shortest_full_over_B_median")
+           "cost_of_finishing_median", "cost_of_finishing_worst", "cost_of_finishing_geomean", "shortest_full_over_B_median")
 
 
 class FinalError(RuntimeError):

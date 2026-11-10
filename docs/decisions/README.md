@@ -24,3 +24,10 @@ working from the repositories can read them. Each is dated; later decisions supe
   charged a checker's code, so the same proof costs the same in both lanes (brute force on the tiny max-of-2
   network: 4,112 in both; 4,323 in the fixed rules lane under cost-v3). Replaces the description charge planned in
   frozen-transfer.md.
+- [cost-of-finishing-and-ladder.md](cost-of-finishing-and-ladder.md) (10 November 2026): the pilots are
+  driven by cost of finishing, the geometric mean over the run's networks with a network counting at least 1,
+  and the agent is shown that one score: no budgets to land under, no points to place, brute force on any
+  subset exactly 1. The pilot runs on a ladder of three sizes of the attention max-of-n network with two
+  development and two held-out seeds each (`tests/attn_maxn_tiny`), with prompt template v4. No complexity
+  proof is required of a submission. What is still open: a proof per network, and the weight copy on
+  networks this small, until the held-out seeds are run with the general layer frozen.

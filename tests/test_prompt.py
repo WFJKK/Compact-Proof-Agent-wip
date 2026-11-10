@@ -199,9 +199,11 @@ def test_template_v3_ends_with_the_aim_and_the_score_as_it_stands(trained_stub, 
         aim = text.split("YOUR AIM THIS ROUND", 1)[1]
         assert f"Raise your score, {name}. It stands at:" in aim and "consider several approaches" in aim
         assert all(e["setting"] in aim for e in ctx.entries)
-        # the score as the run takes it: the mean over networks for Q_exact, the median otherwise
-        mean = metric in ("Q_exact", "Q_above")
+        # the score as the run takes it: the mean over networks for Q_exact and Q_above, the geometric mean
+        # for cost of finishing, the median otherwise
+        mean = metric in ("Q_exact", "Q_above", "cost_of_finishing")
         assert (" mean " in aim) == mean and (" median " in aim) == (not mean)
+        assert (" geometric mean " in aim) == (metric == "cost_of_finishing")
 
 
 @pytest.mark.parametrize("model", ["max2", "attn-max2", "attn-max4", "attn-min2", "attn-min4", "xorformer-majority"])
