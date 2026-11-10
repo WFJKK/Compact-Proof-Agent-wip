@@ -1,0 +1,327 @@
+"""The open-lane prompt: the specification, the cost language with its prices, the tools, the scoreboard,
+the receipts so far, the agent's accepted lemmas from earlier rounds and its latest notes. No rule
+descriptions: the agent is told what a proof is and what it costs, not which argument shapes to use.
+
+Templates: core/agent/prompts/open_lane_v1.md (the pilot's), open_lane_v2.md (adds the further sources
+and the split instance) and open_lane_v3.md (the modules carried into the workspace listed instead of the
+accepted sources pasted in; the instance as one `decide +kernel` with Lean's recursion limit raised, which
+is what the kernel needs to compute a bill of thousands of charges). Part 1 is the same every round; part 2
+is rebuilt from the archive. Building it opens the round's first session, which carries
+the earlier rounds' accepted modules into its workspace (core.open_lane.session). The Lean
+sources shown (Spec.lean, Counted.lean, CountedOps.lean, the scored example of `open_lane.example`, the
+files of `open_lane.extra_sources`) are read from the Lean project the run config names, so the prompt
+always matches the service that will check the proof.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from ..agent.build_prompt import CHARS_PER_TOKEN, Prompt, PromptError, fill, forbidden, grid_text, load_template, metric_scores, metric_text
+from ..archive import RunDir
+from ..model_folder import ModelFolder
+from ..scoring import brute_force_line, line_certified, summarize
+from ..util import REPO_ROOT
+from .session import Session
+
+MAX_LEMMA_CHARS = 12000
+MAX_NOTES_CHARS = 6000
+MAX_REASON = 300
+STALL_TEXT = (
+    "No submission of the last {n} rounds was accepted. Change the approach rather than refining the last one: "
+    "a different account of the computation, a smaller claim that you can prove completely, or a different "
+    "shape of checker. Say in WHY IT HELPS what you are changing and why."
+)
+AIM_TEXT = (
+    "Raise the score. It stands at: {scores}. Before writing, weigh several approaches (a better account of "
+    "how the network computes, a cheaper checker for the same inputs, covering inputs still uncertified) and "
+    "pursue the one you expect to raise it most."
+)
+
+
+def lean_project(cfg: dict) -> Path:
+    return Path(cfg["open_lane"]["lean_project"]).expanduser().resolve()
+
+
+def _read(project: Path, rel: str) -> str:
+    p = project / rel
+    if not p.is_file():
+        raise PromptError(f"the Lean project has no {rel}")
+    return p.read_text().rstrip()
+
+
+def lean_block(text: str) -> str:
+    return "```lean\n" + text.rstrip() + "\n```"
+
+
+def elide_repeats(text: str, keep_first: int = 2, keep_last: int = 1, least: int = 5) -> str:
+    """Shorten a run of blank-line-separated paragraphs that differ only in their numbers (an instance split
+    into one decided fact per input): the first and last few stay, with a comment saying how many are left
+    out. The example's file itself is unchanged; this is only what the prompt shows."""
+    paras = text.split("\n\n")
+    shape = [re.sub(r"\d+", "#", q.strip()) for q in paras]
+    out, i = [], 0
+    while i < len(paras):
+        j = i
+        while j + 1 < len(paras) and shape[j + 1] == shape[i] and shape[i]:
+            j += 1
+        n = j - i + 1
+        if n >= least:
+            out += paras[i : i + keep_first]
+            out.append(f"-- ... {n - keep_first - keep_last} more of the same form, one per input ...")
+            out += paras[j - keep_last + 1 : j + 1]
+        else:
+            out += paras[i : j + 1]
+        i = j + 1
+    return "\n\n".join(out)
+
+
+KNOWLEDGE_TEXT = {
+    "minimal": (
+        "This run is the minimal-knowledge condition: a checker may use every field of Interp except ginterval "
+        "and gtokenIntervals, which belong to another experimental condition (a checker that reaches one, by "
+        "name or otherwise, is refused scoring)."
+    ),
+    "maximum": (
+        "This run is the maximum-knowledge condition: a checker may use every field of Interp, including two of "
+        "the fixed rules lane's rules for networks beyond linear maps, supplied as operations.\n"
+        "I.ginterval graph task box bounds the network over a box of inputs (per position, the tokens lo..hi) "
+        "with interval arithmetic and answers true when the label, constant on the box, has a lower bound above "
+        "every other output's upper bound; a box whose label is not constant answers false and costs nothing. "
+        "It charges what cost-v3 charges an interval leaf: the lookup from the box, per position d for one token "
+        "and 2 d (hi - lo + 1) otherwise (d the matrix's columns); every other operation twice the single rule's "
+        "price; the final comparison. CostM.ginterval_correct: a true answer means every input of the box is "
+        "answered correctly; CostM.ginterval_run_of splits an instance as gsingle_run_of does.\n"
+        "I.gtokenIntervals graph task boxes runs the token_interval rule on a list of boxes and returns one "
+        "verdict per box (false, at no cost, for a box whose label is not constant). Per box it keeps each "
+        "position's rows apart per token for as long as the graph allows (exactly per input where at most one "
+        "position varies) and answers true when the label's margin bound is positive. It charges what cost-v3 "
+        "charges a proof's token_interval leaves: each leaf's own work to token_interval, and the rows that "
+        "depend on their token alone (the lookups and their products with the weights) to tables, once for the "
+        "whole list, so one call with all of a proof's boxes pays the least (each further call pays for its rows "
+        "again). CostM.gtokenIntervals_correct: one verdict per box, and every input of a box answered true is "
+        "answered correctly; certifiedCount_le_numCorrect bounds the count of the inputs of the boxes answered "
+        "true when no two boxes share an input (pairwiseApart) and each lies in the space (fits). An instance "
+        "splits into one decided fact per box (TokenLeafFacts, CostM.gtokenIntervals_run_of_facts); a box's "
+        "fact is what `#eval (dweights weights).bind fun dw => gtokenLeaf graph dw task box` prints in a "
+        "lean_check module. The worked example below calls it on three boxes of another network of the same "
+        "architecture (TokensCost.lean has the operation and its price); state the checker's run for any "
+        "environment, as the example's D_run does, or the kernel may evaluate every box at once."
+    ),
+}
+
+
+def extra_sources_text(project: Path, rels: list[str]) -> str:
+    if not rels:
+        return ""
+    return "\n".join(f"From {rel}:\n{lean_block(_read(project, rel))}" for rel in rels)
+
+
+def protected_interface() -> str:
+    return lean_block(
+        "namespace Protected.N_<network>_c<claimed>   -- for example Protected.N_max2_v64_s0_c4095\n"
+        "def graph : Graph := ...            -- the network's graph, operation by operation\n"
+        "def weights : Weights ℚ := ...      -- every weight, an exact dyadic rational\n"
+        "def task : Task := ...              -- the task: input space and label function\n"
+        "def cert : Cert := #[...]           -- the certificate of a scored submission (empty otherwise)\n"
+        "def claimedCount : Nat := <claimed>\n"
+        "def Target : Prop := claimedCount ≤ numCorrect graph weights task\n"
+        "end Protected.N_<network>_c<claimed>"
+    )
+
+
+def tools_text() -> str:
+    return "\n".join(f"- {name}: {spec['description']}" for name, spec in Session.TOOLS.items())
+
+
+def networks_text(entries: list[dict]) -> str:
+    lines = []
+    for e in entries:
+        real = e.get("real_correct")
+        acc = f"{real:,} of {e['n_inputs']:,} ({100 * real / e['n_inputs']:.3f}%)" if real is not None else "unknown"
+        lines.append(f"- {e['id']} ({e['setting']}): correct {acc}; E {e['E']:,}; B {e['B']:,}")
+    return "\n".join(lines)
+
+
+def static_values(cfg: dict, folder: ModelFolder, entries: list[dict]) -> dict:
+    project = lean_project(cfg)
+    settings = list(dict.fromkeys(e["setting"] for e in entries))
+    size_settings = "; ".join(
+        f"{s}: " + ", ".join(f"{k}={v}" for k, v in folder.sizes(s).items()) + f" ({folder.n_inputs(s):,} inputs)" for s in settings
+    )
+    ol = cfg["open_lane"]
+    budgets = (f"{ol['compile_calls']} lean_check calls, {ol['python_calls']} run_python calls, "
+               f"{ol['submissions']} submissions, {ol['worker_seconds']:,} s of wall clock")
+    return {
+        "MODEL_SOURCE": "\n```python\n" + folder.source().rstrip() + "\n```",
+        "TASK_DESCRIPTION": folder.task.DESCRIPTION,
+        "SIZE_SETTINGS": size_settings,
+        "NETWORKS": networks_text(entries),
+        "PROTECTED_INTERFACE": protected_interface(),
+        "SPEC": lean_block(_read(project, "CompactCheck/Spec.lean")),
+        "COUNTED": lean_block(_read(project, "CompactCheck/Counted.lean")),
+        "COUNTED_OPS": lean_block(_read(project, "CompactCheck/CountedOps.lean")),
+        "EXAMPLE": lean_block(elide_repeats(_read(project, ol["example"]))),
+        "EXTRA_SOURCES": extra_sources_text(project, ol["extra_sources"]),
+        "KNOWLEDGE": KNOWLEDGE_TEXT[ol.get("knowledge", "minimal")],
+        "TOOLS": tools_text(),
+        "BUDGETS": budgets,
+        "METRIC": metric_text(cfg, folder, entries) + (
+            f"\nThe budget grid, per size setting: {grid_text(entries, cfg['budget_ratio'])}." if cfg["metric"] == "Q_grid" else ""),
+    }
+
+
+# part 2 ------------------------------------------------------------------------------------
+def scoreboard(records: list[dict], entries: list[dict], budget_ratio) -> str:
+    lines = []
+    for setting, s in summarize(records, entries, budget_ratio).items():
+        lines.append(f"{setting}: Q_above mean {s['Q_above_mean']:.4f}, worst {s['Q_above_worst']:.4f}; "
+                     f"Q_exact mean {s['Q_exact_mean']:.4f}; Q median {s['Q_median']:.4f}; "
+                     f"cost of finishing median {s['cost_of_finishing_median']:.2f}")
+        for nid, m in s["networks"].items():
+            full = f"{m['shortest_full']:,} (B/{m['B'] / m['shortest_full']:.1f})" if m["shortest_full"] else "none"
+            line = m["brute_force_line"]
+            lines.append(f"  {nid}: Q_above {m['Q_above']:.4f}, Q_exact {m['Q_exact']:.4f}, Q {m['Q']:.4f}; best certified accuracy "
+                         f"{100 * m['best_accuracy']:.3f}% of {100 * (m['real_accuracy'] or 0):.3f}%; shortest full-accuracy proof "
+                         f"{full}; {m['points']} frontier proofs, {m['points_above_line']} above the brute-force line "
+                         f"(k inputs for {line['c']:g} k + {line['E']:g}, up to {line['coverage']})")
+    return "\n".join(lines) if lines else "nothing checked yet"
+
+
+def receipts_text(records: list[dict], entries: list[dict] | None = None) -> str:
+    lines = []
+    lines_by_net = {e["id"]: brute_force_line(e, records) for e in entries or []}
+    for r in records:
+        if r.get("lane") != "open" or r.get("status") == "no_submission":
+            continue
+        head = f"- round {r['round']} submission {r.get('submission')}: {r.get('network')}, claimed {r.get('claimed_count')}: {r['status']}"
+        if r["status"] == "ok":
+            line = lines_by_net.get(r.get("network"))
+            above = ""
+            if line is not None:
+                k = line_certified(line, r["length"])
+                above = (f"; above the brute-force line (which certifies {k} at this length)" if r["certified"] > k
+                         else f"; not above the brute-force line (which certifies {k} at this length): scores nothing")
+            lines.append(f"{head}, certified {r['certified']}, length {r['length']:,} (bill {r['length_by_rule']['bill']:,}){above}")
+        elif r["status"] == "lemma":
+            lines.append(f"{head} (auxiliary lemma accepted): {(r.get('statement') or '')[:MAX_REASON]}")
+        elif r["status"] == "verified":
+            lines.append(f"{head}, certified {r['certified']}; {(r.get('error') or '')[:MAX_REASON]}")
+        else:
+            lines.append(f"{head}: {(r.get('error') or '')[:MAX_REASON]}")
+    return "\n".join(lines) if lines else "none yet"
+
+
+def accepted_sources(run: RunDir, records: list[dict], n: int, max_chars: int) -> str:
+    accepted = [r for r in records if r.get("lane") == "open" and r["status"] in ("ok", "verified", "lemma")]
+    accepted.sort(key=lambda r: (r["round"], r["attempt"], r.get("submission") or 0), reverse=True)
+    parts, used = [], 0
+    for r in accepted[:n]:
+        d = run.round_path(r["round"]) / f"attempt_{r['attempt']}" / "open_lane" / "submissions" / f"{r.get('submission', 0):03d}"
+        for p in sorted(d.glob("Candidate/**/*.lean")):
+            text = p.read_text()
+            if used + len(text) > max_chars:
+                text = text[: max(0, max_chars - used)] + "\n-- (cut)"
+            used += len(text)
+            parts.append(f"round {r['round']}, {r.get('network')}, {r['status']}, {p.relative_to(d)}:\n{lean_block(text)}")
+            if used >= max_chars:
+                break
+        if used >= max_chars:
+            break
+    return "\n\n".join(parts) if parts else "none yet"
+
+
+WORKSPACE_HEAD = (
+    "These modules, from the submissions the service accepted in earlier rounds (the latest accepted version of "
+    "each), are in your workspace and were compiled there before this session began. Import them (`import "
+    "Candidate.<Name>`) rather than pasting their code again; read one with read_file (path Candidate/<Name>.lean); "
+    "submit_candidate adds the workspace modules your submitted modules import, and the service checks them "
+    "afresh with every submission. Saving a module of the same path with lean_check replaces it."
+)
+
+
+def workspace_text(carried) -> str:
+    """Part 2's account of the modules carried into this round's workspace (core.open_lane.session)."""
+    if not carried or not isinstance(carried, list):
+        return "none yet"
+    lines = [WORKSPACE_HEAD]
+    for m in carried:
+        if m.get("kind") == "auxiliary":
+            what = f"accepted lemma {m.get('theorem')}"
+        elif m.get("scored"):
+            what = f"scored proof ({m.get('certified')} inputs, length {m.get('length'):,})" if m.get("length") else "scored proof"
+        else:
+            what = f"verified proof ({m.get('certified')} inputs)"
+        state = "compiled" if m.get("compiled") else "did not compile here: " + " | ".join(m.get("errors") or [])[:MAX_REASON]
+        lines.append(f"- {m['path']} ({m.get('lines')} lines; round {m['round']}, submission {m['submission']}, {what}): {state}")
+    return "\n".join(lines)
+
+
+def latest_notes(run: RunDir, k: int, max_chars: int) -> str:
+    for kk in range(k - 1, 0, -1):
+        j = 0
+        texts = []
+        while (run.round_path(kk) / f"attempt_{j}").is_dir():
+            t = run.read(kk, f"attempt_{j}/response.md")
+            if t:
+                m = re.search(r"NOTES:(.*)\Z", t, re.S)
+                texts.append((m.group(1) if m else t).strip())
+            j += 1
+        if texts:
+            out = "\n".join(texts)
+            return out[:max_chars] + ("\n(cut)" if len(out) > max_chars else "")
+    return "none yet"
+
+
+def stalled(records: list[dict], k: int, n: int) -> bool:
+    """No accepted open-lane submission in agent rounds k-n to k-1 (and there were that many rounds)."""
+    if k - 1 < n:
+        return False
+    recent = [r for r in records if r.get("lane") == "open" and k - n <= r["round"] <= k - 1]
+    return not any(r["status"] in ("ok", "verified", "lemma") for r in recent)
+
+
+def aim(records: list[dict], entries: list[dict], cfg: dict, k: int) -> str:
+    summary = summarize(records, entries, cfg.get("budget_ratio"))
+    text = AIM_TEXT.format(scores=f"{cfg['metric']}: " + metric_scores(summary, cfg["metric"]))
+    if stalled(records, k, cfg["open_lane"]["stall_rounds"]):
+        text += "\n" + STALL_TEXT.format(n=cfg["open_lane"]["stall_rounds"])
+    return text
+
+
+def build_open_lane_prompt(cfg: dict, folder: ModelFolder, entries: list[dict], run: RunDir, k: int) -> Prompt:
+    part1_t, part2_t = load_template(cfg["prompt_template"])
+    terms = forbidden(folder)
+    part1 = fill(part1_t, static_values(cfg, folder, entries))
+    leaked = [t for t in terms if t in part1]
+    if leaked:
+        raise PromptError(f"the model folder puts forbidden strings into the prompt: {leaked}")
+    records = [r for r in run.read_archive() if r["round"] < k]
+    budget = cfg["prompt_budget_tokens"] * CHARS_PER_TOKEN
+    lemma_chars, notes_chars = MAX_LEMMA_CHARS, MAX_NOTES_CHARS
+    trimmed = []
+    # the round's first session, made now so that the prompt can say what was carried into its workspace and
+    # whether it compiled; the backend opens the same session (Session.create returns an existing one)
+    session = Session.create(run.round_path(k) / "attempt_0" / "open_lane", cfg, cfg["model"], entries, run.path)
+    values = {
+        "SCOREBOARD": scoreboard(records, entries, cfg.get("budget_ratio")),
+        "RECEIPTS": receipts_text(records, entries),
+        "AIM": aim(records, entries, cfg, k),
+        "WORKSPACE": workspace_text(session.state.get("carried")),
+    }
+    while True:
+        values["LEMMAS"] = accepted_sources(run, records, cfg["shown_top_recipes"], lemma_chars)
+        values["NOTES"] = latest_notes(run, k, notes_chars)
+        part2 = fill(part2_t, values)
+        if len(part1) + len(part2) <= budget or (lemma_chars == 0 and notes_chars == 0):
+            break
+        if lemma_chars > 0:
+            lemma_chars = 0
+            trimmed.append("lemmas")
+        else:
+            notes_chars = 0
+            trimmed.append("notes")
+    stats = {"chars": len(part1) + len(part2), "tokens_estimate": (len(part1) + len(part2)) // CHARS_PER_TOKEN,
+             "trimmed": trimmed, "template": cfg["prompt_template"], "lane": "open", "stalled": stalled(records, k, cfg["open_lane"]["stall_rounds"])}
+    return Prompt(part1, part2, stats)

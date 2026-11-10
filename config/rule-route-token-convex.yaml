@@ -1,0 +1,23 @@
+# The rule route's first rule (19 October 2026): token_convex, implemented by hand as the route's first
+# implementer, then checked like any candidate. The review is the manual backend: the independent adversarial
+# review (a separate Claude agent that had not seen the implementation) is written into the review folder.
+#
+# The first route run (route_id token-convex-2026-10-19) passed its checks and was stopped while waiting for the
+# review: the review found two memo-keying bugs that token_convex shared with token_interval (an nn.Linear's
+# bias step, and two terms with one origin reaching one product; fixed in commits 587d440 and 02304ec), and the
+# exact search's charges were completed. This run checks and reviews the fixed version.
+route_id: token-convex-2026-10-19b
+name: token_convex
+proposal:
+  file: rules/token_convex/PROPOSAL.md
+candidate: rules/token_convex
+implemented_by: "Claude (session of 19 October 2026), by hand, as the route's first implementer"
+reviewer:
+  backend: manual
+reviewers: 1
+audit_level: full
+audit_seed: 0
+checks_sandbox: hardened
+checks_timeout_s: 10800
+adopt_on: [SOUND]
+work_dir: ~/auto-research-compact-proof-runs/rule-route

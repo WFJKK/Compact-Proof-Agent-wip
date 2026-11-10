@@ -1,0 +1,18 @@
+# Max of 4 at the paper's own size (d_vocab 64, n_ctx 4, d_model = d_head 32),
+# through the Messages API, scored on Q, four rounds, with token_interval: the
+# settings of attn-max4-q-api-tokens. Brute force (16.8 million inputs) is never
+# run; B comes from the shapes, so round 0 replays no baselines. Dry run first:
+# config/attn-max4-v64-round0.yaml (fake backend, no model calls).
+run_id: attn-max4-v64-q-api-tokens
+model: models/attn-max4
+backend: api
+agent_model: claude-fable-5-1
+effort: high
+metric: Q
+rounds_max: 4
+patience: 4
+networks: [attn-max4-v64-s0, attn-max4-v64-s2, attn-max4-v64-s3, attn-max4-v64-s4, attn-max4-v64-s7, attn-max4-v64-s8]
+baselines: false
+sandbox: hardened
+rule_set: [single, interval, token_interval, skip]
+memory_limit_mb: 4096

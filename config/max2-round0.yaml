@@ -1,0 +1,9 @@
+# Round 0 on max2 with the fake backend: the three baselines in round 0, then
+# the five broken responses in rounds 1 to 5, which check that a run carries
+# on past every kind of failure. No API calls.
+run_id: max2-round0-fake
+model: models/max2
+backend: fake
+fake_responses: [tests/broken_responses]
+rounds_max: 5
+time_limit_s: 30

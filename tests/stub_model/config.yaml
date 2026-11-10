@@ -1,0 +1,18 @@
+size_settings:
+  tiny:
+    n_ctx: 2
+    d_vocab: 5
+    d_hidden: 5
+seeds: [0, 1, 2]
+split:
+  held_out_per_setting: 1
+  seed: 7
+training:
+  optimizer: AdamW
+  lr: 0.05
+  weight_decay: 0.0
+  batch_size: 64
+  steps: 400
+zoo_path: zoo
+cost_model: cost-v1
+hygiene: ["SECRET-HINT"]

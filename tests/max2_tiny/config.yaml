@@ -1,0 +1,21 @@
+# The max2 network (models/max2/model.py, copied) at a size small enough for Lean's kernel to evaluate on
+# every input: 8 tokens, hidden width 4, 64 inputs. Trained by core.train; used by the Lean open lane's
+# hand-built example (the first proof accepted outside the split-tree language) and its tests.
+size_settings:
+  v8:
+    n_ctx: 2
+    d_vocab: 8
+    d_model: 4
+seeds: [0, 1]
+split:
+  held_out_per_setting: 1
+  seed: 7
+training:
+  optimizer: AdamW
+  lr: 0.01
+  weight_decay: 0.0
+  batch_size: 64
+  steps: 2000
+zoo_path: zoo
+cost_model: cost-v3
+hygiene: []

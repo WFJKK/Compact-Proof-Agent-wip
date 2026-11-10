@@ -1,0 +1,36 @@
+# The max2 model: sizes, training, seeds and split. Change values here, never in code.
+
+# One entry per size setting; the values are the module's constructor arguments.
+size_settings:
+  v64:
+    n_ctx: 2
+    d_vocab: 64
+    d_model: 8
+  v128:
+    n_ctx: 2
+    d_vocab: 128
+    d_model: 16
+
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+# Per size setting, this many seeds are held out for the final evaluation.
+split:
+  held_out_per_setting: 4
+  seed: 20261009
+
+# The notebook's optimizer, learning rate and batch size; a step count instead
+# of its "5% of all inputs per epoch", which is 1 or 2 steps at these sizes.
+training:
+  optimizer: AdamW
+  lr: 0.001
+  weight_decay: 0.01
+  batch_size: 1024
+  steps: 4000
+
+zoo_path: zoo
+cost_model: cost-v2
+control_networks: []
+
+# Strings the agent's prompt must never contain.
+# The prompt never names the paper this work follows: part 1 refuses these, part 2 removes them.
+hygiene: ["Gross", "Compact Proofs of Model Performance"]

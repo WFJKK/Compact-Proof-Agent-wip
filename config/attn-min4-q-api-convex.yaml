@@ -1,0 +1,25 @@
+# The same run as attn-min4-q-api-tokens with token_convex added: does the agent find a proof like the
+# hand-built ones, or a better one? With version 2 of the rule (adopted 19 October 2026, rules/token_convex,
+# docs/RULE_ROUTE.md) a hand-built proof reaches Q 0.61 at v16 and 0.63 at v24
+# (results/query-gap-2026-10-19); the agent reached 0.48 and 0.50 with token_interval alone.
+# min-of-4 on the one-head transformer through the Messages API, the agent scored
+# on Q, four rounds: the same settings as attn-min4-q-api-tokens, so the two compare.
+# Run config/attn-max4-convex-smoke.yaml first. About $7.50 and 2 to 4 hours, of which round 0
+# (brute force on all twelve networks) takes about half an hour.
+run_id: attn-min4-q-api-convex
+model: models/attn-min4
+backend: api
+agent_model: claude-fable-5-1
+effort: high
+metric: Q
+rounds_max: 4
+patience: 4
+baselines: [brute_force]
+sandbox: hardened
+# Softmax networks: the checker refuses contract, symmetry and approximate
+# (they need a network of linear maps). token_interval keeps each token's rows
+# exact through the attention (see docs/RULES.md).
+rule_set: [single, interval, token_interval, token_convex, skip]
+# Recipes on the 4-token model can build large tables; 2048 MB was too little
+# for one max-of-4 recipe on 16 October.
+memory_limit_mb: 4096

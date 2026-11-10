@@ -1,0 +1,13 @@
+# max-of-2 through the Messages API, the agent scored on Q. Five rounds, same
+# model, effort and settings as max2-rerun-q (which used the Claude Code login),
+# so the two compare. Run config/max2-smoke.yaml first.
+run_id: max2-q-api
+model: models/max2
+backend: api
+agent_model: claude-fable-5-1
+effort: high
+metric: Q
+rounds_max: 5
+patience: 5
+baselines: [brute_force]
+sandbox: hardened

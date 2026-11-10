@@ -1,0 +1,2 @@
+{"calls": [{"tool": "search_library", "args": {"query": "numCorrect"}}],
+ "response": "CLAIM: nothing submitted.\nWHY IT HELPS: studying the weights.\nNOTES: try an interval argument."}

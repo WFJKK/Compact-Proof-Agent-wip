@@ -1,0 +1,134 @@
+# Defaults for every run config (section 7 of docs/SPEC.md).
+#
+# A run config names its run_id and model and may override any key below.
+# The merged settings are copied into the run folder when the run starts, so
+# later edits to this file never change an existing run.
+
+seed: 0
+
+# Which development networks a round uses: "all", or a list of network ids.
+networks: all
+# The knob values each recipe is run at (metrics Q and cost_of_finishing). With
+# metric Q_grid the loop runs each recipe once per fixed budget instead, and
+# knob_values is not used.
+knob_values: [0, 0.25, 0.5, 0.75, 1]
+# The fixed budgets of Q_grid, per size setting: B / budget_ratio, B / budget_ratio^2,
+# and so on down to E. With 2, a proof must halve to reach the next budget.
+budget_ratio: 2
+
+# Run data lives outside the repository.
+runs_dir: ~/auto-research-compact-proof-runs
+
+# How long the trusted checker may spend on one proof file before it rejects it
+# and moves on (a backstop; honest proofs check in well under a second).
+check_timeout_s: 600
+
+# Sandbox limits, per recipe execution (one network and one knob value).
+time_limit_s: 300
+memory_limit_mb: 2048
+max_proof_mb: 32
+threads_per_recipe: 1
+# Recipe executions that run at the same time.
+workers: 2
+# Where sandbox folders are made; null means the system's temporary folder.
+sandbox_dir: null
+# How recipes are kept in: auto (the strongest that works here, else process),
+# hardened (container or landlock, never process: refuses to start without one),
+# container, landlock or process (weak). See core/sandbox.py and docs/SANDBOX.md.
+sandbox: auto
+sandbox_image: auto-research-compact-proof-sandbox:1
+
+# Round 0 replays baselines from the model folder's baselines/ folder: true for
+# all of them, false for none, or a list of names (for example [brute_force],
+# so the agent starts from brute force and has to discover everything else).
+baselines: true
+rounds_max: 100
+patience: 25
+recipes_per_round: 1
+# Run each recipe on one development network per size setting first, and on
+# the rest only if it certified something there.
+screen: true
+
+shown_top_recipes: 3
+shown_last_attempts: 3
+# The prompt's size budget, in tokens estimated as characters / 4. Over it, the
+# builder leaves out recipe code, then cuts diagnostics, then notes.
+prompt_budget_tokens: 40000
+
+# fake, manual, api or claude_code. api bills an API key per token;
+# claude_code runs the official Claude Code CLI headless under your own
+# Claude subscription login instead (see docs/BACKENDS.md and Anthropic's
+# current terms for Claude Code before relying on it).
+backend: fake
+# The Claude Code executable for the claude_code backend.
+claude_code_command: claude
+# Files or folders of responses the fake backend replays, in order.
+fake_responses: []
+
+agent_model: claude-fable-5-1
+# Passed to the Messages API as `thinking`; adaptive lets the model decide how
+# much to think, guided by effort (low, medium, high, xhigh or max), which goes
+# into `output_config`. null leaves either out.
+thinking: {type: adaptive}
+effort: xhigh
+# A hard cap on thinking plus answer; responses stream, so a large one is fine.
+max_output_tokens: 64000
+# The variable holding the API key. Never ANTHROPIC_API_KEY.
+api_key_env: CPL_ANTHROPIC_KEY
+# The variable holding a workspace ID (wrkspc_...), sent as the
+# anthropic-workspace-id header. Needed only for a key not scoped to one
+# workspace; left unset, no header is sent.
+api_workspace_env: CPL_ANTHROPIC_WORKSPACE
+# Retries for errors that pass by themselves (overloaded, server errors, rate
+# limits with a retry-after, lost connections); waits double from first_wait_s.
+# Spend limits, billing, authentication and malformed requests stop the run.
+api_retries: {tries: 6, first_wait_s: 10, max_wait_s: 300, timeout_s: 1800}
+# Stop when this many attempts in a row were refused by the model.
+max_consecutive_refusals: 3
+
+# v2 is v1 with the knob paragraph filled per metric; metric Q_grid needs it.
+# v3 is v2 plus an explicit aim at the end: the score as it stands and the ask
+# to weigh approaches that would raise it. v4 is v3 without naming the paper
+# this work follows (the model folders' hygiene lists also keep it out). Runs
+# made with earlier templates stay reproducible.
+prompt_template: v4
+# token_interval is for networks beyond linear maps (the attention models list it).
+rule_set: [single, interval, skip, contract, symmetry, approximate]
+# The number the agent sees as its score: Q, Q_grid, Q_exact, Q_above or
+# cost_of_finishing (section 5 of docs/SPEC.md). Q_grid scores at fixed budgets,
+# so where a recipe places its proofs earns nothing; Q_above counts only what
+# beats brute force of the same length; the report shows all of them.
+metric: Q
+lean_spot_check: false
+
+# The open lane (docs/OPEN_LANE.md): instead of one recipe per round, the agent
+# works with tools (lean_check, run_python, search_library, submit_candidate) and
+# submits Lean proofs about a network to the Lean project's acceptance service;
+# the receipts become the round's records. Off by default: the fixed rules lane's loop above
+# is unchanged. With it on, rule_set must be written in the run config itself (it
+# limits round 0's baselines; the agent gets no rule descriptions), backend is
+# fake (replaying the scripts in fake_scripts) or claude_code (the CLI with the
+# tools as an MCP server), and prompt_template is an open-lane template.
+open_lane:
+  enabled: false
+  lean_project: null        # the CompactCheck project: scripts/accept.py and the built acceptcheck
+  work_dir: null            # the service's work folder (networks, protected modules, receipts); default <run>/open_lane_work
+  python: null              # the Python that runs the tools for the CLI; default the one running this
+  compile_calls: 60         # lean_check calls per session
+  python_calls: 40          # run_python calls per session
+  submissions: 4            # submit_candidate calls per session
+  max_turns: 200            # the CLI's agentic turns per session
+  worker_seconds: 7200      # the session's wall clock
+  stall_rounds: 3           # rounds without an accepted submission before the prompt asks for a change of approach
+  fake_scripts: []          # the fake backend's scripted sessions, in order (files or folders of *.json)
+  # The worked example in the prompt and any further Lean sources it shows, as paths in the Lean project.
+  # Networks beyond linear maps (attention) need the general single rule's sources and its example:
+  #   example: examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean
+  #   extra_sources: [CompactCheck/CountedGeneral.lean, CompactCheck/CountedGeneralSound.lean]
+  example: examples/open_lane/max2_tiny_scored/Candidate/Max2TinyScored.lean
+  extra_sources: []
+  # The knowledge condition (the Lean project's docs/COUNTED.md, "Knowledge conditions"): minimal is the base
+  # counted language; maximum adds the fixed rules lane's rules for groups of inputs on networks beyond linear maps
+  # as operations (the interval rule, I.ginterval, so far). The service checks a checker against the
+  # condition's allowlist and records the condition in every receipt and in its policy digest.
+  knowledge: minimal

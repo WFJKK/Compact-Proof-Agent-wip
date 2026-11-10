@@ -1,0 +1,10 @@
+# The four hand-written max2 baselines in round 0 on every development network,
+# and nothing else. A reference run for the reports: `--reference` in core.report,
+# and the hand-written lines of the Q plots. No API calls.
+run_id: max2-baselines
+model: models/max2
+backend: fake
+fake_responses: []
+baselines: true
+rounds_max: 1
+time_limit_s: 120

@@ -1,0 +1,11 @@
+# Round 0 on max-of-4 with Gross et al.'s one-head transformer, fake backend: the
+# brute-force baseline, then the five broken responses. No model calls.
+run_id: attn-max4-round0-fake
+model: models/attn-max4
+backend: fake
+fake_responses: [tests/broken_responses]
+rounds_max: 5
+time_limit_s: 60
+# The v16 and v24 development networks only: v64 (added 19 October) has its own
+# configs, since brute force cannot run there.
+networks: [attn-max4-v16-s1, attn-max4-v16-s2, attn-max4-v16-s5, attn-max4-v16-s6, attn-max4-v16-s8, attn-max4-v16-s9, attn-max4-v24-s0, attn-max4-v24-s2, attn-max4-v24-s3, attn-max4-v24-s5, attn-max4-v24-s7, attn-max4-v24-s8]

@@ -1,0 +1,36 @@
+# Min-of-2 on the one-layer, one-head, attention-only transformer of Gross et al.
+# (arXiv 2406.11779). Change values here, never in code.
+#
+# Two tokens, so the paper's own sizes are checkable: d_vocab 64 with
+# d_model = d_head = 32, and a larger vocabulary at the same width.
+size_settings:
+  v64:
+    n_ctx: 2
+    d_vocab: 64
+    d_model: 32
+    d_head: 32
+  v128:
+    n_ctx: 2
+    d_vocab: 128
+    d_model: 32
+    d_head: 32
+
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+split:
+  held_out_per_setting: 4
+  seed: 20261015
+
+# AdamW as in the paper, on fresh uniform batches.
+training:
+  optimizer: AdamW
+  lr: 0.001
+  weight_decay: 0.01
+  batch_size: 512
+  steps: 4000
+
+zoo_path: zoo
+cost_model: cost-v2
+control_networks: []
+# The prompt never names the paper this work follows: part 1 refuses these, part 2 removes them.
+hygiene: ["Gross", "Compact Proofs of Model Performance"]

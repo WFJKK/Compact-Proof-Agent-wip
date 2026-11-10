@@ -1,0 +1,21 @@
+# The fixed rules lane on the tiny attention max-of-2 network (tests/attn_max2_tiny, 64 inputs), the
+# counterpart of the open-lane pilots on it (open-lane-pilot-attn-max2-tiny.yaml): the agent writes Python recipes
+# that produce proof files, and the checker's rules do the mathematics. The rules are those the Lean checker
+# has (single, interval, token_interval, skip; not token_convex), and every proof that enters the frontier is
+# checked by the Lean checker as well (lean_spot_check; the model folder's lean_check command runs
+# scripts/lean_check_proof.py against the Lean project at COMPACT_PROOF_LEAN or the pilots' default path):
+# the counts are Lean-verified, the lengths are the Python checker's accounting (cost-v3), which Lean's
+# counted operations reproduce leaf by leaf. Scored by Q_above, as the open-lane pilots; up to 7 rounds.
+run_id: fixed-rules-pilot-attn-max2-tiny
+model: tests/attn_max2_tiny
+backend: claude_code
+agent_model: claude-fable-5-1
+effort: xhigh
+metric: Q_above
+rule_set: [single, interval, token_interval, skip]
+baselines: [brute_force]
+rounds_max: 7
+patience: 4
+api_retries: {tries: 12, first_wait_s: 60, max_wait_s: 1800, timeout_s: 3600}
+sandbox: auto   # hardened once Docker or Landlock is available; the records say which isolation the recipes had
+lean_spot_check: true

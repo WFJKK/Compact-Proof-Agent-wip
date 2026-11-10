@@ -1,0 +1,28 @@
+# The attention max-of-2 network (models/attn-max2/model.py and task.py, copied) at a size small enough for
+# Lean's kernel to run every forward pass one theorem at a time: 8 tokens, width 4, head size 4 (so the
+# attention scale 1/sqrt(4) is exactly 1/2), 64 inputs. Trained by core.train; used by the Lean open lane's
+# scored brute-force example for general networks (examples/open_lane/attn_max2_tiny_scored) and its tests.
+size_settings:
+  v8d4:
+    n_ctx: 2
+    d_vocab: 8
+    d_model: 4
+    d_head: 4
+seeds: [0, 1]
+split:
+  held_out_per_setting: 1
+  seed: 7
+training:
+  optimizer: AdamW
+  lr: 0.001
+  weight_decay: 0.01
+  batch_size: 512
+  steps: 4000
+zoo_path: zoo
+cost_model: cost-v3
+control_networks: []
+hygiene: []
+# The Lean checker for the fixed rules lane's proof files (core.lean: a spot check of frontier entries during a run,
+# with lean_spot_check: true; scripts/check_run.py of the Lean project checks every proof afterwards). The Lean
+# project is COMPACT_PROOF_LEAN or the pilots' default path, built with `lake build compactcheck`.
+lean_check: [python3, ../../scripts/lean_check_proof.py, "{proof}", "{weights}"]

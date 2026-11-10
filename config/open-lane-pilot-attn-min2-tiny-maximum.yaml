@@ -1,0 +1,34 @@
+# The maximum-knowledge condition of open-lane-pilot-attn-min2-tiny.yaml: the same run with the fixed rules lane's
+# rules for groups of inputs on attention networks as operations (I.ginterval and I.gtokenIntervals). The worked
+# example is a demonstration of gtokenIntervals on three boxes of the max2 network of the same architecture, not
+# a proof of this run's network (docs/OPEN_LANE.md). Everything else is identical, so the two runs differ only in
+# what the agent is given. Edit open_lane.lean_project as there and build the same targets:
+# lake build CompactCheck.Soundness CompactCheck.CountedOps CompactCheck.CountedGeneralSound compactcheck acceptcheck
+run_id: open-lane-pilot-attn-min2-tiny-maximum
+model: tests/attn_min2_tiny
+backend: claude_code
+agent_model: claude-fable-5-1
+effort: xhigh
+prompt_template: open_lane_v3
+# The fixed rules lane (round 0's baselines) limited to single and skip; explicit, as the ticket asks.
+rule_set: [single, skip]
+# The score the agent is shown and asked to raise: the verified frontier's log-area above the brute-force line,
+# over the room above it (docs/decisions/q-above.md). Brute force on any subset of the inputs scores 0.
+metric: Q_above
+baselines: [brute_force]
+rounds_max: 7
+patience: 4
+api_retries: {tries: 12, first_wait_s: 60, max_wait_s: 1800, timeout_s: 3600}
+sandbox: auto   # hardened once Docker or Landlock is available; the receipts record the isolation
+open_lane:
+  enabled: true
+  lean_project: ~/Desktop/VerifiedMechanisms/LeanFormalisations/CompactCheck
+  example: examples/open_lane/attn_max2_tiny_tokens_demo/Candidate/AttnMax2TokensDemo.lean
+  extra_sources: [CompactCheck/CountedGeneral.lean, CompactCheck/CountedGeneralSound.lean]
+  knowledge: maximum
+  compile_calls: 40
+  python_calls: 30
+  submissions: 3
+  max_turns: 150
+  worker_seconds: 7200
+  stall_rounds: 2

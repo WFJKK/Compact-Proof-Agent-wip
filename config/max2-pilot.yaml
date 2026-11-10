@@ -1,0 +1,13 @@
+# Step 10.4, pilot: about 30 rounds on max2 with the strong agent. Start here
+# once the smoke test passes. Stops early after 10 rounds without a gain.
+run_id: max2-pilot
+model: models/max2
+backend: api
+agent_model: claude-fable-5-1   # fallback: claude-opus-5-5 if it does not engage
+effort: xhigh
+rounds_max: 30
+patience: 10
+# The agent starts from brute force only; symmetry and contraction are its to find.
+baselines: [brute_force]
+# Recipes are an agent's code: refuse to start without container or landlock isolation.
+sandbox: hardened

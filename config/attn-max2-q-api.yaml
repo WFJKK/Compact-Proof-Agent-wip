@@ -1,0 +1,19 @@
+# max-of-2 on Gross et al.'s one-head transformer through the Messages API, the
+# agent scored on Q. Four rounds, same model and effort as max2-rerun-q. This is
+# the run of 16 October 2026 (attn-max2-q-api-3), before token_interval existed;
+# config/attn-max2-q-api-tokens.yaml repeats it with that rule. The key
+# comes from the variable api_key_env names (never ANTHROPIC_API_KEY). Run
+# config/attn-max2-smoke.yaml first.
+run_id: attn-max2-q-api
+model: models/attn-max2
+backend: api
+agent_model: claude-fable-5-1
+effort: high
+metric: Q
+rounds_max: 4
+patience: 4
+baselines: [brute_force]
+sandbox: hardened
+# Softmax networks: the checker refuses contract, symmetry and approximate
+# (they need a network of linear maps), so the prompt offers only these.
+rule_set: [single, interval, skip]

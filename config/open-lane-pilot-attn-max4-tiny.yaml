@@ -1,0 +1,34 @@
+# The open-lane pilot on the tiny attention max-of-4 network (tests/attn_max4_tiny: Gross et al.'s one-layer,
+# one-head, attention-only transformer with 4 positions, 4 tokens, width 4, 256 inputs, 112 weights;
+# docs/OPEN_LANE.md). As open-lane-pilot-tiny, with prompt template v2: the general single rule's
+# sources, the attention worked example (its instance split into one decided fact per input) and how to
+# split an instance. Edit open_lane.lean_project to where the Lean project is on this machine, and build it there first:
+# lake build CompactCheck.Soundness CompactCheck.CountedOps CompactCheck.CountedGeneralSound compactcheck acceptcheck
+run_id: open-lane-pilot-attn-max4-tiny
+model: tests/attn_max4_tiny
+backend: claude_code
+agent_model: claude-fable-5-1
+effort: xhigh
+prompt_template: open_lane_v3
+# The fixed rules lane (round 0's baselines) limited to single and skip; explicit, as the ticket asks.
+rule_set: [single, skip]
+# The score the agent is shown and asked to raise: the verified frontier's log-area above the brute-force line,
+# over the room above it (docs/decisions/q-above.md). Brute force on any subset of the inputs scores 0.
+metric: Q_above
+baselines: [brute_force]
+rounds_max: 7
+patience: 4
+api_retries: {tries: 12, first_wait_s: 60, max_wait_s: 1800, timeout_s: 3600}
+sandbox: auto   # hardened once Docker or Landlock is available; the receipts record the isolation
+open_lane:
+  enabled: true
+  lean_project: ~/Desktop/VerifiedMechanisms/LeanFormalisations/CompactCheck
+  example: examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean
+  extra_sources: [CompactCheck/CountedGeneral.lean, CompactCheck/CountedGeneralSound.lean]
+  knowledge: minimal
+  compile_calls: 40
+  python_calls: 30
+  submissions: 3
+  max_turns: 150
+  worker_seconds: 10800     # a forward pass is about 2.3 s as a kernel-decided fact here, 256 inputs
+  stall_rounds: 2

@@ -1,0 +1,17 @@
+# min-of-2 on the one-head transformer through the Messages API, the agent scored
+# on Q, four rounds, with token_interval: the same settings as
+# attn-max2-q-api-tokens, so the four attention tasks compare.
+run_id: attn-min2-q-api-tokens
+model: models/attn-min2
+backend: api
+agent_model: claude-fable-5-1
+effort: high
+metric: Q
+rounds_max: 4
+patience: 4
+baselines: [brute_force]
+sandbox: hardened
+# Softmax networks: the checker refuses contract, symmetry and approximate
+# (they need a network of linear maps). token_interval keeps each token's rows
+# exact through the attention (see docs/RULES.md).
+rule_set: [single, interval, token_interval, skip]

@@ -1,0 +1,23 @@
+# token_convex version 2.1 (19 October 2026): the adversarial review of version 2 (route token-convex-2-2026-10-19,
+# verdict SOUND) found that in leaves with at most one varying position version 2 can certify less than
+# token_interval and version 1 (on tests/stub_general and tests/stub_twopaths), and that its description, one
+# test and the proposal claimed more than the code does. Version 2.1 evaluates such a leaf again with every value
+# per input when the softmax levels do not certify it, keeping the larger bound; the claims are corrected; and
+# tests/stub_query reaches the paths of version 2 that no model folder did. Implemented by hand, like versions 1
+# and 2; reviewed with the manual backend by an independent agent.
+route_id: token-convex-2.1-2026-10-19
+name: token_convex
+proposal:
+  file: ~/auto-research-compact-proof-runs/rule-route/candidates/token-convex-2.1/token_convex/PROPOSAL.md
+candidate: ~/auto-research-compact-proof-runs/rule-route/candidates/token-convex-2.1/token_convex
+implemented_by: "Claude (session of 19 October 2026), by hand, as the route's implementer"
+reviewer:
+  backend: manual
+reviewers: 1
+audit_level: full
+audit_seed: 0
+checks_sandbox: hardened
+checks_timeout_s: 10800
+adopt_on: [SOUND]
+replace: true
+work_dir: ~/auto-research-compact-proof-runs/rule-route

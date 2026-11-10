@@ -1,0 +1,13 @@
+# Step 10.1, smoke test: plumbing only, on the cheapest model. 2 to 3 rounds to
+# confirm the API call, parsing, sandbox and checker all work end to end before
+# spending on a strong model. Costs a few cents.
+run_id: max2-smoke
+model: models/max2
+backend: api
+agent_model: claude-haiku-5-5
+effort: medium
+rounds_max: 3
+# One network per size setting, so the smoke test is quick and cheap.
+networks: [max2-v64-s0, max2-v128-s0]
+# The agent starts from brute force only; symmetry and contraction are its to find.
+baselines: [brute_force]

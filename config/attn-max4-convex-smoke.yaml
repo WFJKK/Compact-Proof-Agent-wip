@@ -1,0 +1,24 @@
+# Smoke test before attn-max4-q-api-convex and attn-min4-q-api-convex: one round of the real agent
+# (Fable 5.1, effort high) with token_convex in the rule set, on one v16 and one v24 network. It checks that
+# the adopted rule loads, that its description reaches the prompt, and that the agent's recipes fit the
+# sandbox's memory and time limits at v24, where a recipe ran out of memory on 16 October. About $2 and
+# 15 to 30 minutes: round 0 checks brute force on both networks (about 5 minutes), then one answer from the
+# agent and its recipe on both networks at five knob values.
+run_id: attn-max4-convex-smoke
+model: models/attn-max4
+backend: api
+agent_model: claude-fable-5-1
+effort: high
+metric: Q
+rounds_max: 1
+networks: [attn-max4-v16-s1, attn-max4-v24-s0]
+baselines: [brute_force]
+sandbox: hardened
+# Softmax networks: the checker refuses contract, symmetry and approximate
+# (they need a network of linear maps). token_interval keeps each token's rows
+# exact through the attention; token_convex bounds attention-weighted sums by
+# their exact minimum (see docs/RULES.md and rules/token_convex).
+rule_set: [single, interval, token_interval, token_convex, skip]
+# Recipes on the 4-token model can build large tables; 2048 MB was too little
+# for one max-of-4 recipe on 16 October.
+memory_limit_mb: 4096

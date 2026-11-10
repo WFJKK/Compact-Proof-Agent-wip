@@ -1,0 +1,39 @@
+{
+  "model": "min4_tiny",
+  "networks": [
+    {
+      "B": null,
+      "E": null,
+      "correct": "min4_tiny-v4-s0.correct.npy",
+      "final_loss": 7.196679507615045e-05,
+      "id": "min4_tiny-v4-s0",
+      "n_inputs": 256,
+      "real_accuracy": 1.0,
+      "real_correct": 256,
+      "seed": 0,
+      "setting": "v4",
+      "sha256": "f48de41a426cda16904aa6b647e1964c060b435c45242c6679cd1922cdd1c6ef",
+      "split": "dev",
+      "train_seconds": 25.94,
+      "training_key": "5a96a89ebf7d6c45b47270b60587cc85ceeeec0f1162e3cfce053dc6a8643a29",
+      "weights": "min4_tiny-v4-s0.npz"
+    },
+    {
+      "B": null,
+      "E": null,
+      "correct": "min4_tiny-v4-s1.correct.npy",
+      "final_loss": 8.456649811705574e-05,
+      "id": "min4_tiny-v4-s1",
+      "n_inputs": 256,
+      "real_accuracy": 1.0,
+      "real_correct": 256,
+      "seed": 1,
+      "setting": "v4",
+      "sha256": "3a57ba63a7b39f50a8fb250976e9cf5ff8b59c0268136fb3e0ef1cbf11e6d5e7",
+      "split": "held_out",
+      "train_seconds": 19.8,
+      "training_key": "45d6b2403fc77e1ca191df84ca632bb690ac3527d80d9425d171cb34b41958f9",
+      "weights": "min4_tiny-v4-s1.npz"
+    }
+  ]
+}

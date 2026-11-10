@@ -1,0 +1,19 @@
+# The checks image for the rule route (core/rules_route/box.py): the sandbox image's Python, numpy and
+# CPU-only torch, plus pyyaml and pytest, so a candidate rule's tests and audit can run with no network,
+# a read-only root and only the check box mounted.
+#
+# Build it with `python -m core.rules_route build-image`, which passes this machine's versions.
+ARG PYTHON_VERSION=3.13
+FROM python:${PYTHON_VERSION}-slim
+
+ARG NUMPY_VERSION
+ARG TORCH_VERSION
+ARG PYYAML_VERSION
+ARG PYTEST_VERSION
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir "numpy==${NUMPY_VERSION}" "pyyaml==${PYYAML_VERSION}" "pytest==${PYTEST_VERSION}" \
+ && pip install --no-cache-dir "torch==${TORCH_VERSION}" \
+      --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple \
+ && rm -rf /root/.cache
+
+WORKDIR /box

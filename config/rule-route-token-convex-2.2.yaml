@@ -1,0 +1,22 @@
+# token_convex version 2.2 (19 October 2026): the review of version 2.1 (route token-convex-2.1-2026-10-19,
+# verdict SOUND) found two claims stated too broadly (exactness with one varying position, which holds only where
+# token_interval keeps every value per input, not through xorformer's concatenation; and "up to exp's rounding",
+# where a group's bound is rounded at 2**-64 of its rows' unit), a second pass that repeats the first when no
+# structure was built, and paths still unreached. Version 2.2 states both claims as they are, skips the repeat,
+# and tests/stub_query now reaches those paths. Implemented by hand; reviewed with the manual backend.
+route_id: token-convex-2.2-2026-10-19
+name: token_convex
+proposal:
+  file: ~/auto-research-compact-proof-runs/rule-route/candidates/token-convex-2.2/token_convex/PROPOSAL.md
+candidate: ~/auto-research-compact-proof-runs/rule-route/candidates/token-convex-2.2/token_convex
+implemented_by: "Claude (session of 19 October 2026), by hand, as the route's implementer"
+reviewer:
+  backend: manual
+reviewers: 1
+audit_level: full
+audit_seed: 0
+checks_sandbox: hardened
+checks_timeout_s: 10800
+adopt_on: [SOUND]
+replace: true
+work_dir: ~/auto-research-compact-proof-runs/rule-route

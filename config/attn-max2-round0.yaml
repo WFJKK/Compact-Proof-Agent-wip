@@ -1,0 +1,8 @@
+# Round 0 on max-of-2 with Gross et al.'s one-head transformer, fake backend: the
+# brute-force baseline, then the five broken responses. No model calls.
+run_id: attn-max2-round0-fake
+model: models/attn-max2
+backend: fake
+fake_responses: [tests/broken_responses]
+rounds_max: 5
+time_limit_s: 60

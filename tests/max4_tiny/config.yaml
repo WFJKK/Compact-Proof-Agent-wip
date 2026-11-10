@@ -1,0 +1,23 @@
+# The linear max-of-4 network (the max2 model, models/max2/model.py, copied: the tokens' one-hot vectors
+# summed over the positions, then three linear maps without biases) at the size of the tiny attention
+# max-of-4 model (tests/attn_max4_tiny): 4 positions, 4 tokens, hidden width 4, 256 inputs. The output is
+# the largest token. Trained by core.train; a tiny linear model for open-lane pilots, next to the attention one.
+size_settings:
+  v4:
+    n_ctx: 4
+    d_vocab: 4
+    d_model: 4
+seeds: [0, 1]
+split:
+  held_out_per_setting: 1
+  seed: 7
+training:
+  optimizer: AdamW
+  lr: 0.01
+  weight_decay: 0.0
+  batch_size: 64
+  steps: 2000
+zoo_path: zoo
+cost_model: cost-v3
+control_networks: []
+hygiene: []

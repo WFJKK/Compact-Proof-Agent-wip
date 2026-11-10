@@ -1,0 +1,29 @@
+# The open-lane pilot (step 3 of the Lean open-lane ticket; docs/OPEN_LANE.md), first on the tiny max2
+# instance: the agent works with tools in a Lean workspace and submits Lean proofs to the Lean project's
+# acceptance service, through your own Claude Code login. Round 0 replays brute force; the agent sees no
+# rule descriptions. Edit open_lane.lean_project to where the Lean project is on this machine, and build it
+# there first: lake build CompactCheck.Soundness CompactCheck.CountedOps compactcheck acceptcheck.
+run_id: open-lane-pilot-tiny
+model: tests/max2_tiny
+backend: claude_code
+agent_model: claude-fable-5-1
+effort: xhigh
+prompt_template: open_lane_v1
+# The fixed rules lane (round 0's baselines) limited to single and skip; explicit, as the ticket asks.
+rule_set: [single, skip]
+# The primary objective of the pilot, the same in every condition: accuracy at fixed budgets.
+metric: Q_grid
+baselines: [brute_force]
+rounds_max: 6
+patience: 4
+api_retries: {tries: 12, first_wait_s: 60, max_wait_s: 1800, timeout_s: 3600}
+sandbox: auto   # hardened once Docker or Landlock is available; the receipts record the isolation
+open_lane:
+  enabled: true
+  lean_project: ~/Desktop/VerifiedMechanisms/LeanFormalisations/CompactCheck
+  compile_calls: 40
+  python_calls: 30
+  submissions: 3
+  max_turns: 150
+  worker_seconds: 5400
+  stall_rounds: 2

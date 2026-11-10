@@ -1,0 +1,17 @@
+# The pilot, run through your own Claude Code login (a Pro or Max subscription)
+# instead of an API key. Nothing is billed per call; usage counts against the
+# subscription's limits, and the loop waits and retries when it hits one.
+# Check Anthropic's current terms for Claude Code before relying on this.
+run_id: max2-pilot-subscription
+model: models/max2
+backend: claude_code
+agent_model: claude-fable-5-1   # or an alias the CLI accepts, such as opus
+effort: xhigh
+rounds_max: 30
+patience: 10
+# Waits between tries grow from 60 s up to 30 minutes, for usage-limit resets.
+api_retries: {tries: 12, first_wait_s: 60, max_wait_s: 1800, timeout_s: 3600}
+# The agent starts from brute force only; symmetry and contraction are its to find.
+baselines: [brute_force]
+# Recipes are an agent's code: refuse to start without container or landlock isolation.
+sandbox: hardened

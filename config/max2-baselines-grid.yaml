@@ -1,0 +1,13 @@
+# The four hand-written max2 baselines at the fixed budgets of Q_grid, on every
+# development network, and nothing else: the reference for runs scored on
+# Q_grid (`--reference` in core.report). Baseline 04 reads info["budget"] and
+# spends it on the largest groups first; the others ignore the budget. No API calls.
+run_id: max2-baselines-grid
+model: models/max2
+backend: fake
+fake_responses: []
+baselines: true
+metric: Q_grid
+budget_ratio: 2
+rounds_max: 1
+time_limit_s: 120

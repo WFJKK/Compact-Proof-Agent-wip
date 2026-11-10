@@ -1,0 +1,22 @@
+# A four-head attention model (tests/stub_query/model.py), max of 3 tokens, built to reach the paths of
+# token_convex version 2 that the real model folders do not: a query with two terms and a learned scale, three
+# kinds of softmax next to each other, a query-position term with a negative weight, and values computed from the
+# query that leave the token rules. It has no trained zoo: the rule route's audit uses it with random weights.
+size_settings:
+  tiny:
+    n_ctx: 3
+    d_vocab: 6
+    d_model: 4
+seeds: [0, 1]
+split:
+  held_out_per_setting: 1
+  seed: 7
+training:
+  optimizer: AdamW
+  lr: 0.01
+  weight_decay: 0.0
+  batch_size: 64
+  steps: 200
+zoo_path: zoo
+cost_model: cost-v3
+hygiene: []

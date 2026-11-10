@@ -1,0 +1,46 @@
+{
+  "adopted_at": "2026-10-19T14:01:49+00:00",
+  "checks": {
+    "audit": {
+      "certified": 1028,
+      "exact_singles": 44143,
+      "leaves": 2302,
+      "level": "full",
+      "passed": true
+    },
+    "sandbox": "landlock",
+    "static_guard": [],
+    "tests": {
+      "returncode": 0,
+      "tail": [
+        "................................                                         [100%]"
+      ],
+      "timed_out": false
+    }
+  },
+  "files_sha256": {
+    "PROPOSAL.md": "f8aabc94c0955976ca656600a752f11bbe4cd56f354e9599a58de1f7052df8e1",
+    "SOUNDNESS.md": "0bdf1b8889d68c4e195fb542cc684e2fe4f981bfa36c6ff85ea4360858302f5c",
+    "rule.py": "f2b32937a5f6fdf2578784dd89e2deb9862a040f002a584b7c2a6a7f844b5364",
+    "test_rule.py": "0aa5b35227f7ed36a56401e4a10b33b580a56209be6dc76ca795a78a6b684ddc"
+  },
+  "name": "token_convex",
+  "provenance": {
+    "attempt": 0,
+    "commit": "2a2cb9985b8feaf940bbaa4fc9c0fd5261bd2396",
+    "implemented_by": "Claude (session of 19 October 2026), by hand, as the route's implementer",
+    "proposal": "/root/auto-research-compact-proof-runs/rule-route/candidates/token-convex-2.1/token_convex/PROPOSAL.md",
+    "route_config_sha256": "1faaeb3aadc22c5367725e257eac607ddcf7ed578122e71aef6f4c6f398116a9",
+    "route_id": "token-convex-2.1-2026-10-19"
+  },
+  "reviews": [
+    {
+      "backend": "manual",
+      "counterexamples": 7,
+      "model": null,
+      "verdict": "SOUND"
+    }
+  ],
+  "status": "adopted",
+  "tier": "python-checked"
+}

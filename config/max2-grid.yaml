@@ -1,0 +1,19 @@
+# max2 through the Claude Code login, scored at fixed budgets (Q_grid): the loop
+# runs each recipe once per budget B/2, B/4, ... down to E (11 budgets on v64,
+# 13 on v128) and scores the mean certified accuracy over them, so where a
+# recipe places its proofs earns nothing. Same model, effort and length as the
+# two runs of 13 October (max2-rerun-q, max2-rerun-cof), so the three compare.
+# Reference: config/max2-baselines-grid.yaml, the hand-written proofs at the
+# same budgets.
+run_id: max2-grid
+model: models/max2
+backend: claude_code
+agent_model: claude-fable-5-1
+effort: high
+metric: Q_grid
+budget_ratio: 2
+rounds_max: 10
+patience: 10
+api_retries: {tries: 12, first_wait_s: 60, max_wait_s: 1800, timeout_s: 3600}
+baselines: [brute_force]
+sandbox: hardened

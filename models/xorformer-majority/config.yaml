@@ -1,0 +1,38 @@
+# The xorformer model (VerifiedMechanisms/xorformer, model.md) on MAJORITY_12, one head.
+# Change values here, never in code.
+
+# One entry per size setting; the values are the module's constructor arguments.
+# xorformer's search defaults to d_model = d_head = 32; 8 keeps brute force cheap to check.
+size_settings:
+  n12h1d8:
+    n_bits: 12
+    heads: 1
+    d_model: 8
+    d_head: 8
+
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+# Per size setting, this many seeds are held out for the final evaluation.
+split:
+  held_out_per_setting: 4
+  seed: 20261012
+
+# xorformer's hstar fit: Adam, learning rate 3e-2, every input at every step, float64,
+# keeping the best parameters (accuracy, then loss). It stops at the first perfect step
+# by default; here it trains all 1500 steps, which leaves larger margins.
+training:
+  optimizer: Adam
+  lr: 0.03
+  batch_size: 4096
+  steps: 1500
+  full_batch: true
+  dtype: float64
+  keep_best: true
+
+zoo_path: zoo
+cost_model: cost-v2
+control_networks: []
+
+# Strings the agent's prompt must never contain.
+# The prompt never names the paper this work follows: part 1 refuses these, part 2 removes them.
+hygiene: ["Gross", "Compact Proofs of Model Performance"]

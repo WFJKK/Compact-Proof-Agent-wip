@@ -1,0 +1,16 @@
+# The xorformer model (MAJORITY_12, one head, d_model = d_head = 8) through your
+# Claude Code login, like config/max2-pilot-subscription.yaml. Nothing is billed
+# per call; usage counts against the subscription's limits, and the loop waits
+# and retries when it hits one. Check Anthropic's current terms for Claude Code.
+run_id: xorformer-majority-pilot-subscription
+model: models/xorformer-majority
+backend: claude_code
+agent_model: claude-fable-5-1
+effort: xhigh
+rounds_max: 30
+patience: 10
+api_retries: {tries: 20, first_wait_s: 60, max_wait_s: 1800, timeout_s: 3600}
+# Brute force is the only baseline: every compact proof is the agent's to find.
+baselines: [brute_force]
+# Recipes are an agent's code: refuse to start without container or landlock isolation.
+sandbox: hardened

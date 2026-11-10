@@ -1,0 +1,39 @@
+{
+  "model": "max4_tiny",
+  "networks": [
+    {
+      "B": null,
+      "E": null,
+      "correct": "max4_tiny-v4-s0.correct.npy",
+      "final_loss": 9.936979040503502e-05,
+      "id": "max4_tiny-v4-s0",
+      "n_inputs": 256,
+      "real_accuracy": 1.0,
+      "real_correct": 256,
+      "seed": 0,
+      "setting": "v4",
+      "sha256": "1046b582e9f145967d24717999faacd77b3e27e97b9e790dd28b181e9d4ac715",
+      "split": "dev",
+      "train_seconds": 12.21,
+      "training_key": "3693cc32247e5159f280d2e6d85ec67eede965a3c11e0bbbab6648860b20eb5e",
+      "weights": "max4_tiny-v4-s0.npz"
+    },
+    {
+      "B": null,
+      "E": null,
+      "correct": "max4_tiny-v4-s1.correct.npy",
+      "final_loss": 0.0006356564699672163,
+      "id": "max4_tiny-v4-s1",
+      "n_inputs": 256,
+      "real_accuracy": 1.0,
+      "real_correct": 256,
+      "seed": 1,
+      "setting": "v4",
+      "sha256": "c4c07b368670b785f4776aa3d693ff483917a244901ca742fafeb98c258ff7d7",
+      "split": "held_out",
+      "train_seconds": 22.32,
+      "training_key": "3f55b3bda0f58b2f942777ca7f28210b80aa66d9c63b574018b2ff8aa2587a57",
+      "weights": "max4_tiny-v4-s1.npz"
+    }
+  ]
+}

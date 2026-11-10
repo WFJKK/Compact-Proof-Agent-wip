@@ -1,0 +1,20 @@
+# The one-head transformer with two paths into one matrix product (tests/stub_twopaths/model.py), max of 3 tokens. It has no trained zoo:
+# the rule route's audit uses it with random weights, to cover operations the real model folders do not use.
+size_settings:
+  tiny:
+    n_ctx: 3
+    d_vocab: 6
+    d_model: 4
+seeds: [0, 1]
+split:
+  held_out_per_setting: 1
+  seed: 7
+training:
+  optimizer: AdamW
+  lr: 0.01
+  weight_decay: 0.0
+  batch_size: 64
+  steps: 200
+zoo_path: zoo
+cost_model: cost-v3
+hygiene: []

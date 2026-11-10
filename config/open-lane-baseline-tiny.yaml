@@ -1,0 +1,15 @@
+# The baseline condition of the pilot: the one-response loop on the same instance with the fixed rules lane
+# limited to single and skip (no open lane, no tools). Compare its frontier with open-lane-pilot-tiny's.
+run_id: open-lane-baseline-tiny
+model: tests/max2_tiny
+backend: claude_code
+agent_model: claude-fable-5-1
+effort: xhigh
+rule_set: [single, skip]
+# The primary objective of the pilot, the same in every condition: accuracy at fixed budgets.
+metric: Q_grid
+baselines: [brute_force]
+rounds_max: 6
+patience: 4
+api_retries: {tries: 12, first_wait_s: 60, max_wait_s: 1800, timeout_s: 3600}
+sandbox: auto

@@ -1,0 +1,27 @@
+# The open-lane pilot on max2-v64 (one network first; docs/OPEN_LANE.md). As open-lane-pilot-tiny, with the
+# kernel evaluating a scored checker on 4,096 inputs, so the submission timeout and the session's clock are
+# longer. Edit open_lane.lean_project to where the Lean project is on this machine.
+run_id: open-lane-pilot-max2-v64
+model: models/max2
+networks: [max2-v64-s0]
+backend: claude_code
+agent_model: claude-fable-5-1
+effort: xhigh
+prompt_template: open_lane_v1
+rule_set: [single, skip]
+# The primary objective of the pilot, the same in every condition: accuracy at fixed budgets.
+metric: Q_grid
+baselines: [brute_force]
+rounds_max: 10
+patience: 5
+api_retries: {tries: 12, first_wait_s: 60, max_wait_s: 1800, timeout_s: 3600}
+sandbox: auto
+open_lane:
+  enabled: true
+  lean_project: ~/Desktop/VerifiedMechanisms/LeanFormalisations/CompactCheck
+  compile_calls: 60
+  python_calls: 40
+  submissions: 4
+  max_turns: 200
+  worker_seconds: 10800
+  stall_rounds: 3

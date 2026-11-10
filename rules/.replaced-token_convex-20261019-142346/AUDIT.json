@@ -1,0 +1,26 @@
+{
+ "audit": {
+  "level": "full",
+  "seed": 0,
+  "leaves": 1960,
+  "by_outcome": {
+   "ok": 1960,
+   "refused": 0,
+   "violation": 0,
+   "malformed": 0
+  },
+  "certified": 869,
+  "exact_singles": 11504,
+  "by_kind": {
+   "fixed_last": 490,
+   "free": 490,
+   "label_token": 490,
+   "one": 490
+  },
+  "smallest_slack": -4.3655745685100555e-11,
+  "passed": true
+ },
+ "counterexamples": [
+  []
+ ]
+}

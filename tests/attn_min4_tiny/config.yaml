@@ -1,0 +1,30 @@
+# The attention min-of-4 network (models/attn-min4/model.py and task.py, copied) at a size small enough for
+# Lean's kernel to run forward passes one theorem at a time: 4 positions, 4 tokens, width 4, head size 4
+# (so the attention scale 1/sqrt(4) is exactly 1/2), 256 inputs. A forward pass costs 287 under cost-v3 and
+# about 2.3 s as a kernel-decided fact, so brute force as 256 facts takes about 10 minutes to compile; 5 tokens
+# (625 inputs) also trains to full accuracy, with 2.44 times as many inputs. Trained by core.train; a tiny attention model
+# for open-lane pilots.
+size_settings:
+  v4d4:
+    n_ctx: 4
+    d_vocab: 4
+    d_model: 4
+    d_head: 4
+seeds: [0, 1]
+split:
+  held_out_per_setting: 1
+  seed: 7
+training:
+  optimizer: AdamW
+  lr: 0.001
+  weight_decay: 0.01
+  batch_size: 512
+  steps: 4000
+zoo_path: zoo
+cost_model: cost-v3
+control_networks: []
+hygiene: []
+# The Lean checker for the fixed rules lane's proof files (core.lean: a spot check of frontier entries during a run,
+# with lean_spot_check: true; scripts/check_run.py of the Lean project checks every proof afterwards). The Lean
+# project is COMPACT_PROOF_LEAN or the pilots' default path, built with `lake build compactcheck`.
+lean_check: [python3, ../../scripts/lean_check_proof.py, "{proof}", "{weights}"]

@@ -1,0 +1,10 @@
+# max2 with you as the agent: each round writes prompt.md into the run folder
+# and waits for you to save a response.md next to it (for example, paste the
+# prompt into Claude and save its answer). No API key is used. Ctrl-C stops;
+# `python -m core.loop resume --run <runs_dir>/max2-manual` continues.
+run_id: max2-manual
+model: models/max2
+backend: manual
+rounds_max: 10
+# The agent starts from brute force only; symmetry and contraction are its to find.
+baselines: [brute_force]

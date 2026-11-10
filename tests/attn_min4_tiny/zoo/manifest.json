@@ -1,0 +1,41 @@
+{
+  "model": "attn_min4_tiny",
+  "networks": [
+    {
+      "B": 73584,
+      "E": 112,
+      "correct": "attn_min4_tiny-v4d4-s0.correct.npy",
+      "cost_model": "cost-v4",
+      "final_loss": 0.00015498844732064754,
+      "id": "attn_min4_tiny-v4d4-s0",
+      "n_inputs": 256,
+      "real_accuracy": 1.0,
+      "real_correct": 256,
+      "seed": 0,
+      "setting": "v4d4",
+      "sha256": "35b3d94c93bacb97ee0726a2b8b684b2ccf18664491b6b5d9ac6f108fc322f15",
+      "split": "dev",
+      "train_seconds": 8.16,
+      "training_key": "19b91718ecd1fab1b0ddabab6e8b9ad77807e67540f0dce67abac722c36120c5",
+      "weights": "attn_min4_tiny-v4d4-s0.npz"
+    },
+    {
+      "B": 73584,
+      "E": 112,
+      "correct": "attn_min4_tiny-v4d4-s1.correct.npy",
+      "cost_model": "cost-v4",
+      "final_loss": 0.0015830164775252342,
+      "id": "attn_min4_tiny-v4d4-s1",
+      "n_inputs": 256,
+      "real_accuracy": 1.0,
+      "real_correct": 256,
+      "seed": 1,
+      "setting": "v4d4",
+      "sha256": "8547cf390d29592da4d9cbc33a1d5c46387734ce9bd1bde7d284637d43fcf573",
+      "split": "held_out",
+      "train_seconds": 6.49,
+      "training_key": "756fa5fbb8b8c60cabe20a8bf96f382e118f32f4bb0b63c3b400480180dffa60",
+      "weights": "attn_min4_tiny-v4d4-s1.npz"
+    }
+  ]
+}

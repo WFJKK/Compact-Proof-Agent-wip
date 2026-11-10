@@ -1,0 +1,59 @@
+{
+ "calls": [
+  {
+   "tool": "search_library",
+   "args": {
+    "query": "theorem exec_of_billed"
+   }
+  },
+  {
+   "tool": "run_python",
+   "args": {
+    "network": "max2_tiny-v8-s0",
+    "code": "print('shapes', {k: v.shape for k, v in weights.items()})\nprint('sizes', info['sizes'])\nM = weights['unembedding.weight'] @ weights['linear.weight'] @ weights['embedding.weight']\nprint('M', M.shape)"
+   }
+  },
+  {
+   "tool": "lean_check",
+   "args": {
+    "path": "Candidate/Max2TinyScored.lean",
+    "network": "max2_tiny-v8-s0",
+    "claimed_count": 64,
+    "source": {
+     "$project_file": "examples/open_lane/max2_tiny_scored/Candidate/Max2TinyScored.lean"
+    }
+   }
+  },
+  {
+   "tool": "submit_candidate",
+   "args": {
+    "network": "max2_tiny-v8-s0",
+    "claimed_count": 64,
+    "theorem": "Candidate.Max2TinyScored.performance",
+    "modules": [
+     "Candidate/Max2TinyScored.lean"
+    ],
+    "scored": {
+     "checker": "Candidate.Max2TinyScored.D",
+     "sound": "Candidate.Max2TinyScored.D_sound",
+     "instance": "Candidate.Max2TinyScored.D_instance",
+     "certificate": [],
+     "claimed_bill": 4032
+    }
+   }
+  },
+  {
+   "tool": "submit_candidate",
+   "args": {
+    "network": "max2_tiny-v8-s0",
+    "claimed_count": 64,
+    "kind": "auxiliary",
+    "theorem": "Candidate.Max2TinyScored.countSingles_le",
+    "modules": [
+     "Candidate/Max2TinyScored.lean"
+    ]
+   }
+  }
+ ],
+ "response": "CLAIM: brute force through CostM.single on max2_tiny-v8-s0, 64 of 64, submitted scored.\nWHY IT HELPS: the baseline, to exercise the lane.\nNOTES: next, read the logits of (a, b) as column sums of W_U W_L W_E and split by the larger token."
+}

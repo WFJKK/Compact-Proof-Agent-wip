@@ -1,0 +1,44 @@
+# Max-of-4 on the one-layer, one-head, attention-only transformer of Gross et al.
+# (arXiv 2406.11779). Change values here, never in code.
+#
+# The paper uses d_vocab 64 and d_model = d_head = 32 at n_ctx 4, which is 16.8
+# million inputs: too many for the exact checker to brute-force. These settings
+# keep brute force checkable; the architecture is the paper's.
+size_settings:
+  v16:
+    n_ctx: 4
+    d_vocab: 16
+    d_model: 8
+    d_head: 8
+  v24:
+    n_ctx: 4
+    d_vocab: 24
+    d_model: 12
+    d_head: 12
+  # The paper's own size (added 19 October 2026). B comes from the shapes; brute
+  # force itself is never run, so runs at v64 replay no baselines.
+  v64:
+    n_ctx: 4
+    d_vocab: 64
+    d_model: 32
+    d_head: 32
+
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+split:
+  held_out_per_setting: 4
+  seed: 20261015
+
+# AdamW as in the paper, on fresh uniform batches.
+training:
+  optimizer: AdamW
+  lr: 0.001
+  weight_decay: 0.01
+  batch_size: 512
+  steps: 4000
+
+zoo_path: zoo
+cost_model: cost-v2
+control_networks: []
+# The prompt never names the paper this work follows: part 1 refuses these, part 2 removes them.
+hygiene: ["Gross", "Compact Proofs of Model Performance"]

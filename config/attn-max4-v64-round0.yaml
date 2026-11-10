@@ -1,0 +1,13 @@
+# Dry run at the paper's own size (d_vocab 64, n_ctx 4, d_model = d_head 32),
+# fake backend, no model calls. Brute force (16.8 million inputs) is never run:
+# B comes from the network's shapes, so round 0 replays no baselines. One
+# scripted recipe certifies the inputs whose last token is the largest.
+run_id: attn-max4-v64-round0-fake
+model: models/attn-max4
+backend: fake
+fake_responses: [tests/v64_responses]
+networks: [attn-max4-v64-s0, attn-max4-v64-s2]
+baselines: false
+rounds_max: 1
+rule_set: [single, interval, token_interval, skip]
+memory_limit_mb: 4096
