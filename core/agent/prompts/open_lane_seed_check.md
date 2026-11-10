@@ -24,8 +24,10 @@ YOURS TO WRITE
   network's weights (run_python has them).
 - The count. Claim what the locked checker certifies on this network. It
   may be fewer inputs than the network answers correctly: that is a
-  result, not a failure. If it certifies nothing here, submit nothing
-  and say so.
+  result, not a failure. If it certifies nothing here, submit that too:
+  a claim of 0 with its instance is a checked result. A session that
+  ends with no accepted submission is recorded as no result, which is a
+  different thing. If you could not finish, say why.
 Submit with submit_candidate: kind performance, with scored.checker
 {CHECKER} and scored.sound {SOUND} (anything else is refused), your
 instance theorem, the certificate and the bill.

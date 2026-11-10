@@ -532,6 +532,21 @@ class Session:
             if lock:  # the locked modules always go along, so the constants the manifest names are the locked ones
                 modules = list(dict.fromkeys(list(modules) + list(lock["modules"])))
             modules = self.with_imports(modules)
+            if lock:
+                # no other module may declare what the locked modules declare (the service would refuse the
+                # second declaration too; this says so before a submission is spent)
+                from .lock import LockError, declared_names
+
+                for m in modules:
+                    if m in lock["modules"]:
+                        continue
+                    try:
+                        again = sorted(declared_names((self.workspace / m).read_text()) & set(lock.get("declared") or []))
+                    except LockError as exc:
+                        raise ToolError(f"{m}: {exc}")
+                    if again:
+                        raise ToolError(f"{m} declares {', '.join(again[:5])}, which the locked modules declare; a locked "
+                                        "constant cannot be declared again")
             self._spend("submit_candidate")
             n = len(list((self.path / "submissions").glob("*"))) if (self.path / "submissions").is_dir() else 0
             cdir = self.path / "submissions" / f"{n:03d}"

@@ -185,8 +185,10 @@ MODULES_RULE = """- Keep the checker and the instance in separate modules, from 
   and everything they use. A module of its own, which imports them,
   holds `D_instance`, the facts it is built from and the theorem proving
   `Target`. Name each constant after its module (`Candidate.Check.D` in
-  `Candidate/Check.lean`). The checker's modules may import the protected
-  module for `graph` and `task`.
+  `Candidate/Check.lean`) and declare it in plain view, as a `def` or
+  `theorem` that starts a line: the lock finds a constant by its
+  declaration in a module's text. The checker's modules may import the
+  protected module for `graph` and `task`.
 """
 MODULES_WHY = {
     "seed_check": """  The seed check locks the first kind and you rewrite the second for the

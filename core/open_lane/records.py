@@ -100,6 +100,10 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
             applied = json.loads(lock_file.read_text())
             rec["lock"] = {"digest": applied.get("digest"), "of": stage.get("of"), "intact": bool(applied.get("intact")),
                            "in_receipt": bool(applied.get("in_receipt"))}
+            # the service's own measure of the checker: on a network of the same sizes the locked checker has the
+            # description size it had in the locked proof. None when either receipt has no such measure.
+            was, now = stage.get("description_size"), (receipt.get("scoring") or {}).get("description_size")
+            rec["lock"]["same_description_size"] = None if was is None or now is None else was == now
         if entry:
             rec.update(n_inputs=entry["n_inputs"], real_correct=entry.get("real_correct"), real_accuracy=entry.get("real_accuracy"),
                        E=entry.get("E"), B=entry.get("B"))

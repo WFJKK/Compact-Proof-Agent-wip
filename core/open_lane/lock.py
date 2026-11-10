@@ -7,9 +7,20 @@ replaces the second: the same checker, another network of the same sizes, a new 
 
 The parts are told apart by module. The locked modules are the ones that declare the checker and the
 soundness theorem (the manifest names both) and every submitted module they import, directly or not. A
-proof can be locked when its instance theorem is declared outside them, in a module that imports them. A
-constant is taken to be declared in the module it is named after: `Candidate.Check.D` in `Candidate/Check.lean`
-(the longest prefix of the name that is a submitted module).
+proof can be locked when its instance theorem is declared outside them, in a module that imports them.
+
+Where a constant is declared is read from the modules' text, never guessed from its name: Lean lets
+`Candidate.Check.D` be declared in any file. Each module is read with its comments removed, following its
+`namespace` and `section` commands, and a constant's module is the one module with a declaration of that
+full name (`declared_names`). A proof whose checker, soundness theorem or instance cannot be placed this way
+(no such declaration in the text, or one in two modules, or a module that ends early with `#exit`) is not
+locked, and the reason says so. Imports are read the same way, with any comment after them and several
+modules on one line (`imports_of`).
+
+This reading of Lean source is a careful approximation, not Lean's parser, so the lock does not rest on it
+alone. The locked modules go into every submission of the session, and the service refuses a submission that
+declares a constant twice; and the seed check counts a result only when the checker's description size in
+its receipt equals the locked proof's (core.open_lane.stages).
 
 A locked module may import the protected module of the network it was written for (the checker reads that
 module's `graph` and `task`). On another network the protected module has another name, so the locked text
@@ -28,10 +39,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-PROTECTED_IMPORT = re.compile(r"^\s*import\s+Protected\.([A-Za-z0-9_]+)\s*$", re.M)
-CANDIDATE_IMPORT = re.compile(r"^\s*import\s+(Candidate(?:\.[A-Za-z0-9_]+)+)\s*$", re.M)
-
-
 class LockError(ValueError):
     """Why a proof cannot be locked, in words for the agent and the log."""
 
@@ -40,15 +47,98 @@ def _module_name(rel: str) -> str:
     return rel[: -len(".lean")].replace("/", ".")
 
 
-def declaring_module(constant: str, modules: dict[str, str]) -> str | None:
-    """The submitted module a constant is named after: the longest proper prefix of its name that is the name
-    of one of `modules` (module name to path). None when there is none."""
-    parts = constant.split(".")
-    for n in range(len(parts) - 1, 0, -1):
-        name = ".".join(parts[:n])
-        if name in modules:
-            return name
-    return None
+def without_comments(text: str) -> str:
+    """Lean source with its comments blanked out: `--` to the end of the line and `/- ... -/` blocks, which
+    nest. String literals are kept and a comment marker inside one is not a comment. Line breaks stay."""
+    out, i, n, depth, in_string = [], 0, len(text), 0, False
+    while i < n:
+        c, two = text[i], text[i:i + 2]
+        if depth:
+            if two == "/-":
+                depth, i = depth + 1, i + 2
+            elif two == "-/":
+                depth, i = depth - 1, i + 2
+            else:
+                out.append("\n" if c == "\n" else " ")
+                i += 1
+        elif in_string:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 1
+            elif c == '"':
+                in_string = False
+            i += 1
+        elif two == "/-":
+            depth, i = 1, i + 2
+        elif two == "--":
+            while i < n and text[i] != "\n":
+                i += 1
+        else:
+            in_string = c == '"'
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+IMPORT = re.compile(r"^\s*(?:(?:public|private|meta|protected)\s+)*import\b(.*)$")
+MODULE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
+
+
+def imports_of(text: str) -> list[str]:
+    """The modules a Lean module imports: every module named on the import lines at its head, whatever
+    comment follows them and however many stand on one line."""
+    out = []
+    for line in without_comments(text).splitlines():
+        if not line.strip():
+            continue
+        m = IMPORT.match(line)
+        if not m:
+            break
+        out += [t for t in m.group(1).split() if t != "all" and MODULE.match(t)]
+    return out
+
+
+DECLARATION = re.compile(
+    r"^\s*(?:@\[[^\]]*\]\s*)*((?:(?:private|protected|noncomputable|partial|unsafe|nonrec|public|meta|local|scoped)\s+)*)"
+    r"(def|abbrev|theorem|lemma|opaque|axiom|instance|structure|inductive|class|alias)\s+([^\s:({\[⦃]+)")
+SCOPE = re.compile(r"^\s*(namespace|section|end|mutual)\b\s*([A-Za-z_][A-Za-z0-9_.]*)?")
+
+
+def declared_names(text: str) -> set[str]:
+    """The full names of the constants a Lean module declares, as far as its text shows: the declarations
+    that start a line (def, abbrev, theorem, lemma, opaque, axiom, instance, structure, inductive, class,
+    alias), each under the namespaces open at that point. A private declaration has no public name and is
+    left out. Raises LockError on `#exit`, after which a module's text is not what it declares."""
+    plain = without_comments(text)
+    if re.search(r"^\s*#exit\b", plain, re.M):
+        raise LockError("a module uses #exit, so its text does not show what it declares")
+    names, scopes = set(), []  # scopes: the namespace parts each open scope adds (none for a section)
+    for line in plain.splitlines():
+        m = SCOPE.match(line)
+        if m:
+            kind, name = m.group(1), m.group(2)
+            if kind == "namespace" and name:
+                scopes.append(name.split("."))
+            elif kind in ("section", "mutual"):
+                scopes.append([])
+            elif kind == "end" and scopes:
+                scopes.pop()
+            continue
+        m = DECLARATION.match(line)
+        if not m or "private" in m.group(1).split():
+            continue
+        name = m.group(3)
+        if name.startswith("_root_."):
+            names.add(name[len("_root_."):])
+        else:
+            names.add(".".join([part for scope in scopes for part in scope] + [name]))
+    return names
+
+
+def declaring_modules(constant: str, declared: dict[str, set[str]]) -> list[str]:
+    """The modules whose text declares the constant (`declared`: module name to its declared names)."""
+    return sorted(name for name, names in declared.items() if constant in names)
 
 
 def read_lock(submission: Path) -> dict:
@@ -69,25 +159,28 @@ def read_lock(submission: Path) -> dict:
             raise LockError(f"its module {rel!r} is missing")
         names[_module_name(rel)] = rel
     texts = {name: (submission / rel).read_text() for name, rel in names.items()}
+    declared = {name: declared_names(text) for name, text in texts.items()}
     home = {}
     for key in ("checker", "sound", "instance"):
         constant = scored.get(key)
-        home[key] = declaring_module(constant, names) if isinstance(constant, str) else None
-        if home[key] is None:
-            raise LockError(f"no submitted module is named like {constant} (name each constant after its module: "
-                            "Candidate.Name.D in Candidate/Name.lean)")
+        where = declaring_modules(constant, declared) if isinstance(constant, str) else []
+        if len(where) != 1:
+            found = "none of the submitted modules" if not where else " and ".join(names[w] for w in where)
+            raise LockError(f"{constant} must be declared in exactly one submitted module, in plain view (a def or "
+                            f"theorem that starts a line, under its namespace); found in {found}")
+        home[key] = where[0]
     locked, todo = [], [home["checker"], home["sound"]]
     while todo:
         name = todo.pop()
         if name in locked:
             continue
         locked.append(name)
-        todo += [m for m in CANDIDATE_IMPORT.findall(texts[name]) if m in names]
+        todo += [m for m in imports_of(texts[name]) if m in names]
     if home["instance"] in locked:
         raise LockError(f"the instance theorem {scored['instance']} is in {names[home['instance']]}, a module the checker "
                         "and its soundness proof are in or import; the instance belongs in a module of its own that "
                         "imports them")
-    protected = sorted({p for name in locked for p in PROTECTED_IMPORT.findall(texts[name])})
+    protected = sorted({m[len("Protected."):] for name in locked for m in imports_of(texts[name]) if m.startswith("Protected.")})
     if len(protected) > 1:
         raise LockError(f"its checker's modules import more than one protected module ({', '.join(protected)})")
     modules = {names[name]: texts[name] for name in sorted(locked)}
@@ -98,6 +191,7 @@ def read_lock(submission: Path) -> dict:
         "protected": protected[0] if protected else None,
         "modules": modules,
         "free": sorted(rel for name, rel in names.items() if name not in locked),
+        "declared": sorted(set().union(*(declared[name] for name in locked))),
         "digest": digest,
     }
 

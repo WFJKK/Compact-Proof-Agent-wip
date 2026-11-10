@@ -141,12 +141,15 @@ A pilot run is about one network and has two more sessions after its proof round
   locked and run, unchanged, on a second network: a development network of the same model and size
   setting, another seed. The agent writes that network's instance and nothing else. The lock is by module
   (`core/open_lane/lock.py`): the modules that declare the checker and the soundness theorem, with what
-  they import, are locked; the instance must be declared outside them, in a module that imports them; a
-  constant is taken to be declared in the module it is named after. In the session the locked modules
+  they import, are locked; the instance must be declared outside them, in a module that imports them;
+  where a constant is declared is read from the modules' text, not guessed from its name. In the session the locked modules
   cannot be saved over, they are written into the workspace again from the lock before every compile and
   submission (with the protected module's name replaced by the second network's, and nothing else), the
-  submission must name the locked checker and soundness theorem, and the record says whether the hashes in
-  the receipt are the locked text's. During the proof rounds the receipts say of every scored proof
+  submission must name the locked checker and soundness theorem and may not declare a locked constant
+  again, and the record says whether the hashes in the receipt are the locked text's and whether the
+  service measured the same description size for the checker. The outcome is either a result (a scored
+  proof accepted under the lock, a claim of 0 included) or "no accepted result" (the session did not
+  complete the check), never zero coverage for a session that failed. During the proof rounds the receipts say of every scored proof
   whether it can be locked, and why not.
 - The scaling question (`open_lane.scaling: true`). The agent states how the locked checker's cost grows
   with the sizes, against brute force's, and submits what it can prove of that as lemmas. The session

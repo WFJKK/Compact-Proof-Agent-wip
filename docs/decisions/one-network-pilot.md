@@ -75,8 +75,10 @@ for every weight) and an instance (the kernel's run of `D` on one network's weig
 apart by module (`core/open_lane/lock.py`):
 
 - The locked modules are the ones that declare the checker and the soundness theorem, and every submitted
-  module they import. A constant is taken to be declared in the module it is named after
-  (`Candidate.Check.D` in `Candidate/Check.lean`).
+  module they import. Where a constant is declared is read from the modules' text (comments removed,
+  namespaces followed), never guessed from its name: Lean lets `Candidate.Check.D` be declared in any file.
+  A constant that is declared nowhere in plain view, or in two modules, or in a module that ends early
+  with `#exit`, is not locked.
 - A proof can be locked when its instance theorem is declared outside them. A proof kept in one module
   cannot. Template v5 says so from the first round, each round's receipts say of every scored proof
   whether it is ready, and the aim says so when the proof the score rests on is not.
@@ -94,7 +96,13 @@ are the locked text's (`lock.in_receipt`).
 
 What it rests on:
 
-- The naming convention above. A proof that does not follow it is not locked, never wrongly locked.
+- Reading declarations and imports from Lean source text, which is a careful approximation and not Lean's
+  parser. A review on 10 November showed what a guess from names allows: the lock froze an empty file named
+  like the checker while the file with the real definition stayed editable, and an import with a comment
+  after it left a dependency outside the lock. Both are tests now. Because the reading is an approximation,
+  two things stand behind it: the next point, and the checker's description size, which the service
+  measures itself and which must be the same in the seed check's receipt as in the locked proof's (a
+  difference is flagged in the result).
 - The service refusing a submission that declares a constant twice (its kernel replay does). The locked
   modules are in every submission of the session, so the name the manifest gives for the checker can only
   be the locked declaration.
@@ -106,7 +114,11 @@ What it rests on:
 The check uses a development seed, so the model's held-out seeds stay untouched for a final evaluation.
 
 Its result is reported next to the run's score, never folded into it: per network, the count certified
-of the count correct, the length, and the cost of finishing.
+of the count correct, the length, and the cost of finishing. There are two outcomes and they are kept
+apart. A scored proof accepted under the lock is a result, a claim of 0 included: that is a checked
+statement that the checker certifies nothing there. A session that ends without one (out of time, nothing
+compiled, submissions rejected) is "no accepted result", with what happened, and is never reported as zero
+coverage.
 
 ## The scaling question
 

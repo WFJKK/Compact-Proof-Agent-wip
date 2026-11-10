@@ -136,6 +136,7 @@ def begin(run: RunDir, cfg: dict, entries: list[dict], check_entry: dict | None,
                 "submission": int(record.get("submission") or 0), "submission_dir": str(submission_dir(run, record)),
                 "network": entry["id"], "certified": record["certified"], "real_correct": entry.get("real_correct"),
                 "length": record["length"], "B": entry["B"], "finishing_total": total, "ratio": entry["B"] / total,
+                "description_size": record.get("description_size"),
                 "digest": lock["digest"], "modules": sorted(lock["modules"]), "free": lock["free"],
                 "checker": lock["checker"], "sound": lock["sound"], "protected": lock["protected"],
             }
@@ -186,18 +187,27 @@ def free_text(lock: dict) -> str:
 
 
 def seed_check_line(state: dict) -> str:
-    """One sentence on what the seed check found, for the scaling session and the report; empty without one."""
+    """One or two sentences on what the seed check found, for the scaling session, the log and the status;
+    empty without one. A session that ended without an accepted result is said to be that, never a
+    measurement of zero."""
     st = (state.get("stages") or {}).get("seed_check")
     if not st:
         return ""
     res = st.get("result")
     if res is None:
         return f"The seed check on {st['network']} has not been run."
-    if not res.get("certified"):
-        return f"The seed check: on {st['network']} the locked checker certified nothing ({res.get('note') or 'no accepted submission'})."
+    if res.get("outcome") != "certified":
+        return (f"The seed check gave no accepted result on {st['network']} ({res.get('note') or 'no accepted submission'}). "
+                "That is not a measurement: it does not say what the locked checker certifies there.")
+    warn = ""
+    if res.get("same_description_size") is False:
+        warn = " Warning: the service measured another description size for the checker than in the locked proof."
+    if not res["certified"]:
+        return (f"The seed check: on {st['network']} the locked checker certifies none of the {res['real_correct']:,} inputs "
+                f"that network answers correctly (a checked claim of 0, at length {res['length']:,})." + warn)
     return (f"The seed check: on {st['network']} the locked checker certified {res['certified']:,} of the "
             f"{res['real_correct']:,} inputs that network answers correctly, at length {res['length']:,} (a ratio of "
-            f"{res['ratio']:.3f} there, against {state['locked']['ratio']:.3f} on the network it was written for).")
+            f"{res['ratio']:.3f} there, against {state['locked']['ratio']:.3f} on the network it was written for)." + warn)
 
 
 def build_stage_prompt(cfg: dict, folder, run: RunDir, k: int, name: str, state: dict, entry: dict) -> Prompt:
@@ -212,7 +222,8 @@ def build_stage_prompt(cfg: dict, folder, run: RunDir, k: int, name: str, state:
     lock = read_lock(Path(locked["submission_dir"]))
     if lock["digest"] != locked["digest"]:
         raise StageError(f"the locked proof's modules in {locked['submission_dir']} changed since they were locked; the run halts")
-    stage = {"name": name, "of": locked["record_id"], "submission": locked["submission_dir"], "lock": lock}
+    stage = {"name": name, "of": locked["record_id"], "submission": locked["submission_dir"], "lock": lock,
+             "description_size": locked.get("description_size")}
     Session.create(run.round_path(k) / "attempt_0" / "open_lane", cfg, cfg["model"], [entry], run.path, stage=stage)
     path = TEMPLATES / f"open_lane_{name}.md"
     if not path.is_file():
@@ -232,9 +243,14 @@ def build_stage_prompt(cfg: dict, folder, run: RunDir, k: int, name: str, state:
 
 
 # what a stage found ----------------------------------------------------------------------------
-def seed_check_result(records: list[dict], k: int, entry: dict) -> dict:
-    """The seed check's outcome from its round's records: the best scored proof under an intact lock (the
-    one that finishes the second network cheapest), or that there was none."""
+def seed_check_result(records: list[dict], k: int, entry: dict, session_note: str = "") -> dict:
+    """The seed check's outcome from its round's records. Two outcomes, never to be confused:
+
+    - `certified`: a scored proof was accepted under an intact lock. Its count is a checked result, zero
+      included (a claim of 0 with its instance is a measurement that the checker certifies nothing there).
+      With several, the one that finishes the second network cheapest.
+    - `no_result`: the session ended without an accepted scored proof (it ran out of time, nothing
+      compiled, the submissions were rejected). That says nothing about what the checker certifies."""
     mine = [r for r in records if r.get("round") == k and r.get("stage") == "seed_check"]
     per_input = (entry["B"] - entry["E"]) / entry["n_inputs"]  # cost-v4: B is E plus one forward pass per input
     real = entry.get("real_correct") or 0
@@ -245,14 +261,19 @@ def seed_check_result(records: list[dict], k: int, entry: dict) -> dict:
             continue
         total = r["length"] + max(0, real - r["certified"]) * per_input
         if best is None or total < best["finishing_total"]:
-            best = {"record_id": r["record_id"], "certified": r["certified"], "real_correct": real, "length": r["length"],
-                    "B": entry["B"], "finishing_total": total, "ratio": entry["B"] / total,
-                    "lock_intact": True, "lock_in_receipt": bool(lock.get("in_receipt"))}
+            best = {"outcome": "certified", "record_id": r["record_id"], "certified": r["certified"], "real_correct": real,
+                    "length": r["length"], "B": entry["B"], "finishing_total": total, "ratio": entry["B"] / total,
+                    "lock_intact": True, "lock_in_receipt": bool(lock.get("in_receipt")),
+                    "same_description_size": lock.get("same_description_size")}
     if best is not None:
         return best
-    statuses = sorted({r.get("status") for r in mine}) or ["no record"]
-    return {"certified": 0, "real_correct": real, "B": entry["B"], "ratio": 1.0,
-            "note": "the session's submissions: " + ", ".join(str(s) for s in statuses)}
+    counts: dict[str, int] = {}
+    for r in mine:
+        counts[str(r.get("status"))] = counts.get(str(r.get("status")), 0) + 1
+    what = ", ".join(f"{n} {s}" for s, n in sorted(counts.items())) or "no record"
+    reasons = [str(r.get("error"))[:200] for r in mine if r.get("error") and r.get("status") != "no_submission"]
+    return {"outcome": "no_result", "real_correct": real, "B": entry["B"],
+            "note": f"the session's records: {what}" + (f"; {session_note}" if session_note else ""), "reasons": reasons[:3]}
 
 
 def scaling_result(records: list[dict], k: int) -> dict:
@@ -305,16 +326,24 @@ def report_lines(run: RunDir) -> list[str]:
         lines += ["### The seed check", ""]
         if res is None:
             lines += [f"Not run yet (round {check['round']}, on {check['network']}).", ""]
-        elif res.get("certified"):
+        elif res.get("outcome") == "certified":
             lines += ["| Network | Certified of correct | Length | B | Cost of finishing |", "| --- | --- | --- | --- | --- |",
                       f"| {locked['network']} (written for) | {locked['certified']:,} of {locked['real_correct']:,} | {locked['length']:,} | {locked['B']:,} | {locked['ratio']:.3f} |",
                       f"| {check['network']} (second seed, checker locked) | {res['certified']:,} of {res['real_correct']:,} | {res['length']:,} | {res['B']:,} | {res['ratio']:.3f} |",
                       "",
                       "The locked modules reached the service unchanged" + (", and the receipt's hashes say the same."
-                                                                           if res.get("lock_in_receipt") else " by the pipeline's own comparison; the receipt carried no hashes of them."),
+                                                                           if res.get("lock_in_receipt") else " by the pipeline's own comparison; the receipt carried no hashes of them.")
+                      + {True: " The service measured the same description size for the checker on both networks.",
+                         False: " Warning: the service measured another description size for the checker than in the locked proof; "
+                                "read the two submissions before relying on this row.",
+                         None: ""}[res.get("same_description_size")],
                       ""]
         else:
-            lines += [f"On {check['network']} the locked checker certified nothing ({res.get('note')}).", ""]
+            lines += [f"No accepted result on {check['network']}: {res.get('note')}. This is not a measurement of zero: "
+                      "the session did not complete the check, so it does not say what the locked checker certifies there.", ""]
+            lines += [f"- {reason}" for reason in res.get("reasons") or []]
+            if res.get("reasons"):
+                lines.append("")
     scaling = state["stages"].get("scaling")
     if scaling:
         res = scaling.get("result")
@@ -366,9 +395,15 @@ def run_stages(ctx, backend, check_entry: dict | None, why: str, run_round) -> N
         run_round(stage_ctx, k, backend, (k - 1) * per_round, 1, "agent", prompt=prompt)
         records = run.read_archive()
         if name == "seed_check":
-            st["result"] = seed_check_result(records, k, entry)
+            # how the session ended, where the backend says so (its last text, or a stop reason that is not an end)
+            meta = run.read(k, "attempt_0/response_meta.json") or {}
+            last = (run.read(k, "attempt_0/response.md") or "").strip()
+            note = ("the session ran out of time" if last == "(the session ran out of time)" else
+                    "the session reached its turn limit" if last == "(the session reached its turn limit)" else
+                    f"the session stopped: {meta['stop_reason']}" if meta.get("stop_reason") not in (None, "end_turn") else "")
+            st["result"] = seed_check_result(records, k, entry, note)
             ctx.log("  " + seed_check_line(state))
-            if st["result"].get("certified") and not st["result"].get("lock_in_receipt"):
+            if st["result"].get("outcome") == "certified" and not st["result"].get("lock_in_receipt"):
                 ctx.log("  note: the receipt did not carry the locked modules' hashes; the lock rests on the pipeline's own comparison")
         else:
             st["result"] = scaling_result(records, k)

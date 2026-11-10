@@ -17,7 +17,7 @@ import yaml
 
 from core import loop
 from core.open_lane import stages
-from core.open_lane.lock import LockError, declaring_module, lockable, protected_name, read_lock, renamed
+from core.open_lane.lock import LockError, declared_names, imports_of, lockable, protected_name, read_lock, renamed
 from core.open_lane.session import Session
 from core.run_config import RunConfigError, load_run_config, read_run_config_file
 from core.util import REPO_ROOT
@@ -108,12 +108,40 @@ def test_a_proof_is_locked_by_module_the_checker_apart_from_the_instance(tmp_pat
            "certificate": [], "claimed_bill": 1}
     assert "the instance belongs in a module of its own" in lockable(submission(tmp_path / "one", {"Candidate/One.lean": ONE_MODULE}, one))
     elsewhere = {**SCORED, "checker": "Candidate.Other.D"}
-    assert "name each constant after its module" in lockable(submission(tmp_path / "named", {"Candidate/Col.lean": GENERAL,
-                                                                                          "Candidate/ColRun.lean": INSTANCE}, elsewhere))
+    assert "must be declared in exactly one submitted module" in lockable(submission(
+        tmp_path / "named", {"Candidate/Col.lean": GENERAL, "Candidate/ColRun.lean": INSTANCE}, elsewhere))
     with pytest.raises(LockError, match="not a scored proof"):
         read_lock(submission(tmp_path / "plain", {"Candidate/Col.lean": GENERAL}, None))
-    assert declaring_module("Candidate.A.B.x", {"Candidate.A": "a", "Candidate.A.B": "b"}) == "Candidate.A.B"
-    assert declaring_module("Candidate.x", {"Candidate.A": "a"}) is None
+
+
+def test_the_lock_follows_where_a_constant_is_declared_not_what_it_is_called(tmp_path):
+    """Lean lets `Candidate.Col.D` be declared in any file. A review (10 November 2026) had the lock freeze an
+    empty Candidate/Col.lean while the file with the real definition stayed editable, and an import with a
+    comment after it left a dependency outside the lock. The lock reads the declarations and the imports
+    from the text: the module that declares the checker is the one locked, with what it imports; a constant
+    declared nowhere in plain view, or in two modules, or behind #exit, is not locked at all."""
+    real = GENERAL.replace("import CompactCheck.CountedOps", "import CompactCheck.CountedOps\nimport Candidate.Lemmas -- the tables")
+    elsewhere = {"Candidate/Col.lean": f"import Protected.{PA}\n", "Candidate/Real.lean": real,
+                 "Candidate/Lemmas.lean": "theorem l : True := trivial\n", "Candidate/ColRun.lean": INSTANCE.replace("import Candidate.Col", "import Candidate.Real")}
+    lock = read_lock(submission(tmp_path / "elsewhere", elsewhere, SCORED))
+    assert sorted(lock["modules"]) == ["Candidate/Lemmas.lean", "Candidate/Real.lean"]  # not the empty file named like the checker
+    assert sorted(lock["free"]) == ["Candidate/Col.lean", "Candidate/ColRun.lean"]
+    assert {"Candidate.Col.D", "Candidate.Col.D_sound", "l"} <= set(lock["declared"])
+    # how the text is read
+    text = ("import Candidate.A -- why\nimport Protected.N_x_c1 Candidate.B\n/- a note\nimport Candidate.Fake\n-/\n"
+            "namespace Candidate.Col\n@[simp] def D : Nat := 0\n-- def Hidden : Nat := 1\nsection s\ntheorem D_sound : True := trivial\nend s\n"
+            "private def secret := 1\nend Candidate.Col\ndef _root_.Candidate.Abs.x := \"-- text /- too\"\ntheorem top : True := trivial\n")
+    assert imports_of(text) == ["Candidate.A", "Protected.N_x_c1", "Candidate.B"]
+    assert declared_names(text) == {"Candidate.Col.D", "Candidate.Col.D_sound", "Candidate.Abs.x", "top"}
+    # declared twice, declared only in a comment, or behind #exit: not locked
+    twice = {**elsewhere, "Candidate/Col.lean": GENERAL}
+    assert "found in Candidate/Col.lean and Candidate/Real.lean" in lockable(submission(tmp_path / "twice", twice, SCORED))
+    hidden = {"Candidate/Col.lean": GENERAL.replace("def D : Checker := fun I => pure I.nzero", "/- def D : Checker := fun I => pure I.nzero -/"),
+              "Candidate/ColRun.lean": INSTANCE}
+    assert "found in none of the submitted modules" in lockable(submission(tmp_path / "hidden", hidden, SCORED))
+    early = {"Candidate/Col.lean": GENERAL + "#exit\n", "Candidate/ColRun.lean": INSTANCE}
+    with pytest.raises(LockError, match="#exit"):
+        read_lock(submission(tmp_path / "early", early, SCORED))
 
 
 def test_a_locked_module_changes_in_the_protected_modules_name_and_nowhere_else(tmp_path):
@@ -217,6 +245,10 @@ SEED_CHECK = {"calls": [
          scored={**SCORED, "checker": "Candidate.ColRunB.D", "instance": "Candidate.ColRunB.D_instance"}),
     call("submit_candidate", network=B, claimed_count=570, theorem="Candidate.ColRunB.t", modules=["Candidate/ColRunB.lean"], kind="auxiliary"),
     call("submit_candidate", network=A, claimed_count=576, theorem="Candidate.ColRun.performance", modules=["Candidate/ColRun.lean"], scored=SCORED),
+    # a second declaration of the locked checker, in a module of the session's own
+    call("lean_check", path="Candidate/Again.lean", source="namespace Candidate.Col\ndef D : Nat := 1\nend Candidate.Col\n", network=B, claimed_count=570),
+    call("submit_candidate", network=B, claimed_count=570, theorem="Candidate.ColRunB.performance",
+         modules=["Candidate/ColRunB.lean", "Candidate/Again.lean"], scored={**SCORED, "instance": "Candidate.ColRunB.D_instance"}),
     call("submit_candidate", network=B, claimed_count=570, theorem="Candidate.ColRunB.performance", modules=["Candidate/ColRunB.lean"],
          scored={**SCORED, "instance": "Candidate.ColRunB.D_instance"}),
 ], "response": "CLAIM: 570 of 576.\nWHY IT HELPS: six inputs differ.\nNOTES: none."}
@@ -255,12 +287,14 @@ def test_a_run_proves_one_network_then_checks_a_second_seed_with_the_checker_loc
     records = run.read_archive()
     check = [r for r in records if r.get("stage") == "seed_check"]
     assert [r["status"] for r in check] == ["ok"] and check[0]["network"] == B and check[0]["certified"] == 570
-    assert check[0]["lock"] == {"digest": locked["digest"], "of": locked["record_id"], "intact": True, "in_receipt": True}
+    assert check[0]["lock"] == {"digest": locked["digest"], "of": locked["record_id"], "intact": True, "in_receipt": True,
+                                "same_description_size": True}
     tools = [json.loads(l) for l in (run.round_path(2) / "attempt_0" / "open_lane" / "tools.jsonl").read_text().splitlines()]
     errors = [t["outcome"].get("error", "") for t in tools]
     assert "Candidate/Col.lean is locked" in errors[0] and errors[1] == ""
     assert "scored.checker must be Candidate.Col.D" in errors[2] and "scored proofs only" in errors[3]
     assert "is not one of this run's networks" in errors[4] and errors[5] == ""
+    assert "Candidate/Again.lean declares Candidate.Col.D, which the locked modules declare" in errors[6] and errors[7] == ""
     sent = run.round_path(2) / "attempt_0" / "open_lane" / "submissions" / "000"
     new = "N_max2_ladder_n2v24d8_s3_c570"
     assert (sent / "Candidate/Col.lean").read_text() == GENERAL.replace(PA, new)  # the locked text, renamed, not the session's
@@ -269,7 +303,7 @@ def test_a_run_proves_one_network_then_checks_a_second_seed_with_the_checker_loc
     per_input = (170368 - 448) // 576
     assert (result["certified"], result["real_correct"], result["length"]) == (570, 576, 20448)
     assert result["finishing_total"] == 20448 + 6 * per_input and result["ratio"] == pytest.approx(170368 / (20448 + 6 * per_input))
-    assert result["lock_intact"] and result["lock_in_receipt"]
+    assert result["outcome"] == "certified" and result["lock_intact"] and result["lock_in_receipt"] and result["same_description_size"]
     assert any(f"on {B} the locked checker certified 570 of the 576" in l for l in lines)
 
     # the scaling question: lemmas only, about the locked checker
@@ -452,3 +486,37 @@ def test_a_run_is_told_only_of_the_sessions_it_has(tmp_path, monkeypatch):
     path.write_text(yaml.safe_dump(cfg))
     with pytest.raises(loop.LoopError, match="are for a run on one network"):
         loop.start(path, log=lambda *a: None)
+
+
+def test_a_seed_check_that_did_not_finish_is_no_result_and_a_checked_zero_is_a_result():
+    """A review (10 November 2026): a session that timed out or never compiled was reported as "the locked
+    checker certified nothing". Failing to complete the check is not a measurement. The outcome is
+    `no_result`, with what the session's records were and how it ended, and every text says it is not a
+    measurement of zero. A claim of 0 accepted under the lock is a result: the checker certifies nothing
+    there. A different description size than in the locked proof is flagged."""
+    entry = {"id": B, "n_inputs": 576, "E": 448, "B": 170368, "real_correct": 576}
+    state = {"locked": {"ratio": 8.332}, "stages": {"seed_check": {"network": B, "round": 5}}}
+
+    def rec(status, **f):
+        return {"round": 5, "stage": "seed_check", "network": B, "status": status, "record_id": f"r5/{status}", **f}
+
+    failed = [rec("timeout", error="compiling Candidate.ColRunB exceeded 3600 s"), rec("rejected", error="Candidate.ColRunB does not compile")]
+    res = stages.seed_check_result(failed, 5, entry, "the session ran out of time")
+    assert res["outcome"] == "no_result" and "certified" not in res and "ratio" not in res
+    assert res["note"] == "the session's records: 1 rejected, 1 timeout; the session ran out of time" and len(res["reasons"]) == 2
+    state["stages"]["seed_check"]["result"] = res
+    line = stages.seed_check_line(state)
+    assert "gave no accepted result" in line and "That is not a measurement" in line and "certified nothing" not in line
+    nothing = stages.seed_check_result([rec("no_submission", error="the session submitted no candidate")], 5, entry)
+    assert nothing["outcome"] == "no_result" and nothing["reasons"] == []
+    ok = {"intact": True, "in_receipt": True, "same_description_size": True}
+    zero = stages.seed_check_result(failed + [rec("ok", certified=0, length=20448, lock=ok)], 5, entry)
+    assert (zero["outcome"], zero["certified"], zero["finishing_total"]) == ("certified", 0, 20448 + 576 * 295)
+    state["stages"]["seed_check"]["result"] = zero
+    assert "certifies none of the 576 inputs" in stages.seed_check_line(state) and "a checked claim of 0" in stages.seed_check_line(state)
+    # an accepted proof whose lock was not intact is not a result either
+    broken = stages.seed_check_result([rec("ok", certified=570, length=20448, lock={**ok, "intact": False})], 5, entry)
+    assert broken["outcome"] == "no_result"
+    odd = stages.seed_check_result([rec("ok", certified=570, length=20448, lock={**ok, "same_description_size": False})], 5, entry)
+    state["stages"]["seed_check"]["result"] = odd
+    assert odd["outcome"] == "certified" and "Warning: the service measured another description size" in stages.seed_check_line(state)
