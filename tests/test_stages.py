@@ -141,6 +141,7 @@ def fake_project(tmp_path: Path) -> Path:
     files = {"scripts/accept.py": "", "scripts/make_protected.py": MAKE_PROTECTED, "CompactCheck/Spec.lean": "-- spec",
              "CompactCheck/Counted.lean": "-- counted", "CompactCheck/CountedOps.lean": "-- ops",
              "examples/open_lane/max2_tiny_scored/Candidate/Max2TinyScored.lean": "-- the linear example",
+             "examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean": "-- facts and glue",
              ".lake/build/bin/acceptcheck": ""}
     for rel, text in files.items():
         (project / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -284,9 +285,19 @@ def test_a_run_proves_one_network_then_checks_a_second_seed_with_the_checker_loc
     assert "This run is about one network." in p1 and "Keep the checker and the instance in separate modules" in p1
     assert f"- {A} (n2v24d8)" in p1 and B not in p1 and "geometric mean" not in p1
     assert "THIS SESSION: THE SEED CHECK" in p2 and f"- {B} (n2v24d8)" in p2 and "SCOREBOARD" not in p2
-    assert f"Your best scored proof was of\n{A}: all 576 inputs it answers correctly, at length 20,448" in p2
+    assert f"The best of your scored proofs\nthat could be locked was of {A}: all 576 inputs it answers correctly, at length 20,448" in p2
     assert "LOCKED\n- Candidate/Col.lean (" in p2 and f"({PA})" in p2 and "Candidate/ColRun.lean) is in your workspace" in p2
     assert "THIS SESSION: HOW THE COST GROWS" in p3 and "certified 570 of the 576" in p3 and "576 inputs at 295 each" in p3
+    # the scaling claim comes with its conditions, and with what the checker certifies at other sizes
+    assert "if the locked checker's run succeeds" in p3 and "the sizes you let vary and the ones you hold fixed" in p3
+    assert "A cheap check and a useful accuracy bound are separate" in p3 and "It must be the same method at every size" in p3
+    # the proof rounds' prompt: the score as a formula, an instance in one theorem or from parts, what the seed check shows
+    assert "F(P) = length(P) + c * (correct - certified(P))" in p1 and "a computed figure, not a proof that was built and checked" in p1
+    assert "A submission improves the score when it lowers" in p1 and "any shorter proof raises" not in p1
+    assert "A short run: one `decide +kernel`" in p1 and "A long run: memory is the limit" in p1
+    assert "examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean is a complete example" in p1
+    assert "another seed may compute\n  differently, or with smaller margins" in p1 and "certifies as much there" not in p1
+    assert "A real network's weights written out measure more." in p1
     assert not any("{" + name + "}" in p for p in (p2, p3) for name in ("LOCKED", "RENAME", "FREE", "NETWORK", "SEED_CHECK_RESULT"))
 
     # the score is the proof rounds' alone, and the run is over: a resume adds nothing
@@ -363,8 +374,8 @@ def test_the_seed_check_names_another_development_seed_of_the_same_size(tmp_path
 
 
 def test_the_pilot_on_the_linear_max_of_2_network_is_one_network_a_second_seed_and_a_size_no_copy_fits(tmp_path):
-    """config/pilot/linear-max2.yaml: the shared base and four lines about the model. One network of 64 tokens
-    and width 8, cost of finishing as the score, template v5, the seed check on another development seed of
+    """config/pilot/linear-max2.yaml: the shared base and four lines about the model. One network of vocabulary
+    size 64 and width 8, cost of finishing as the score, template v5, the seed check on another development seed of
     the same size, the scaling question on. At this size a copy of the weights is over the Lean service's
     description budget (8192 + 4 E), which the choice of size rests on."""
     from fractions import Fraction
@@ -384,6 +395,9 @@ def test_the_pilot_on_the_linear_max_of_2_network_is_one_network_a_second_seed_a
     ol = cfg["open_lane"]
     assert (cfg["metric"], cfg["prompt_template"], cfg["networks"], ol["scaling"]) == ("cost_of_finishing", "open_lane_v5", ["max2-v64-s0"], True)
     assert ol["seed_check"] == {"network": "max2-v64-s1"} and ol["example"].endswith("Max2TinyScored.lean") and "one theorem" in ol["notes"]
+    from core.open_lane.session import readable_paths
+
+    assert "examples/open_lane/attn_max2_tiny_scored/" in readable_paths(ol["example"], ol["second_example"], ol["split_example"])
     folder = load_model_folder(REPO_ROOT / cfg["model"])
     entries = loop.select_networks(folder, cfg)
     other = loop.seed_check_entry(cfg, folder, entries)

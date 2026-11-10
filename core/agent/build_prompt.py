@@ -167,17 +167,18 @@ def metric_text(cfg: dict, folder: ModelFolder, entries: list[dict]) -> str:
         several = len(entries) != 1
         head = (
             ("Your score is the cost of finishing: the geometric mean over the networks of the run (each size "
-             "setting and the worst network are reported too). For one network, take " if several else
-             "Your score is the cost of finishing. Take ") +
-            "a proof's length plus, for "
-            "every input the network answers correctly that the proof leaves uncertified, what certifying that "
-            "input alone by brute force costs (the single rule's charge, read from round 0's brute-force proof; B "
-            "divided by the number of inputs when there is none). The " + ("network's score" if several else "score") +
-            " is B divided by the smallest "
-            "such total over the checked proofs: how many times shorter than brute force the cheapest complete "
-            "proof built on your work is. Brute force scores 1, and so does a network without a proof. Every proof "
-            "counts for what it saves: a partial proof helps as far as it certifies its inputs for less than brute "
-            "force would, and any shorter proof raises the score. There are no budgets to aim at."
+             "setting and the worst network are reported too). For one network and a checked proof P, the "
+             "completion cost is\n\n" if several else
+             "Your score is the cost of finishing. For a checked proof P, the completion cost is\n\n") +
+            "    F(P) = length(P) + c * (correct - certified(P))\n\n"
+            "with correct the number of inputs the network answers correctly, certified(P) the number P certifies, "
+            "and c what brute force charges for one input (the single rule's charge, read from round 0's "
+            "brute-force proof; B divided by the number of inputs when there is none). F(P) is what P would cost "
+            "with the rest certified by brute force: a computed figure, not a proof that was built and checked. "
+            "The " + ("network's score" if several else "score") + " is B divided by the smallest F over the checked "
+            "proofs, brute force among them, so it is never below 1. A submission improves the score when it lowers "
+            "the best completion cost found so far: a complete proof by being shorter, a partial proof by "
+            "certifying its inputs for less than brute force would. There are no budgets to aim at."
         )
     else:
         head = (

@@ -1,6 +1,6 @@
 THIS SESSION: THE SEED CHECK
-The proof rounds of this run are over. Your best scored proof was of
-{FROM_NETWORK}: {FROM_RESULT}
+The proof rounds of this run are over. The best of your scored proofs
+that could be locked was of {FROM_NETWORK}: {FROM_RESULT}
 
 Its checker is now locked, and this session runs it on the second
 network named above, {NETWORK}: the same architecture and sizes, trained

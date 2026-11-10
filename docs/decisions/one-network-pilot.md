@@ -28,17 +28,18 @@ A run is about one network, and has three parts.
    loop's patience alive only if it raised it.
 2. The seed check. When the rounds are over, the checker of the best scored proof is locked and run,
    unchanged, on a second network: the same model and sizes, another seed. The agent writes that network's
-   instance and nothing else. What comes out is how much a checker written for one network certifies on
-   one it was not written for.
+   instance and nothing else, with a new certificate if the checker reads one. What comes out is how much a
+   checker written for one network certifies on one it was not written for. It does not by itself show
+   understanding or its absence: another seed can compute differently, or with smaller margins.
 3. The scaling question. Last, the agent states how the locked checker's cost grows with the sizes of the
    network, compares it with brute force's growth, and proves what it can of that as lemmas. Never scored,
    and a proof is never refused because its author could not prove a formula for its cost.
 
 The agent is not shown networks of other sizes. Which model a pilot runs on is one choice (linear or
 attention; max or min of 2 or 4), made in a file of a few lines. The first pilot is the linear max-of-2
-network at 64 tokens and hidden width 8.
+network at vocabulary size 64 and hidden width 8.
 
-A pilot's size must be one at which a copy of the weights does not fit a checker (below).
+A pilot's size must be one at which the weights cannot be written out in a checker (below).
 
 ## What the score stops, and what it does not
 
@@ -61,7 +62,9 @@ Not stopped by the score, and what answers each:
   least 34,044 against a budget of 12,544. On the tiny networks of the earlier pilots a copy fits (1,241 to
   3,772 against budgets of 8,384 to 8,736), where it would have finished the linear max-of-2 one at about
   320 against 719 for the best proof an agent found. The seed check would expose a copy too: it certifies
-  nothing there.
+  nothing there. What the budget rules out is the weights written out, in any encoding of their bits. It
+  does not show that no compressed information about one checkpoint can sit in a checker; that is the
+  seed check's to catch.
 - A constant factor against the price list counts like a structural gain. The scaling question: a
   constant factor leaves the growth rate where it was.
 
@@ -111,17 +114,24 @@ A checker cannot branch on a truth value, so its bill depends on the sizes and o
 values of the weights. That makes the growth of its cost a statement a theorem can settle. The session
 asks for the claim in words (the checker's bill and brute force's cost as formulas in the sizes, and a
 verdict: a smaller exponent, the same exponent with a smaller constant, or no gain) and for as much of it
-as can be proved, as lemmas, in order of strength: the bill is the same for every weight of this shape;
-the bill as a formula for every size; the comparison. The formula for every size needs a checker that
-makes sense at every size, which a checker that fixes its sizes does not. The agent may then write a
-version that reads them and prove it equal to the locked one at this size.
+as can be proved, as lemmas, in order of strength: the bill is the same for every weight of this shape
+on which the run succeeds; the bill as a formula for every size; the comparison. The formula for every
+size needs a checker that makes sense at every size, which a checker that fixes its sizes does not. The
+agent may then write a version that reads them and prove it equal to the locked one at this size.
+
+After a review of the prompt (10 November), the claim must also say: which sizes vary and which are held
+fixed; the family of networks the checker is sound for; the total length part by part (E, the
+certificate, the bill), since a certificate can grow; the conditions the formula holds under, since a run
+can fail on some values; and what the checker certifies at other sizes, established, assumed or unknown.
+A version that is the locked checker at this size and certifies nothing elsewhere would be cheap at every
+size and say nothing, so cheap checking and a useful accuracy bound are asked for as separate claims.
 
 A lemma's statement is the agent's own, and the service checks only that it is proved. A person reads the
 statement before relying on it.
 
 ## The first pilot
 
-`config/pilot/linear-max2.yaml`, on `models/max2` at 64 tokens and hidden width 8:
+`config/pilot/linear-max2.yaml`, on `models/max2` at vocabulary size 64 and hidden width 8:
 
 | | Network | Correct inputs | E | c | B |
 | --- | --- | --- | --- | --- | --- |
@@ -136,7 +146,10 @@ the budget of 12,544, in about 15 minutes.
 
 What is known about this size in Lean's kernel, and stated in the prompt: no instance has fitted one
 theorem (one `decide +kernel` over a whole run ran out of memory at 6 GB), so an instance is built from
-small decided facts; and the 15 minutes above, so that a session of three hours plans its compiles.
+small decided facts; and the 15 minutes above, so that a session of three hours plans its compiles. The
+prompt says both ways of proving an instance (one theorem for a short run, parts and glue for a long one)
+and where the second is shown: the Lean project's docs and a brute-force example on a small attention
+network (`open_lane.split_example`), which `read_file` may read.
 
 ## One pilot, any model
 

@@ -163,14 +163,17 @@ SECOND_EXAMPLE_TEXT = (
 AFTER_HEAD = {0: "This run is about one network.",
               1: "This run is about one network. One thing comes after its rounds, and\nit says what a good proof is:",
               2: "This run is about one network. Two things come after its rounds, and\nthey say what a good proof is:"}
-AFTER_SEED_CHECK = """- The seed check. The checker of your best scored proof, and its
-  soundness proof, are locked and run unchanged on a second network: the
-  same architecture and sizes, trained from another seed. You then write
-  only the instance for that network. A checker that rests on how such a
-  network computes certifies as much there. One that rests on this
-  network's numbers certifies little, and that is what the check
-  measures. Numbers that belong to one network reach a checker through
-  the charged certificate, never through its code."""
+AFTER_SEED_CHECK = """- The seed check. The checker of your best scored proof that can be
+  locked, and its soundness proof, are locked and run unchanged on a
+  second network: the same architecture and sizes, trained from another
+  seed. You then write only the instance for that network, with a new
+  certificate if the checker reads one. This measures how a fixed
+  checker carries over to another set of weights. One that rests on this
+  network's own numbers will certify little there. One that rests on how
+  the network computes can still certify less: another seed may compute
+  differently, or with smaller margins. Numbers that belong to one
+  network reach a checker through the charged certificate, never
+  through its code."""
 AFTER_SCALING = """- The scaling question. {when} you are asked how your checker's cost
   grows with the sizes of the network, whether it grows more slowly than
   brute force, and to prove as much of the answer as you can. Nothing
@@ -213,6 +216,26 @@ def modules_rule_text(ol: dict) -> str:
     its proof rounds needs it."""
     why = MODULES_WHY["seed_check"] if ol.get("seed_check") else MODULES_WHY["scaling"] if ol.get("scaling") else None
     return MODULES_RULE + why if why else ""
+
+
+SPLIT_EXAMPLE_TEXT = (
+    "  The Lean project's docs/COUNTED.md describes this under \"Split instances\", with a trap to avoid, and\n"
+    "  {path} is a complete example of it (brute force on a small\n"
+    "  network, one decided fact per input and a lemma that glues them); read_file reads both."
+)
+SPLIT_EXAMPLE_SAME = (
+    "  The Lean project's docs/COUNTED.md describes this under \"Split instances\", with a trap to avoid, and the\n"
+    "  worked example below is put together this way."
+)
+
+
+def split_example_text(ol: dict) -> str:
+    """Where the agent can see an instance put together from small decided facts (open_lane.split_example):
+    a file of the Lean project it may read, or the run's own worked example when that is the one."""
+    rel = ol.get("split_example")
+    if not rel:
+        return ""
+    return SPLIT_EXAMPLE_SAME if rel == ol.get("example") else SPLIT_EXAMPLE_TEXT.format(path=rel)
 
 
 def second_example_text(rel: str | None) -> str:
@@ -273,6 +296,7 @@ def static_values(cfg: dict, folder: ModelFolder, entries: list[dict]) -> dict:
         "EXAMPLE": lean_block(elide_repeats(_read(project, ol["example"]))),
         "EXTRA_SOURCES": extra_sources_text(project, ol["extra_sources"]),
         "SECOND_EXAMPLE": second_example_text(ol.get("second_example")),
+        "SPLIT_EXAMPLE": split_example_text(ol),
         "MODEL_NOTES": (ol.get("notes") or "").strip(),
         "AFTER_ROUNDS": after_rounds_text(ol),
         "MODULES_RULE": modules_rule_text(ol),

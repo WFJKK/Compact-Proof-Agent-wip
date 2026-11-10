@@ -259,7 +259,7 @@ def validate(cfg: dict, source: str = "run config") -> None:
 
 OPEN_LANE_KEYS = {"enabled", "lean_project", "work_dir", "python", "compile_calls", "python_calls", "submissions", "max_turns",
                   "worker_seconds", "stall_rounds", "fake_scripts", "example", "extra_sources", "knowledge", "second_example", "notes",
-                  "seed_check", "scaling"}
+                  "seed_check", "scaling", "split_example"}
 KNOWLEDGE_CONDITIONS = ("minimal", "maximum")
 
 
@@ -288,6 +288,9 @@ def open_lane_errors(cfg: dict) -> list[str]:
     second = ol.get("second_example")
     if second is not None and (not isinstance(second, str) or not second.startswith("examples/") or ".." in second):
         errors.append("open_lane.second_example must be null or a path under examples/ in the Lean project")
+    split = ol.get("split_example")
+    if split is not None and (not isinstance(split, str) or not split.startswith("examples/") or ".." in split):
+        errors.append("open_lane.split_example must be null or a path under examples/ in the Lean project")
     if not isinstance(ol.get("notes", ""), str):
         errors.append("open_lane.notes must be text")
     check = ol.get("seed_check")
@@ -303,7 +306,7 @@ def open_lane_errors(cfg: dict) -> list[str]:
         if not project or not (Path(project).expanduser() / "scripts" / "accept.py").is_file():
             errors.append("open_lane.lean_project must be the Lean project (with scripts/accept.py)")
         else:
-            for rel in [ol["example"], *ol["extra_sources"], *([second] if second else [])]:
+            for rel in [ol["example"], *ol["extra_sources"], *([second] if second else []), *([split] if split else [])]:
                 if not (Path(project).expanduser() / rel).is_file():
                     errors.append(f"the Lean project has no {rel} (open_lane.example, open_lane.extra_sources, open_lane.second_example)")
         if cfg["backend"] not in ("fake", "claude_code"):

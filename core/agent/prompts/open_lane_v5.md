@@ -101,25 +101,30 @@ depend on):
 - It may not reference the protected weights or certificate.
 - The description size of D and the definitions it uses (every node
   counted, a numeral 1 per bit, a string 8 per byte) is at most
-  8192 + 4E, so a copy of the weights cannot fit a real network.
+  8192 + 4E. A real network's weights written out measure more.
 - It must replay in the kernel within 120 s.
 A proof refused scoring stays verified.
 
 Getting the instance through the kernel:
-- The kernel computes the bill: the instance is one `decide +kernel`
-  over the whole run, with no lemma about the bill and no model of your
-  checker.
-- The `set_option maxRecDepth 1000000 in` line raises Lean's recursion
-  limit. Without it the default limit stops the evaluation after a few
-  thousand charged operations with "(kernel) deep recursion detected".
-  It changes nothing else, and the service replays the proof without it.
-- Time: through the service, a checker of 5,000 charged operations was
-  accepted in about 25 s, one of 30,000 in about 70 s.
-- Memory is the limit that remains. Within one theorem the kernel's
+- The instance must prove the stated equality exactly, for your checker
+  on the protected weights, and the kernel must check it. How it is
+  proved is yours to choose, and it depends on the length of the run.
+- A short run: one `decide +kernel` over the whole run. The kernel
+  computes the bill, and you need no lemma about the bill and no model
+  of your checker. The `set_option maxRecDepth 1000000 in` line raises
+  Lean's recursion limit: without it the default limit stops the
+  evaluation after a few thousand charged operations with "(kernel) deep
+  recursion detected". It changes nothing else, and the service replays
+  the proof without it. Through the service, a checker of 5,000 charged
+  operations was accepted this way in about 25 s, one of 30,000 in
+  about 70 s.
+- A long run: memory is the limit. Within one theorem the kernel's
   memory grows with the work and is released only when the theorem is
-  done (60,000 one-unit charges did not fit in 7 GB). For a long run,
-  prove one small decided fact per part and combine the facts with the
-  run lemmas (`run_bind`, `run_pure`). The statement stays the same.
+  done (60,000 one-unit charges did not fit in 7 GB). Then prove small
+  decided facts, one per part of the run, and combine them with proved
+  lemmas about the run (`CostM.run_bind`, `CostM.run_pure`). The
+  statement stays the same: only its proof is put together from parts.
+{SPLIT_EXAMPLE}
 - In the soundness proof, prove your lemmas for every list of inputs or
   indices and only then apply them to D's own list. A proof step about
   the concrete run (a `simp` or `split` on it) can make the kernel

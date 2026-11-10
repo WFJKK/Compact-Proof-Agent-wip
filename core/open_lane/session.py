@@ -174,11 +174,12 @@ READABLE = ("CompactCheck/", "docs/", "examples/open_lane/max2_tiny_brute/", "ex
             "accept/", "README.md", "lean-toolchain", "lakefile.toml")
 
 
-def readable_paths(example: str | None, second_example: str | None = None) -> list[str]:
+def readable_paths(example: str | None, second_example: str | None = None, split_example: str | None = None) -> list[str]:
     """READABLE and the folders of the run's worked examples (a candidate folder: the parent of Candidate/):
-    open_lane.example and, when the run config names one, open_lane.second_example."""
+    open_lane.example and, when the run config names them, open_lane.second_example and
+    open_lane.split_example."""
     out = list(READABLE)
-    for shown in (example, second_example):
+    for shown in (example, second_example, split_example):
         if not shown:
             continue
         p = PurePosixPath(shown)
@@ -231,7 +232,7 @@ class Session:
                        "max_proof_mb": cfg["max_proof_mb"], "threads_per_recipe": cfg["threads_per_recipe"]},
             "sandbox": cfg["sandbox"],
             "sandbox_dir": cfg["sandbox_dir"],
-            "readable": readable_paths(ol.get("example"), ol.get("second_example")),
+            "readable": readable_paths(ol.get("example"), ol.get("second_example"), ol.get("split_example")),
             "knowledge": ol.get("knowledge", "minimal"),
             "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         }

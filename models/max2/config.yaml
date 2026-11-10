@@ -43,7 +43,7 @@ open_lane:
   extra_sources: []
   notes: |
     - The worked example below is brute force on a smaller network of this
-      architecture (8 tokens, hidden width 4, 64 inputs), not this
+      architecture (vocabulary size 8, hidden width 4, 64 inputs), not this
       session's network. Its checker and its soundness proof hold for any
       size. Its instance is one theorem, and brute force on this session's
       network (B above) is far beyond what one theorem holds.
@@ -51,6 +51,6 @@ open_lane:
       `decide +kernel` over a whole run ran out of memory at 6 GB, for a
       checker many times shorter than brute force. Build the instance from
       small decided facts and combine them with lemmas about the run.
-    - Time: at 64 tokens the service has taken about 15 minutes to accept
-      a scored proof (about 5 of them in the kernel). Plan your compiles
-      and submissions with that in mind.
+    - Time: at vocabulary size 64 the service has taken about 15 minutes
+      to accept a scored proof (about 5 of them in the kernel). Plan your
+      compiles and submissions with that in mind.

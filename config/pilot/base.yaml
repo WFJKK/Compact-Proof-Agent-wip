@@ -1,6 +1,6 @@
 # The open-lane pilot, without its model: what every pilot run shares. Not a run by itself. A run is a file
 # next to this one that extends it and names a model, one network of it and a second seed for the seed check:
-#   config/pilot/linear-max2.yaml    the linear max-of-2 network at 64 tokens, width 8
+#   config/pilot/linear-max2.yaml    the linear max-of-2 network at vocabulary size 64, width 8
 # Further ones (linear or attention; max or min of 2 or 4) are a file of the same few lines each, once their
 # model folder has a size at which a copy of the weights does not fit a checker
 # (docs/decisions/one-network-pilot.md). The worked example, the further Lean sources and the notes about the
@@ -33,6 +33,9 @@ open_lane:
   enabled: true
   lean_project: ~/Desktop/VerifiedMechanisms/LeanFormalisations/CompactCheck
   knowledge: minimal
+  # An instance put together from small decided facts, to read (not pasted): brute force on a small attention
+  # network, one fact per input. A long run needs the technique, and the prompt says where it is shown.
+  split_example: examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean
   scaling: true             # part 3; part 2 (seed_check) names a network, so it is in the model's file
   # Per session, the two sessions after the proof rounds included:
   compile_calls: 60

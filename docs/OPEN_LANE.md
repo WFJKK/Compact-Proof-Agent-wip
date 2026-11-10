@@ -223,7 +223,7 @@ minimal knowledge, the scaling question on), and a run is a file next to it that
 (`extends: <file>`, a path next to the config; the file's own settings go on top) and names the model, one
 network and the seed check's network:
 
-- `config/pilot/linear-max2.yaml`: the linear max-of-2 network at 64 tokens and hidden width 8
+- `config/pilot/linear-max2.yaml`: the linear max-of-2 network at vocabulary size 64 and hidden width 8
   (`models/max2`), proof rounds on `max2-v64-s0`, the seed check on `max2-v64-s1`.
 
 What an open-lane run needs to know about an architecture is the model folder's to state, under `open_lane`
@@ -234,6 +234,10 @@ pilot on another model (linear or attention; max or min of 2 or 4) is a model fo
 lines. Its size must be one at which a copy of the weights does not fit a checker: at least one unit per bit
 of the weights against the service's description budget of 8,192 + 4E (34,044 against 12,544 for the linear
 network at 64 tokens; on the tiny networks a copy fits).
+
+`open_lane.split_example` (the pilot's base sets it) names a file of the Lean project where an instance is
+put together from small decided facts, which a long run needs: template v5 says where it is and `read_file`
+may read it. The pilot uses the brute-force example of the tiny attention network.
 
 Parked, unused by the pilot: runs over several sizes (`config/open-lane-ladder-base.yaml` and the two
 configs that extend it, template v4, the model folders `tests/max2_ladder` and `tests/attn_maxn_tiny`). A

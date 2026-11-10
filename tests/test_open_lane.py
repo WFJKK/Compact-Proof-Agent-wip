@@ -526,7 +526,8 @@ def test_the_open_lane_prompt_builds_for_every_metric(tmp_path, monkeypatch, met
         assert "finishing from it costs 12,360, no less than brute force (12,360): it adds nothing to the score" in p.part2
         assert "finishing from it costs 10,404, against 12,360 for brute force (a ratio of 1.188)" in p.part2
         assert "It stands at: cost_of_finishing: 1.188. Before writing" in p.part2
-        assert "Your score is the cost of finishing. Take a proof's length" in p.part1 and "geometric mean" not in p.part1
+        assert "Your score is the cost of finishing. For a checked proof P, the completion cost is" in p.part1
+        assert "geometric mean" not in p.part1
         assert "There are no budgets to aim at." in p.part1
         return
     # the receipts say which proofs beat brute force; the scoreboard shows the line
