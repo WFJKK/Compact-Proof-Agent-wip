@@ -54,6 +54,7 @@ needs_lean = pytest.mark.skipif(LEAN is None, reason="needs the Lean project's L
 needs_library = pytest.mark.skipif(LEAN is None or "CompactCheck.CountedOps" not in BUILT, reason="needs the library the Lean project built")
 # everything the surface shows is compiled only where the whole project is built (some of it needs Mathlib)
 WHOLE_BUILD = {"CompactCheck.Spec", "CompactCheck.Soundness"} <= set(BUILT)
+needs_whole = pytest.mark.skipif(LEAN is None or not WHOLE_BUILD, reason="needs the whole library the Lean project built (some of it needs Mathlib)")
 
 
 # ---- an excerpt, a definition, the check -------------------------------------------------------------
@@ -366,6 +367,7 @@ theorem leap_counting (k n : Nat) : counting.leap k n = n + k := rfl
 end Toy
 """
 TOY_RULES = """import Toy.Base
+import Lean
 
 namespace Toy
 
@@ -379,6 +381,14 @@ theorem shortcut_eq (n : Nat) : shortcut n = n := rfl
 theorem count_one (I : Interp) : count I 1 = I.step 0 := by simp [count]
 
 end Toy
+
+-- constants that no source line declares and no declaration stands behind, as a command can make them: one
+-- named as the library names its own, one named outside it
+open Lean Elab Command in
+run_cmd liftCoreM do
+  for n in [`Toy.unwritten, `Elsewhere.unwritten] do
+    addDecl <| .defnDecl { name := n, levelParams := [], type := mkConst ``Nat, value := mkNatLit 0,
+                           hints := .abbrev, safety := .safe }
 """
 # a module shown in part, as the Lean project's soundness file is: one lemma of the base, and a proof about
 # the rule, which unfolds it, so that this module keeps the equations Lean makes of the rule
@@ -489,6 +499,10 @@ def test_lean_says_which_constants_of_the_library_a_run_shows(toy, toy_surface):
     # a constant Lean made goes with the declaration its name extends, in whichever module Lean keeps it: an
     # equation of a shown definition is shown, and an equation of the rule shows nothing of the rule
     assert {n: got["classes"][n] for n in made} == {"Toy.count.eq_1": "shown", "Toy.shortcut.eq_1": "closed"}
+    # with no declaration of the library behind it: a constant in the library's namespace goes by the module
+    # that keeps it (here the rules', which is not shown); one named outside it is nothing the library wrote
+    unwritten = offered.classify(toy_surface, toy, ["Toy.unwritten", "Elsewhere.unwritten"])["classes"]
+    assert unwritten == {"Toy.unwritten": "closed", "Elsewhere.unwritten": "shown"}
     assert got["classes"]["Toy.leapBy"] == "exposed" and got["library"]["exposed"] == ["Toy.leapBy"]
     assert got["classes"]["Toy.Interp.casesOn"] == "shown" and got["classes"]["Nat.succ"] == "absent" == got["classes"]["Toy.nothing"]
     assert got["library"]["modules"] == 3 and got["library"]["shown"] < got["library"]["constants"]
@@ -795,10 +809,14 @@ def test_the_library_the_lean_project_built_is_read_as_the_minimal_surface_says(
               "CompactCheck.checkProof", "CompactCheck.symmetricNet"]
     exposed = ["CompactCheck.CostM.interval", "CompactCheck.Box", "CompactCheck.cornerLabel"]
     # equations Lean made on demand, both kept by the module of the general single rule, which is shown in
-    # part: one of a definition the run shows, one of a definition of the general checker, which it does not.
-    # (On the whole library the soundness file keeps such equations of the rules' definitions, `rootBox` among
-    # them. Taking them for shown is what first made `rootBox` and `Range` come out exposed there.)
+    # part: one of a definition the run shows, one of a definition of the general checker, which it does not
     made = {"CompactCheck.Cost.add.eq_1": "shown", "CompactCheck.gevalOps.eq_1": "closed"}
+    if WHOLE_BUILD:
+        # on the whole library, where about a fifth of the constants are kept by another module than the one of
+        # their declaration: the soundness file, shown in part, keeps the equation of `rootBox` (taking it for
+        # shown is what first made `rootBox` and `Range` come out exposed there), and a module of the rules,
+        # which the run does not show, keeps the equation of `addOp`, which the evaluator's file shows
+        made.update({"CompactCheck.rootBox.eq_1": "closed", "CompactCheck.addOp.eq_1": "shown"})
     want = {**{n: "shown" for n in shown}, **{n: "closed" for n in closed}, **{n: "exposed" for n in exposed}, **made}
     got = offered.classify(s, PROJECT, list(want))
     off = {n: f"{got['classes'][n]}, not {w}" for n, w in want.items() if got["classes"][n] != w}
@@ -867,3 +885,44 @@ def test_a_checker_that_calls_the_interval_rule_is_found_on_the_real_library(tmp
     assert uses == {"Candidate.Beyond.D": ["CompactCheck.Interp.interval"], "Candidate.Beyond.byNumber": ["CompactCheck.Interp.interval"],
                     "Candidate.Beyond.uses_symmetry": ["CompactCheck.symmetricNet"],
                     "Candidate.Beyond.uses_task_field": ["CompactCheck.Task.labelSymmetric"]}
+
+
+# A proof as an agent writes it: it unfolds a definition of the evaluator, whose file the run shows whole. Compiled
+# after the soundness file, as the worked example is, Lean rewrites with an equation that a module of the rules keeps.
+REAL_UNFOLDS = """import CompactCheck.Soundness
+namespace Candidate.Unfolds
+open CompactCheck
+theorem add_none (a b : Tensor Rat) (h : (a.shape == b.shape && a.data.size == b.data.size) = false) :
+    addOp a b = none := by
+  rw [addOp]
+  simp [h]
+end Candidate.Unfolds
+"""
+# The equation Lean made of `rootBox`, by its name. The soundness file keeps it.
+REAL_NAMES = """import CompactCheck.Soundness
+namespace Candidate.Names
+def theEquation := @CompactCheck.rootBox.eq_1
+end Candidate.Names
+"""
+
+
+@needs_whole
+def test_on_the_whole_library_an_equation_goes_with_its_definition_not_with_the_module_that_keeps_it(tmp_path, monkeypatch):
+    """Modules compiled after the soundness file, as a submission is, on the whole library. A proof that
+    unfolds `addOp`, which the run shows, rewrites with the equation Lean made of it, and a module of the
+    rules keeps that equation: the proof uses nothing beyond the surface. The equation of `rootBox` is kept
+    by the soundness file, which the run shows in part: naming it is a use of `rootBox`. (Going by the module
+    that keeps an equation had both wrong: the first proof was not counted and the second was.)"""
+    monkeypatch.setattr(inspect, "lean_binary", lambda project: LEAN)
+    path = sorted((PROJECT / ".lake" / "packages").glob("*/.lake/build/lib/lean")) + [BUILT["CompactCheck.CountedOps"].parent.parent]
+    oleans = {}
+    for name, text in (("Unfolds", REAL_UNFOLDS), ("Names", REAL_NAMES)):
+        (tmp_path / "Candidate").mkdir(exist_ok=True)
+        (tmp_path / "Candidate" / f"{name}.lean").write_text(text)
+        compile_lean(tmp_path, f"Candidate/{name}.lean", tmp_path / "out", path)
+        oleans[f"Candidate.{name}"] = tmp_path / "out" / "Candidate" / f"{name}.olean"
+    s = real_surface(tmp_path)
+    assert offered.of_oleans(s, PROJECT, {"Candidate.Unfolds": oleans["Candidate.Unfolds"]})["uses"] == []
+    uses = {u["constant"]: u["closed"] for u in offered.of_oleans(s, PROJECT, {"Candidate.Names": oleans["Candidate.Names"]})["uses"]}
+    assert list(uses) == ["Candidate.Names.theEquation"]
+    assert {"CompactCheck.rootBox", "CompactCheck.rootBox.eq_1"} <= set(uses["Candidate.Names.theEquation"])

@@ -51,15 +51,22 @@ works on a network: no rule, no earlier proof or its length, no doc. Four things
    therefore counted only if none of its own constants (a definition, a statement or a proof) mentions a
    constant of the library that the surface does not show. Lean is asked, as for the lock: its own record
    of where each constant is declared says whether the line is one the run shows, and the modules the
-   service compiled say what a submission's constants mention. A constant Lean made itself (an equation
-   of a definition, a matcher, a recursor) goes with the declaration its name extends, in whichever module
-   Lean keeps it. What a shown definition unfolds to is not held against a proof. The agent is told at
-   the compile and again with the receipt: which of its constants, and what they mention. A proof that
-   is not clean stays accepted and is recorded without a length; the receipt is kept as the service
-   wrote it. Before a run starts, Lean's reading is checked against constants the surface names as shown
-   and as closed, on the library the project built. The base allowlist of the Lean service still admits
-   the linear interval rule (`Interp.interval`), so without this rule a minimal-knowledge run would have
-   scored a checker built on it.
+   service compiled say what a submission's constants mention. A constant Lean made itself (an equation of
+   a definition, a matcher, a recursor) goes with the declaration its name extends, in whichever module
+   Lean keeps it. Lean keeps such a constant with the first module that asks for it, which need not be the
+   module of its declaration (on the whole library that holds for a fifth of the constants). Going by the
+   keeping module had two faults: the equation of a rule that the soundness file keeps was taken for
+   shown, and the rule with it; and a proof that unfolds a definition the run shows was taken for a use of
+   what it does not show, where a module of the rules keeps that definition's equation. A constant with no
+   declaration of the library behind it counts as shown if it is named outside the library's namespace (it
+   belongs to Lean's own library or to Mathlib), and goes by the modules that keep it otherwise. What a
+   shown definition unfolds to is not held against a proof. The agent is told at the compile and again
+   with the receipt: which of its constants, and what they mention. A proof that is not clean stays
+   accepted and is recorded without a length; the receipt is kept as the service wrote it. Before a run
+   starts, Lean's reading is checked against constants the surface names as shown and as closed, on the
+   library the project built. The base allowlist of the Lean service still admits the linear interval rule
+   (`Interp.interval`), so without this rule a minimal-knowledge run would have scored a checker built on
+   it.
 
 The maximum-knowledge condition supplies the rules on purpose and keeps what it showed, without the README.
 

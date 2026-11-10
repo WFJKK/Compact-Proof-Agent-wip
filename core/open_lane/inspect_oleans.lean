@@ -181,6 +181,8 @@ structure Library where
   /-- Per constant that was written in a source file: its module, and the line its name stands on. -/
   declared : Std.HashMap Name (String × Nat) := {}
   shown : Std.HashMap String Shown := {}
+  /-- The first part of the library's module names, which is the namespace it declares in. -/
+  root : Name := .anonymous
 
 /-- The declaration behind `n`: `n` itself if it was written in a source file, else the nearest
     declaration its name extends (`f.eq_1`, `f.match_1`, `S.rec` and `S.mk.injEq` go with `f`, `f`,
@@ -195,9 +197,11 @@ def Library.declOf (lib : Library) (n : Name) : Option (String × Nat) := Id.run
   return none
 
 /-- Whether the run shows the library constant `n`: the module of the declaration behind it is shown
-    whole, or that declaration's line is one of the lines shown. A constant with no declaration of
-    the library behind it (what Lean made for a declaration of its own library or of Mathlib, and a
-    module of this library happens to keep) is nothing the library wrote and counts as shown. -/
+    whole, or that declaration's line is one of the lines shown. With no declaration of the library
+    behind it: a constant named outside the library's namespace is what Lean made for a declaration
+    of its own library or of Mathlib and a module of this library happens to keep, nothing the library
+    wrote, and counts as shown; one named inside it goes by the modules that keep it, shown if the
+    run shows them at all. -/
 def Library.shows (lib : Library) (n : Name) : Bool :=
   match lib.declOf n with
   | some (m, l) =>
@@ -205,7 +209,10 @@ def Library.shows (lib : Library) (n : Name) : Bool :=
     | some .whole => true
     | some (.lines ls) => ls.contains l
     | none => false
-  | none => true
+  | none =>
+    if lib.root.isPrefixOf ((privateToUserName? n).getD n) then
+      (lib.homes.getD n #[]).all fun m => lib.shown.contains m
+    else true
 
 /-- The projection function of field `i` of the library structure `s`, by the constructor's binders. -/
 def Library.fieldOf (lib : Library) (s : Name) (i : Nat) : Option Name := do
@@ -332,7 +339,8 @@ def run (args : List String) : IO UInt32 := do
         libConsts := libConsts.insert ci.name ci
         libHomes := libHomes.insert ci.name ((libHomes.getD ci.name #[]).push m)
     let lib : Library := { consts := libConsts, homes := libHomes, declared := libDeclared,
-                           shown := shownSpec.foldl (fun acc (m, sh) => acc.insert m sh) {} }
+                           shown := shownSpec.foldl (fun acc (m, sh) => acc.insert m sh) {},
+                           root := ((library[0]!.1.splitOn ".").headD "").toName }
     let shownSet : Std.HashSet Name := lib.homes.fold (fun acc n _ => if lib.shows n then acc.insert n else acc) {}
     let mut exposed : Std.HashSet Name := {}
     for n in shownSet do
