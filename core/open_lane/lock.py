@@ -8,7 +8,7 @@ replaces the second: the same checker, another network of the same sizes, a new 
 The parts are told apart by module. The locked modules are the ones that declare the checker and the
 soundness theorem (the manifest names both) and every submitted module they import, directly or not. A
 proof can be locked when its instance theorem is declared outside them, in a module that imports them. A
-constant is taken to be declared in the module it is named after: `Candidate.Col.D` in `Candidate/Col.lean`
+constant is taken to be declared in the module it is named after: `Candidate.Check.D` in `Candidate/Check.lean`
 (the longest prefix of the name that is a submitted module).
 
 A locked module may import the protected module of the network it was written for (the checker reads that

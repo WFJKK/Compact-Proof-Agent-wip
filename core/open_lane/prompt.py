@@ -181,8 +181,8 @@ MODULES_RULE = """- Keep the checker and the instance in separate modules, from 
   first scored submission on. One or more modules hold `D`, `D_sound`
   and everything they use. A module of its own, which imports them,
   holds `D_instance`, the facts it is built from and the theorem proving
-  `Target`. Name each constant after its module (`Candidate.Col.D` in
-  `Candidate/Col.lean`). The checker's modules may import the protected
+  `Target`. Name each constant after its module (`Candidate.Check.D` in
+  `Candidate/Check.lean`). The checker's modules may import the protected
   module for `graph` and `task`.
 """
 MODULES_WHY = {

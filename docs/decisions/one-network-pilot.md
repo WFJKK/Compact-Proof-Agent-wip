@@ -73,7 +73,7 @@ apart by module (`core/open_lane/lock.py`):
 
 - The locked modules are the ones that declare the checker and the soundness theorem, and every submitted
   module they import. A constant is taken to be declared in the module it is named after
-  (`Candidate.Col.D` in `Candidate/Col.lean`).
+  (`Candidate.Check.D` in `Candidate/Check.lean`).
 - A proof can be locked when its instance theorem is declared outside them. A proof kept in one module
   cannot. Template v5 says so from the first round, each round's receipts say of every scored proof
   whether it is ready, and the aim says so when the proof the score rests on is not.
