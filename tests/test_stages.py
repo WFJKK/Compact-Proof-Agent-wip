@@ -1,9 +1,12 @@
 """After the proof rounds of an open-lane run: the lock, the seed check and the scaling question.
 
 No Lean and no model: the Lean project is a folder of stand-in files, the acceptance service is a function
-that accepts what it is handed and writes the receipt the real one would, and the sessions are scripts of
-tool calls (the fake backend). What is tested is the pipeline's side: which proof is locked and why, that
-the locked modules reach the service unchanged whatever a session does, and what the run records.
+that accepts what it is handed and writes the receipt the real one would, the sessions are scripts of tool
+calls (the fake backend), and Lean's account of what a submission's compiled modules declare
+(core.open_lane.inspect) is a stand-in that reads the toy sources below. What is tested is the pipeline's
+side: which proof is locked and why, that the locked modules reach the service unchanged whatever a session
+does, that a result counts only when the checker is the locked one, and what the run records. Lean's own
+account, on modules compiled by Lean, is tested in tests/test_lock_lean.py.
 """
 
 from __future__ import annotations
@@ -17,7 +20,8 @@ import yaml
 
 from core import loop
 from core.open_lane import stages
-from core.open_lane.lock import LockError, declared_names, imports_of, lockable, protected_name, read_lock, renamed
+from core.open_lane import inspect
+from core.open_lane.lock import LockError, lockable, protected_name, read_lock, renamed, same_checker
 from core.open_lane.session import Session
 from core.run_config import RunConfigError, load_run_config, read_run_config_file
 from core.util import REPO_ROOT
@@ -90,58 +94,176 @@ def submission(path: Path, modules: dict, scored: dict | None, network: str = A,
 
 SCORED = {"checker": "Candidate.Col.D", "sound": "Candidate.Col.D_sound", "instance": "Candidate.ColRun.D_instance",
           "certificate": [], "claimed_bill": 20000}
+PROJECT = Path("/nowhere")  # the stand-in below needs no Lean project
+
+
+def stand_in_inspect(lean_project, submission, where=(), closure=()):
+    """In place of core.open_lane.inspect.inspect_submission: what Lean would say about the toy modules of
+    this file, read from their source. Good for these sources only (one namespace per module, a `def` or
+    `theorem` per line, one import per line): Lean's real account is tested in tests/test_lock_lean.py.
+    The canonical text of a constant is the source of its module and of what that imports, with the
+    protected module's name left out, so a changed module is a changed checker here as it is in Lean."""
+    import re
+
+    submission = Path(submission)
+    manifest = json.loads((submission / "manifest.json").read_text())
+    texts = {rel[:-5].replace("/", "."): (submission / rel).read_text() for rel in manifest["modules"]}
+    imports = {m: re.findall(r"^import\s+([\w.]+)", t, re.M) for m, t in texts.items()}
+    protected = next((i for m in texts for i in imports[m] if i.startswith("Protected.")), None)
+    declared = {}
+    for m, t in texts.items():
+        space = (re.search(r"^namespace\s+([\w.]+)", t, re.M) or [None, ""])[1]
+        for kind, name in re.findall(r"^(def|theorem)\s+(\w+)", t, re.M):
+            declared.setdefault(f"{space}.{name}" if space else name, []).append((m, kind))
+    plain = lambda t: re.sub(r"N_[A-Za-z0-9_]+", "N_", t)
+
+    def reach(m, seen=None):
+        seen = seen if seen is not None else []
+        if m in texts and m not in seen:
+            seen.append(m)
+            for i in imports[m]:
+                reach(i, seen)
+        return seen
+
+    closures = {}
+    for c in closure:
+        entries = []
+        for m, kind in declared.get(c, [])[:1]:
+            entries.append({"name": c, "declared": c, "modules": [x for x, _ in declared[c]], "kind": kind,
+                            "text": "\n".join(plain(texts[x]) for x in sorted(reach(m)))})
+            if protected:
+                entries.append({"name": "Protected._.graph", "declared": f"{protected}.graph", "modules": [protected],
+                                "kind": "def", "text": "the graph"})
+        closures[c] = {"found": c in declared, "constants": entries}
+    info = {"modules": {m: {"imports": imports[m], "constants": 1, "is_module": False} for m in texts},
+            "duplicates": [{"name": c, "modules": sorted(x for x, _ in ms)} for c, ms in sorted(declared.items()) if len(ms) > 1],
+            "reserved": [], "where": {c: sorted(x for x, _ in declared.get(c, [])) for c in where},
+            "closures": closures, "protected": protected}
+    inspect.unambiguous(info)
+    return info
+
+
+@pytest.fixture(autouse=True)
+def lean_stand_in(monkeypatch):
+    monkeypatch.setattr(inspect, "inspect_submission", stand_in_inspect)
 
 
 def test_a_proof_is_locked_by_module_the_checker_apart_from_the_instance(tmp_path):
     """The locked modules are the ones that declare the checker and its soundness theorem, with what they
-    import; the instance must be declared outside them. A proof in one module, or one whose constants are
-    not named after their modules, cannot be locked, and the reason says what to change."""
-    lock = read_lock(submission(tmp_path / "two", {"Candidate/ColRun.lean": INSTANCE, "Candidate/Col.lean": GENERAL}, SCORED))
+    import; the instance must be declared outside them. Where a constant is declared and what a module
+    imports is Lean's account, not a guess from names: a file named like the checker that does not declare
+    it is not locked, and the file that does is. A proof in one module, or one whose checker Lean finds in
+    no module or in two, cannot be locked, and the reason says so. The lock carries the checker's
+    fingerprints."""
+    lock = read_lock(submission(tmp_path / "two", {"Candidate/ColRun.lean": INSTANCE, "Candidate/Col.lean": GENERAL}, SCORED), PROJECT)
     assert list(lock["modules"]) == ["Candidate/Col.lean"] and lock["free"] == ["Candidate/ColRun.lean"]
     assert (lock["checker"], lock["sound"], lock["protected"]) == ("Candidate.Col.D", "Candidate.Col.D_sound", PA)
+    assert lock["home"] == {"checker": "Candidate/Col.lean", "sound": "Candidate/Col.lean"}
     assert lock["modules"]["Candidate/Col.lean"] == GENERAL and len(lock["digest"]) == 64
+    assert set(lock["fingerprints"]) == {"checker", "context", "sound_statement"} and all(len(v) == 64 for v in lock["fingerprints"].values())
+    assert set(lock["constants"]["checker"]) == {"Candidate.Col.D"} and set(lock["constants"]["context"]) == {"Protected._.graph"}
     # what the checker's module imports is locked with it
     deep = {"Candidate/Lemmas.lean": "theorem l : True := trivial\n", "Candidate/Col.lean": "import Candidate.Lemmas\n" + GENERAL,
             "Candidate/ColRun.lean": INSTANCE}
-    assert sorted(read_lock(submission(tmp_path / "deep", deep, SCORED))["modules"]) == ["Candidate/Col.lean", "Candidate/Lemmas.lean"]
+    assert sorted(read_lock(submission(tmp_path / "deep", deep, SCORED), PROJECT)["modules"]) == ["Candidate/Col.lean", "Candidate/Lemmas.lean"]
+    # the checker declared in another file than the one named like it (a review's case, 10 November 2026)
+    elsewhere = {"Candidate/Col.lean": f"import Protected.{PA}\n", "Candidate/Real.lean": "import Candidate.Lemmas\n" + GENERAL,
+                 "Candidate/Lemmas.lean": "theorem l : True := trivial\n",
+                 "Candidate/ColRun.lean": INSTANCE.replace("import Candidate.Col", "import Candidate.Real")}
+    moved = read_lock(submission(tmp_path / "elsewhere", elsewhere, SCORED), PROJECT)
+    assert sorted(moved["modules"]) == ["Candidate/Lemmas.lean", "Candidate/Real.lean"]
+    assert sorted(moved["free"]) == ["Candidate/Col.lean", "Candidate/ColRun.lean"] and moved["home"]["checker"] == "Candidate/Real.lean"
     one = {"checker": "Candidate.One.D", "sound": "Candidate.One.D_sound", "instance": "Candidate.One.D_instance",
            "certificate": [], "claimed_bill": 1}
-    assert "the instance belongs in a module of its own" in lockable(submission(tmp_path / "one", {"Candidate/One.lean": ONE_MODULE}, one))
-    elsewhere = {**SCORED, "checker": "Candidate.Other.D"}
-    assert "must be declared in exactly one submitted module" in lockable(submission(
-        tmp_path / "named", {"Candidate/Col.lean": GENERAL, "Candidate/ColRun.lean": INSTANCE}, elsewhere))
-    with pytest.raises(LockError, match="not a scored proof"):
-        read_lock(submission(tmp_path / "plain", {"Candidate/Col.lean": GENERAL}, None))
-
-
-def test_the_lock_follows_where_a_constant_is_declared_not_what_it_is_called(tmp_path):
-    """Lean lets `Candidate.Col.D` be declared in any file. A review (10 November 2026) had the lock freeze an
-    empty Candidate/Col.lean while the file with the real definition stayed editable, and an import with a
-    comment after it left a dependency outside the lock. The lock reads the declarations and the imports
-    from the text: the module that declares the checker is the one locked, with what it imports; a constant
-    declared nowhere in plain view, or in two modules, or behind #exit, is not locked at all."""
-    real = GENERAL.replace("import CompactCheck.CountedOps", "import CompactCheck.CountedOps\nimport Candidate.Lemmas -- the tables")
-    elsewhere = {"Candidate/Col.lean": f"import Protected.{PA}\n", "Candidate/Real.lean": real,
-                 "Candidate/Lemmas.lean": "theorem l : True := trivial\n", "Candidate/ColRun.lean": INSTANCE.replace("import Candidate.Col", "import Candidate.Real")}
-    lock = read_lock(submission(tmp_path / "elsewhere", elsewhere, SCORED))
-    assert sorted(lock["modules"]) == ["Candidate/Lemmas.lean", "Candidate/Real.lean"]  # not the empty file named like the checker
-    assert sorted(lock["free"]) == ["Candidate/Col.lean", "Candidate/ColRun.lean"]
-    assert {"Candidate.Col.D", "Candidate.Col.D_sound", "l"} <= set(lock["declared"])
-    # how the text is read
-    text = ("import Candidate.A -- why\nimport Protected.N_x_c1 Candidate.B\n/- a note\nimport Candidate.Fake\n-/\n"
-            "namespace Candidate.Col\n@[simp] def D : Nat := 0\n-- def Hidden : Nat := 1\nsection s\ntheorem D_sound : True := trivial\nend s\n"
-            "private def secret := 1\nend Candidate.Col\ndef _root_.Candidate.Abs.x := \"-- text /- too\"\ntheorem top : True := trivial\n")
-    assert imports_of(text) == ["Candidate.A", "Protected.N_x_c1", "Candidate.B"]
-    assert declared_names(text) == {"Candidate.Col.D", "Candidate.Col.D_sound", "Candidate.Abs.x", "top"}
-    # declared twice, declared only in a comment, or behind #exit: not locked
+    assert "the instance belongs in a module of its own" in lockable(submission(tmp_path / "one", {"Candidate/One.lean": ONE_MODULE}, one), PROJECT)
+    nowhere = {**SCORED, "checker": "Candidate.Other.D"}
+    assert "Candidate.Other.D must be declared in exactly one submitted module; Lean finds it in none" in lockable(submission(
+        tmp_path / "named", {"Candidate/Col.lean": GENERAL, "Candidate/ColRun.lean": INSTANCE}, nowhere), PROJECT)
     twice = {**elsewhere, "Candidate/Col.lean": GENERAL}
-    assert "found in Candidate/Col.lean and Candidate/Real.lean" in lockable(submission(tmp_path / "twice", twice, SCORED))
-    hidden = {"Candidate/Col.lean": GENERAL.replace("def D : Checker := fun I => pure I.nzero", "/- def D : Checker := fun I => pure I.nzero -/"),
-              "Candidate/ColRun.lean": INSTANCE}
-    assert "found in none of the submitted modules" in lockable(submission(tmp_path / "hidden", hidden, SCORED))
-    early = {"Candidate/Col.lean": GENERAL + "#exit\n", "Candidate/ColRun.lean": INSTANCE}
-    with pytest.raises(LockError, match="#exit"):
-        read_lock(submission(tmp_path / "early", early, SCORED))
+    assert "Candidate.Col.D is declared by more than one module (Candidate.Col, Candidate.Real)" in lockable(
+        submission(tmp_path / "twice", twice, SCORED), PROJECT)
+    with pytest.raises(LockError, match="not a scored proof"):
+        read_lock(submission(tmp_path / "plain", {"Candidate/Col.lean": GENERAL}, None), PROJECT)
+
+
+def test_a_result_counts_only_when_lean_finds_the_locked_checker_in_it(tmp_path):
+    """After a seed-check submission is accepted, Lean is asked again, about the modules the service compiled
+    for it: the checker and the soundness theorem must be declared where they were locked, and the checker's
+    fingerprints (its kernel terms, the graph and task it reaches, the soundness statement) must be the
+    lock's. The locked text being unchanged is not the evidence: here the text is the lock's in one case and
+    the checker is still another."""
+    lock = read_lock(submission(tmp_path / "a", {"Candidate/ColRun.lean": INSTANCE, "Candidate/Col.lean": GENERAL}, SCORED), PROJECT)
+    new = "N_max2_ladder_n2v24d8_s3_c570"
+    general_b, instance_b = renamed(GENERAL, PA, new), INSTANCE.replace(PA, new)
+    same = same_checker(lock, submission(tmp_path / "b", {"Candidate/ColRun.lean": instance_b, "Candidate/Col.lean": general_b}, SCORED, B, 570), PROJECT)
+    assert same["verified"] is True and same["why"] is None and same["fingerprints"] == lock["fingerprints"]
+    changed = general_b.replace("pure I.nzero", "pure (I.nofNat 570)")
+    other = same_checker(lock, submission(tmp_path / "c", {"Candidate/ColRun.lean": instance_b, "Candidate/Col.lean": changed}, SCORED, B, 570), PROJECT)
+    assert other["verified"] is False
+    assert "the checker's kernel terms differ from the locked checker's (changed: Candidate.Col.D)" in other["why"]
+    again = {"Candidate/ColRun.lean": instance_b, "Candidate/Col.lean": general_b,
+             "Candidate/Again.lean": "namespace Candidate.Col\ndef D : Nat := 1\nend Candidate.Col\n"}
+    twice = same_checker(lock, submission(tmp_path / "d", again, SCORED, B, 570), PROJECT)
+    assert twice["verified"] is False and "Candidate.Col.D is declared by more than one module (Candidate.Again, Candidate.Col)" in twice["why"]
+    gone = same_checker(lock, submission(tmp_path / "e", {"Candidate/ColRun.lean": instance_b}, SCORED, B, 570), PROJECT)
+    assert gone["verified"] is False and "the compiled modules declare no Candidate.Col.D" in gone["why"]
+    # the locked modules can be in a submission whose manifest names another checker: that proof is not about the lock
+    named = same_checker(lock, submission(tmp_path / "f", {"Candidate/ColRun.lean": instance_b, "Candidate/Col.lean": general_b},
+                                          {**SCORED, "checker": "Candidate.ColRun.E"}, B, 570), PROJECT)
+    assert named["verified"] is False and "names Candidate.ColRun.E as its checker, not the locked Candidate.Col.D" in named["why"]
+
+
+def test_leans_answer_becomes_fingerprints_or_is_refused_where_it_does_not_single_out_a_constant():
+    """What the pipeline makes of Lean's answer (core.open_lane.inspect), on an answer written out here. The
+    three fingerprints are digests over the constants' canonical texts by name: the candidate's constants
+    the checker depends on, those the soundness statement is written in, and the protected module's that
+    either reaches. An answer is refused when a name does not say which constant is meant (declared twice,
+    or under the marker of the protected module) or the compiled module does not show what a constant is
+    (an axiom, a file of Lean's module system)."""
+    import copy
+
+    def entry(name, module, kind="def", text="terms"):
+        return {"name": name, "declared": name.replace("Protected._", "Protected.N"), "modules": [module], "kind": kind, "text": text}
+
+    info = {"modules": {"Candidate.Col": {"imports": [], "constants": 2, "is_module": False}}, "duplicates": [], "reserved": [],
+            "where": {}, "protected": "Protected.N", "closures": {
+                "Candidate.Col.D": {"found": True, "constants": [entry("Candidate.Col.D", "Candidate.Col"), entry("Protected._.graph", "Protected.N")]},
+                "Candidate.Col.D_sound": {"found": True, "constants": [
+                    entry("Candidate.Col.D_sound", "Candidate.Col", "theorem"), entry("Candidate.Col.D", "Candidate.Col"),
+                    entry("Protected._.task", "Protected.N")]}}}
+    inspect.unambiguous(info)
+    prints, parts = inspect.fingerprints(info, "Candidate.Col.D", "Candidate.Col.D_sound")
+    assert {k: sorted(v) for k, v in parts.items()} == {"checker": ["Candidate.Col.D"], "sound_statement": ["Candidate.Col.D", "Candidate.Col.D_sound"],
+                                                       "context": ["Protected._.graph", "Protected._.task"]}
+    assert set(prints) == {"checker", "sound_statement", "context"} and len(set(prints.values())) == 3
+
+    def changed(edit):
+        other = copy.deepcopy(info)
+        edit(other)
+        return other
+
+    def text_of(root, i, text):
+        return lambda o: o["closures"][root]["constants"][i].__setitem__("text", text)
+
+    # another body for the checker is another checker; another graph is another context and the same checker
+    body = inspect.fingerprints(changed(text_of("Candidate.Col.D", 0, "other terms")), "Candidate.Col.D", "Candidate.Col.D_sound")[0]
+    assert body["checker"] != prints["checker"] and body["context"] == prints["context"]
+    graph = inspect.fingerprints(changed(text_of("Candidate.Col.D", 1, "another graph")), "Candidate.Col.D", "Candidate.Col.D_sound")[0]
+    assert graph["checker"] == prints["checker"] and graph["context"] != prints["context"]
+    refused = [
+        (lambda o: o["duplicates"].append({"name": "Candidate.Col.D", "modules": ["Candidate.Col", "Candidate.Again"]}), "declared by more than one module"),
+        (lambda o: o["reserved"].append("Protected._.graph"), "is named under Protected._"),
+        (lambda o: o["closures"]["Candidate.Col.D"]["constants"][0].__setitem__("kind", "axiom"), "does not show what Candidate.Col.D is"),
+        (lambda o: o["modules"]["Candidate.Col"].__setitem__("is_module", True), "does not show what Candidate.Col.D is"),
+        (lambda o: o["closures"]["Candidate.Col.D"].update(found=False, constants=[]), "declare no Candidate.Col.D"),
+    ]
+    for edit, message in refused:
+        with pytest.raises(inspect.Refused, match=message):
+            other = changed(edit)
+            inspect.unambiguous(other)
+            inspect.fingerprints(other, "Candidate.Col.D", "Candidate.Col.D_sound")
+    # a refusal is an answer of Lean's about the proof; InspectError that is not one means Lean could not be asked
+    assert issubclass(inspect.Refused, inspect.InspectError)
 
 
 def test_a_locked_module_changes_in_the_protected_modules_name_and_nowhere_else(tmp_path):
@@ -220,6 +342,7 @@ def pilot_run(tmp_path: Path, monkeypatch, scripts: list[dict], rounds_max: int 
     path = tmp_path / "run.yaml"
     path.write_text(yaml.safe_dump(cfg))
     monkeypatch.setattr(loop, "check_lean_lock", lambda project: {})
+    monkeypatch.setattr(loop, "check_inspection", lambda project: None)
     monkeypatch.setattr(loop, "lean_identity", lambda project, knowledge="minimal": dict(IDENT))
     monkeypatch.setattr(Session, "_service", fake_service(448))
     return path
@@ -286,16 +409,23 @@ def test_a_run_proves_one_network_then_checks_a_second_seed_with_the_checker_loc
     # the seed check
     records = run.read_archive()
     check = [r for r in records if r.get("stage") == "seed_check"]
-    assert [r["status"] for r in check] == ["ok"] and check[0]["network"] == B and check[0]["certified"] == 570
-    assert check[0]["lock"] == {"digest": locked["digest"], "of": locked["record_id"], "intact": True, "in_receipt": True,
-                                "same_description_size": True}
+    assert [r["status"] for r in check] == ["ok", "ok"] and all(r["network"] == B and r["certified"] == 570 for r in check)
+    # the first accepted proof came with a second declaration of the checker's name (the stand-in service takes
+    # it; the real one refuses a constant declared twice): Lean does not find the locked checker in it alone
+    assert check[0]["lock"]["intact"] and check[0]["lock"]["verified"] is False
+    assert "Candidate.Col.D is declared by more than one module (Candidate.Again, Candidate.Col)" in check[0]["lock"]["why"]
+    assert check[1]["lock"] == {"digest": locked["digest"], "of": locked["record_id"], "intact": True, "in_receipt": True,
+                                "verified": True, "why": None, "fingerprints": locked["fingerprints"]}
     tools = [json.loads(l) for l in (run.round_path(2) / "attempt_0" / "open_lane" / "tools.jsonl").read_text().splitlines()]
     errors = [t["outcome"].get("error", "") for t in tools]
     assert "Candidate/Col.lean is locked" in errors[0] and errors[1] == ""
     assert "scored.checker must be Candidate.Col.D" in errors[2] and "scored proofs only" in errors[3]
-    assert "is not one of this run's networks" in errors[4] and errors[5] == ""
-    assert "Candidate/Again.lean declares Candidate.Col.D, which the locked modules declare" in errors[6] and errors[7] == ""
-    sent = run.round_path(2) / "attempt_0" / "open_lane" / "submissions" / "000"
+    assert "is not one of this run's networks" in errors[4] and errors[5:] == ["", "", ""]
+    # the session is told, when the receipt arrives, whether Lean finds the locked checker in the accepted proof
+    assert [t["outcome"].get("locked_checker") for t in tools[6:]] == [False, True]
+    asked = json.loads((run.round_path(2) / "attempt_0" / "open_lane" / "submissions" / "000" / "lock.json").read_text())
+    assert asked["intact"] and asked["verified"] is False and "declared by more than one module" in asked["why"]
+    sent = run.round_path(2) / "attempt_0" / "open_lane" / "submissions" / "001"
     new = "N_max2_ladder_n2v24d8_s3_c570"
     assert (sent / "Candidate/Col.lean").read_text() == GENERAL.replace(PA, new)  # the locked text, renamed, not the session's
     assert sorted(json.loads((sent / "manifest.json").read_text())["modules"]) == ["Candidate/Col.lean", "Candidate/ColRunB.lean"]
@@ -303,12 +433,22 @@ def test_a_run_proves_one_network_then_checks_a_second_seed_with_the_checker_loc
     per_input = (170368 - 448) // 576
     assert (result["certified"], result["real_correct"], result["length"]) == (570, 576, 20448)
     assert result["finishing_total"] == 20448 + 6 * per_input and result["ratio"] == pytest.approx(170368 / (20448 + 6 * per_input))
-    assert result["outcome"] == "certified" and result["lock_intact"] and result["lock_in_receipt"] and result["same_description_size"]
+    assert result["outcome"] == "certified" and result["lock_intact"] and result["lock_in_receipt"] and result["lock_verified"]
+    assert result["record_id"] == check[1]["record_id"] and result["fingerprints"] == locked["fingerprints"]
     assert any(f"on {B} the locked checker certified 570 of the 576" in l for l in lines)
 
     # the scaling question: lemmas only, about the locked checker
     scaling = [r for r in records if r.get("stage") == "scaling"]
     assert [r["status"] for r in scaling] == ["lemma"] and state["stages"]["scaling"]["result"]["lemmas"][0]["theorem"] == "Candidate.Growth.bill_fixed"
+    # Lean is asked about a lemma's submission too: Candidate.Col.D in its statement is the locked checker
+    assert scaling[0]["lock"]["verified"] is True and state["stages"]["scaling"]["result"]["lemmas"][0]["locked_checker"] is True
+    # the report: the two networks side by side, on what the claim of one checker rests, and the lemma
+    report = "\n".join(stages.report_lines(run))
+    assert f"| {A} (written for) | 576 of 576 | 20,448 | 170,368 | 8.332 |" in report
+    assert f"| {B} (second seed, checker locked) | 570 of 576 | 20,448 | 170,368 |" in report
+    assert "The same checker on both: Lean reads the locked checker's kernel terms" in report and "the receipt's hashes say the same" in report
+    assert "- `Candidate.Growth.bill_fixed`: ∀ w, bill w = 20000 (the locked checker)" in report
+    assert "Passed over, though it finishes cheaper" in report and "module of its own" in report
     tools = [json.loads(l) for l in (run.round_path(3) / "attempt_0" / "open_lane" / "tools.jsonl").read_text().splitlines()]
     assert "lemmas only" in tools[0]["outcome"]["error"]
     sent = run.round_path(3) / "attempt_0" / "open_lane" / "submissions" / "000"
@@ -383,6 +523,74 @@ def test_a_run_whose_proofs_cannot_be_locked_skips_what_follows_and_says_why(tmp
     state = stages.read_state(ctx.run)
     assert state["locked"] is None and ctx.run.done_rounds() == [0, 1]
     assert any("no proof to lock" in l and "module of its own" in l for l in lines)
+
+
+def test_when_lean_cannot_be_asked_nothing_is_decided_and_a_resume_goes_on(tmp_path, monkeypatch):
+    """Lean not answering (no Lean, the compiled modules not where the service keeps them) says nothing about
+    a proof. It is not a reason to tell the agent its proof cannot be locked, to pass the best proof over for
+    a worse one, or to record an accepted proof as unverified: the prompt is silent on that proof and the log
+    says why, the run halts before anything is locked, and a halted round asks again on a resume."""
+    asked = {"fails": True}
+
+    def lean(lean_project, submission, where=(), closure=()):
+        if asked["fails"]:
+            raise inspect.InspectError("no lean binary found (install elan)")
+        return stand_in_inspect(lean_project, submission, where, closure)
+
+    monkeypatch.setattr(inspect, "inspect_submission", lean)
+    nothing = {"calls": [], "response": "CLAIM: nothing.\nWHY IT HELPS: -\nNOTES: none."}
+    lines = []
+    path = pilot_run(tmp_path, monkeypatch, [ROUND_1, nothing, SEED_CHECK, SCALING], rounds_max=2)
+    ctx = loop.start(path, log=lines.append)
+    # the proof rounds go on without Lean's account: round 2's prompt says nothing of readiness, the log says why
+    with pytest.raises(loop.LoopError, match="could not be read for the lock .*no lean binary found.*can be resumed"):
+        loop.drive(ctx)
+    run = ctx.run
+    p2 = run.read(2, "prompt.md")
+    assert "finishing from it costs 15,448" in p2 and "ready for the seed check" not in p2 and "cannot be taken to the seed check" not in p2
+    assert sum("could not ask Lean whether this proof can go to the seed check" in l for l in lines) == 2
+    assert run.done_rounds() == [0, 1, 2] and stages.read_state(run) is None  # nothing locked, nothing passed over
+    # Lean answers again, and goes away once more while the seed check's session runs
+    asked["fails"] = False
+    real = Session.submit_candidate
+
+    def submit(self, *args, **kwargs):
+        asked["fails"] = bool(self.state.get("stage"))  # no answer while a session after the proof rounds submits
+        try:
+            return real(self, *args, **kwargs)
+        finally:
+            asked["fails"] = False
+
+    monkeypatch.setattr(Session, "submit_candidate", submit)
+    asked_again = {"n": 0}
+    from core.open_lane import lock as lock_module
+
+    same = lock_module.same_checker
+
+    def unanswered_once(lock, submission, lean_project, scored=True):
+        asked_again["n"] += 1
+        if asked_again["n"] == 3:  # the round's first question, after the session's two
+            return {"verified": None, "why": "Lean could not be asked what the submission declares: no lean binary found"}
+        return same(lock, submission, lean_project, scored=scored)
+
+    monkeypatch.setattr(lock_module, "same_checker", unanswered_once)
+    ctx2 = loop.resume(run.path, log=lines.append)
+    with pytest.raises(Exception, match="whether it has the locked checker is not known .*the run halts and can be resumed"):
+        loop.drive(ctx2)
+    state = stages.read_state(run)
+    assert state["locked"]["length"] == 20448 and state["stages"]["seed_check"]["result"] is None and run.done_rounds() == [0, 1, 2]
+    sub = run.round_path(3) / "attempt_0" / "open_lane" / "submissions"
+    assert all("verified" not in json.loads((sub / n / "lock.json").read_text()) for n in ("000", "001"))  # nothing was recorded
+    tools = [json.loads(l) for l in (run.round_path(3) / "attempt_0" / "open_lane" / "tools.jsonl").read_text().splitlines()]
+    assert [t["outcome"].get("locked_checker", "-") for t in tools[6:]] == [None, None]
+    # the session is not run again: its accepted proofs are asked about again, and the run finishes
+    ctx3 = loop.resume(run.path, log=lines.append)
+    loop.drive(ctx3)
+    state = stages.read_state(run)
+    assert run.done_rounds() == [0, 1, 2, 3, 4] and state["stages"]["seed_check"]["result"]["outcome"] == "certified"
+    check = [r for r in run.read_archive() if r.get("stage") == "seed_check"]
+    assert [r["lock"]["verified"] for r in check] == [False, True] and len(tools) == len(
+        (run.round_path(3) / "attempt_0" / "open_lane" / "tools.jsonl").read_text().splitlines())
 
 
 def test_the_seed_check_names_another_development_seed_of_the_same_size(tmp_path, monkeypatch):
@@ -488,12 +696,14 @@ def test_a_run_is_told_only_of_the_sessions_it_has(tmp_path, monkeypatch):
         loop.start(path, log=lambda *a: None)
 
 
-def test_a_seed_check_that_did_not_finish_is_no_result_and_a_checked_zero_is_a_result():
-    """A review (10 November 2026): a session that timed out or never compiled was reported as "the locked
-    checker certified nothing". Failing to complete the check is not a measurement. The outcome is
+def test_a_seed_check_that_did_not_finish_is_no_result_and_a_checked_zero_is_a_result(tmp_path):
+    """Two reviews (10 November 2026). First: a session that timed out or never compiled was reported as "the
+    locked checker certified nothing". Failing to complete the check is not a measurement. The outcome is
     `no_result`, with what the session's records were and how it ended, and every text says it is not a
     measurement of zero. A claim of 0 accepted under the lock is a result: the checker certifies nothing
-    there. A different description size than in the locked proof is flagged."""
+    there. Second: an accepted proof counts only when Lean found the locked checker in it. One that was
+    accepted without that is `unverified`: reported with the reason, never as what the locked checker
+    certifies, and never in place of a verified one."""
     entry = {"id": B, "n_inputs": 576, "E": 448, "B": 170368, "real_correct": 576}
     state = {"locked": {"ratio": 8.332}, "stages": {"seed_check": {"network": B, "round": 5}}}
 
@@ -509,14 +719,43 @@ def test_a_seed_check_that_did_not_finish_is_no_result_and_a_checked_zero_is_a_r
     assert "gave no accepted result" in line and "That is not a measurement" in line and "certified nothing" not in line
     nothing = stages.seed_check_result([rec("no_submission", error="the session submitted no candidate")], 5, entry)
     assert nothing["outcome"] == "no_result" and nothing["reasons"] == []
-    ok = {"intact": True, "in_receipt": True, "same_description_size": True}
+    ok = {"intact": True, "in_receipt": True, "verified": True, "why": None, "fingerprints": {"checker": "c"}}
     zero = stages.seed_check_result(failed + [rec("ok", certified=0, length=20448, lock=ok)], 5, entry)
     assert (zero["outcome"], zero["certified"], zero["finishing_total"]) == ("certified", 0, 20448 + 576 * 295)
+    assert zero["lock_verified"] and zero["fingerprints"] == {"checker": "c"}
     state["stages"]["seed_check"]["result"] = zero
     assert "certifies none of the 576 inputs" in stages.seed_check_line(state) and "a checked claim of 0" in stages.seed_check_line(state)
-    # an accepted proof whose lock was not intact is not a result either
+    # accepted, but the locked modules did not reach the service unchanged: not a result
     broken = stages.seed_check_result([rec("ok", certified=570, length=20448, lock={**ok, "intact": False})], 5, entry)
-    assert broken["outcome"] == "no_result"
-    odd = stages.seed_check_result([rec("ok", certified=570, length=20448, lock={**ok, "same_description_size": False})], 5, entry)
-    state["stages"]["seed_check"]["result"] = odd
-    assert odd["outcome"] == "certified" and "Warning: the service measured another description size" in stages.seed_check_line(state)
+    assert broken["outcome"] == "unverified" and "certified" not in broken and "ratio" not in broken
+    assert broken["accepted"] == [{"record_id": "r5/ok", "certified": 570, "length": 20448,
+                                   "why": "the locked modules did not reach the service unchanged"}]
+    # accepted, the text unchanged, but Lean did not find the locked checker in it: not a result
+    why = "the checker's kernel terms differ from the locked checker's"
+    other = stages.seed_check_result([rec("ok", certified=570, length=20448, lock={**ok, "verified": False, "why": why})], 5, entry)
+    assert other["outcome"] == "unverified" and other["accepted"][0]["why"] == why
+    state["stages"]["seed_check"]["result"] = other
+    line = stages.seed_check_line(state)
+    assert "is unverified" in line and why in line and "not a measurement of how the locked checker transfers" in line
+    # a record from before the comparison existed (no `verified`) does not count either
+    old = stages.seed_check_result([rec("ok", certified=570, length=20448, lock={"intact": True, "in_receipt": True})], 5, entry)
+    assert old["outcome"] == "unverified" and old["accepted"][0]["why"] == "the checker was not compared with the locked one"
+    # a verified proof is the result even when a cheaper unverified one stands next to it
+    both = stages.seed_check_result([rec("ok", certified=576, length=100, lock={**ok, "verified": False, "why": why}),
+                                     rec("ok", certified=570, length=20448, lock=ok)], 5, entry)
+    assert (both["outcome"], both["certified"], both["length"]) == ("certified", 570, 20448)
+    # the report and the status say of each outcome what it is
+    from types import SimpleNamespace
+
+    run = SimpleNamespace(path=tmp_path)
+    locked = {"record_id": "r1/ok", "network": A, "certified": 576, "real_correct": 576, "length": 20448, "B": 170368, "ratio": 8.332,
+              "modules": ["Candidate/Col.lean"], "checker": "Candidate.Col.D"}
+    texts = {}
+    for name, result in (("unverified", other), ("no_result", res), ("zero", zero)):
+        stages.write_state(run, {"proof_rounds_ended": {"after_round": 4, "why": "the round limit (4)"}, "locked": locked, "passed_over": [],
+                                 "stages": {"seed_check": {"network": B, "round": 5, "result": result}}})
+        texts[name] = "\n".join(stages.report_lines(run) + stages.status_lines(run))
+    assert f"Unverified on {B}" in texts["unverified"] and why in texts["unverified"] and "| Network |" not in texts["unverified"]
+    assert "This is not a measurement of how the locked checker transfers" in texts["unverified"]
+    assert f"No accepted result on {B}" in texts["no_result"] and "This is not a measurement of zero" in texts["no_result"]
+    assert f"| {B} (second seed, checker locked) | 0 of 576 | 20,448 |" in texts["zero"] and "certifies none of the 576 inputs" in texts["zero"]

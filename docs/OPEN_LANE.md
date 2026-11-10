@@ -80,7 +80,8 @@ Layout of an open-lane attempt:
 
     round_003/attempt_0/
         open_lane/session.json, tools.jsonl, workspace/, submissions/000/{manifest.json, Candidate/, receipt.json}
-                                 (and lock.json in a session after the proof rounds: the lock as applied)
+                                 (and lock.json in a session after the proof rounds: the lock as applied,
+                                 and for the seed check whether Lean found the locked checker in the proof)
         mcp.json                 the CLI's MCP configuration (claude_code backend)
         response.md              the session's final text (CLAIM, WHY IT HELPS, NOTES)
         response_meta.json       tokens, turns, tools used, submissions
@@ -141,19 +142,24 @@ A pilot run is about one network and has two more sessions after its proof round
   locked and run, unchanged, on a second network: a development network of the same model and size
   setting, another seed. The agent writes that network's instance and nothing else. The lock is by module
   (`core/open_lane/lock.py`): the modules that declare the checker and the soundness theorem, with what
-  they import, are locked; the instance must be declared outside them, in a module that imports them;
-  where a constant is declared is read from the modules' text, not guessed from its name. In the session the locked modules
-  cannot be saved over, they are written into the workspace again from the lock before every compile and
-  submission (with the protected module's name replaced by the second network's, and nothing else), the
-  submission must name the locked checker and soundness theorem and may not declare a locked constant
-  again, and the record says whether the hashes in the receipt are the locked text's and whether the
-  service measured the same description size for the checker. The outcome is either a result (a scored
-  proof accepted under the lock, a claim of 0 included) or "no accepted result" (the session did not
-  complete the check), never zero coverage for a session that failed. During the proof rounds the receipts say of every scored proof
-  whether it can be locked, and why not.
+  they import, are locked; the instance must be declared outside them, in a module that imports them.
+  Which module declares a constant and what a module imports is asked of Lean, never read off the source:
+  a Lean program (`core/open_lane/inspect_oleans.lean`, run with the service's Lean) reads the `.olean`
+  files the service compiled. In the session the locked modules cannot be saved over, they are written
+  into the workspace again from the lock before every compile and submission (with the protected module's
+  name replaced by the second network's, and nothing else), and the submission must name the locked
+  checker and soundness theorem. When a scored proof is accepted, Lean is asked whether its checker is the
+  locked one: the kernel terms of the checker and of everything of the candidate's it depends on, the
+  soundness statement, and the graph and task they reach must be the lock's (`lock.verified` in the
+  record, with the reason when not). The outcome is one of three: `certified` (a scored proof accepted
+  with the locked checker, a claim of 0 included), `unverified` (accepted, but the checker is not shown to
+  be the locked one: not a measurement) or `no_result` (the session did not complete the check: never
+  zero coverage). If Lean cannot be asked, nothing is decided: the run halts and a resume asks again.
+  During the proof rounds the receipts say of every scored proof whether it can be locked, and why not.
 - The scaling question (`open_lane.scaling: true`). The agent states how the locked checker's cost grows
   with the sizes, against brute force's, and submits what it can prove of that as lemmas. The session
-  takes lemmas only, and nothing in it is scored.
+  takes lemmas only, and nothing in it is scored. For each accepted lemma Lean is asked the seed check's
+  question, and the report says whether the checker named in its statement is the locked one.
 
 `stages.json` in the run folder records when and why the proof rounds ended, which proof was locked (and
 any better proof passed over because it could not be), each stage's round and what it found. Once it

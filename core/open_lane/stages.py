@@ -7,9 +7,13 @@ sessions follow, each one round of the run, each resumable like any round:
   (core.open_lane.lock) and run, unchanged, on a second network of the same model and sizes, trained from
   another seed. The agent writes the instance for that network and nothing else. What comes out is what a
   checker written for one network certifies on another: a copy of the first network's weights, or a plan
-  made for its inputs, certifies nothing there.
+  made for its inputs, certifies nothing there. An accepted proof is the stage's result only when Lean
+  finds the locked checker in the modules the service compiled for it (lock.same_checker).
 - scaling (`open_lane.scaling: true`): the agent states how the locked checker's cost grows with the sizes
   of the network, compares it with brute force's, and proves what it can of that as lemmas. Never scored.
+  Each lemma is recorded with whether Lean found the locked checker in its submission.
+
+Lean not answering (no Lean, no compiled modules) decides nothing: the run halts and a resume asks again.
 
 `stages.json` in the run folder records that the proof rounds are over, which proof was locked (or why none
 could be), the round of each stage and what it found. Once it exists the run makes no more proof rounds.
@@ -25,7 +29,7 @@ from pathlib import Path
 from ..agent.build_prompt import CHARS_PER_TOKEN, Prompt, PromptError, TEMPLATES, fill, forbidden, load_template
 from ..archive import RunDir
 from ..scoring import fallback_cost_per_input
-from .lock import LockError, read_lock
+from .lock import LockError, LockUnread, read_lock
 from .prompt import static_values
 from .records import proof_records
 from .session import Session
@@ -107,14 +111,22 @@ def scored_proofs(records: list[dict], entry: dict) -> list[dict]:
     return sorted(mine, key=lambda r: (finishing_total(r, entry, records), -r["round"], -r["attempt"], -(r.get("submission") or 0)))
 
 
-def choose_lock(run: RunDir, records: list[dict], entry: dict) -> tuple[dict | None, dict | None, list[dict]]:
+def lean_project_of(cfg: dict) -> Path:
+    return Path(cfg["open_lane"]["lean_project"]).expanduser().resolve()
+
+
+def choose_lock(run: RunDir, records: list[dict], entry: dict, lean_project: Path) -> tuple[dict | None, dict | None, list[dict]]:
     """The proof to lock: the best scored proof that can be locked. Returns its lock, its record, and the
-    better proofs passed over with the reason each could not be locked."""
+    better proofs passed over with the reason each could not be locked. A proof Lean could not be asked about
+    is not passed over: the run halts there, with nothing decided, and can be resumed."""
     passed = []
     for r in scored_proofs(records, entry):
         d = submission_dir(run, r)
         try:
-            return read_lock(d), r, passed
+            return read_lock(d, lean_project), r, passed
+        except LockUnread as exc:
+            raise StageError(f"the proof rounds are over, and {r['record_id']} could not be read for the lock ({exc}); "
+                             "the run halts before anything is locked and can be resumed")
         except LockError as exc:
             passed.append({"record_id": r["record_id"], "certified": r["certified"], "length": r["length"], "reason": str(exc)})
     return None, None, passed
@@ -126,7 +138,7 @@ def begin(run: RunDir, cfg: dict, entries: list[dict], check_entry: dict | None,
     state = {"proof_rounds_ended": {"after_round": max([k for k in run.done_rounds()] or [0]), "why": why},
              "locked": None, "passed_over": [], "stages": {}}
     if len(entries) == 1:
-        lock, record, passed = choose_lock(run, records, entries[0])
+        lock, record, passed = choose_lock(run, records, entries[0], lean_project_of(cfg))
         state["passed_over"] = passed
         if lock is not None:
             entry = entries[0]
@@ -136,8 +148,8 @@ def begin(run: RunDir, cfg: dict, entries: list[dict], check_entry: dict | None,
                 "submission": int(record.get("submission") or 0), "submission_dir": str(submission_dir(run, record)),
                 "network": entry["id"], "certified": record["certified"], "real_correct": entry.get("real_correct"),
                 "length": record["length"], "B": entry["B"], "finishing_total": total, "ratio": entry["B"] / total,
-                "description_size": record.get("description_size"),
-                "digest": lock["digest"], "modules": sorted(lock["modules"]), "free": lock["free"],
+                "digest": lock["digest"], "fingerprints": lock["fingerprints"], "modules": sorted(lock["modules"]),
+                "free": lock["free"],
                 "checker": lock["checker"], "sound": lock["sound"], "protected": lock["protected"],
             }
     k = state["proof_rounds_ended"]["after_round"]
@@ -188,26 +200,28 @@ def free_text(lock: dict) -> str:
 
 def seed_check_line(state: dict) -> str:
     """One or two sentences on what the seed check found, for the scaling session, the log and the status;
-    empty without one. A session that ended without an accepted result is said to be that, never a
-    measurement of zero."""
+    empty without one. A session that ended without an accepted result, or with a proof whose checker could
+    not be shown to be the locked one, is said to be that, never a measurement."""
     st = (state.get("stages") or {}).get("seed_check")
     if not st:
         return ""
     res = st.get("result")
     if res is None:
         return f"The seed check on {st['network']} has not been run."
+    if res.get("outcome") == "unverified":
+        first = res["accepted"][0]
+        return (f"The seed check on {st['network']} is unverified: a scored proof was accepted ({first['certified']:,} "
+                f"certified at length {first['length']:,}), but it could not be established that its checker is the "
+                f"locked one ({first['why']}). That is not a measurement of how the locked checker transfers.")
     if res.get("outcome") != "certified":
         return (f"The seed check gave no accepted result on {st['network']} ({res.get('note') or 'no accepted submission'}). "
                 "That is not a measurement: it does not say what the locked checker certifies there.")
-    warn = ""
-    if res.get("same_description_size") is False:
-        warn = " Warning: the service measured another description size for the checker than in the locked proof."
     if not res["certified"]:
         return (f"The seed check: on {st['network']} the locked checker certifies none of the {res['real_correct']:,} inputs "
-                f"that network answers correctly (a checked claim of 0, at length {res['length']:,})." + warn)
+                f"that network answers correctly (a checked claim of 0, at length {res['length']:,}).")
     return (f"The seed check: on {st['network']} the locked checker certified {res['certified']:,} of the "
             f"{res['real_correct']:,} inputs that network answers correctly, at length {res['length']:,} (a ratio of "
-            f"{res['ratio']:.3f} there, against {state['locked']['ratio']:.3f} on the network it was written for)." + warn)
+            f"{res['ratio']:.3f} there, against {state['locked']['ratio']:.3f} on the network it was written for).")
 
 
 def build_stage_prompt(cfg: dict, folder, run: RunDir, k: int, name: str, state: dict, entry: dict) -> Prompt:
@@ -219,11 +233,13 @@ def build_stage_prompt(cfg: dict, folder, run: RunDir, k: int, name: str, state:
     if leaked:
         raise PromptError(f"the model folder puts forbidden strings into the prompt: {leaked}")
     locked = state["locked"]
-    lock = read_lock(Path(locked["submission_dir"]))
-    if lock["digest"] != locked["digest"]:
+    try:
+        lock = read_lock(Path(locked["submission_dir"]), lean_project_of(cfg))
+    except LockError as exc:
+        raise StageError(f"the locked proof in {locked['submission_dir']} can no longer be read as it was locked ({exc}); the run halts")
+    if lock["digest"] != locked["digest"] or lock["fingerprints"] != locked["fingerprints"]:
         raise StageError(f"the locked proof's modules in {locked['submission_dir']} changed since they were locked; the run halts")
-    stage = {"name": name, "of": locked["record_id"], "submission": locked["submission_dir"], "lock": lock,
-             "description_size": locked.get("description_size")}
+    stage = {"name": name, "of": locked["record_id"], "submission": locked["submission_dir"], "lock": lock}
     Session.create(run.round_path(k) / "attempt_0" / "open_lane", cfg, cfg["model"], [entry], run.path, stage=stage)
     path = TEMPLATES / f"open_lane_{name}.md"
     if not path.is_file():
@@ -244,41 +260,55 @@ def build_stage_prompt(cfg: dict, folder, run: RunDir, k: int, name: str, state:
 
 # what a stage found ----------------------------------------------------------------------------
 def seed_check_result(records: list[dict], k: int, entry: dict, session_note: str = "") -> dict:
-    """The seed check's outcome from its round's records. Two outcomes, never to be confused:
+    """The seed check's outcome from its round's records. Three outcomes, never to be confused:
 
-    - `certified`: a scored proof was accepted under an intact lock. Its count is a checked result, zero
-      included (a claim of 0 with its instance is a measurement that the checker certifies nothing there).
-      With several, the one that finishes the second network cheapest.
+    - `certified`: a scored proof was accepted and Lean finds the locked checker in it (the locked modules'
+      text unchanged, and the checker's fingerprints equal to the lock's: core.open_lane.lock.same_checker).
+      Its count is a checked result, zero included (a claim of 0 with its instance is a measurement that the
+      checker certifies nothing there). With several, the one that finishes the second network cheapest.
+    - `unverified`: a scored proof was accepted, but it could not be established that its checker is the
+      locked one. It is reported with the reason and is not a measurement of how the locked checker transfers.
     - `no_result`: the session ended without an accepted scored proof (it ran out of time, nothing
       compiled, the submissions were rejected). That says nothing about what the checker certifies."""
     mine = [r for r in records if r.get("round") == k and r.get("stage") == "seed_check"]
     per_input = (entry["B"] - entry["E"]) / entry["n_inputs"]  # cost-v4: B is E plus one forward pass per input
     real = entry.get("real_correct") or 0
-    best = None
+    best, unverified = None, []
     for r in mine:
         lock = r.get("lock") or {}
-        if r.get("status") != "ok" or r.get("network") != entry["id"] or not lock.get("intact"):
+        if r.get("status") != "ok" or r.get("network") != entry["id"]:
+            continue
+        if not lock.get("intact") or lock.get("verified") is not True:
+            why = lock.get("why") or ("the locked modules did not reach the service unchanged" if not lock.get("intact")
+                                      else "the checker was not compared with the locked one")
+            unverified.append({"record_id": r["record_id"], "certified": r["certified"], "length": r["length"], "why": why})
             continue
         total = r["length"] + max(0, real - r["certified"]) * per_input
         if best is None or total < best["finishing_total"]:
             best = {"outcome": "certified", "record_id": r["record_id"], "certified": r["certified"], "real_correct": real,
                     "length": r["length"], "B": entry["B"], "finishing_total": total, "ratio": entry["B"] / total,
-                    "lock_intact": True, "lock_in_receipt": bool(lock.get("in_receipt")),
-                    "same_description_size": lock.get("same_description_size")}
+                    "lock_intact": True, "lock_in_receipt": bool(lock.get("in_receipt")), "lock_verified": True,
+                    "fingerprints": lock.get("fingerprints")}
     if best is not None:
         return best
     counts: dict[str, int] = {}
     for r in mine:
         counts[str(r.get("status"))] = counts.get(str(r.get("status")), 0) + 1
     what = ", ".join(f"{n} {s}" for s, n in sorted(counts.items())) or "no record"
+    note = f"the session's records: {what}" + (f"; {session_note}" if session_note else "")
+    if unverified:
+        return {"outcome": "unverified", "real_correct": real, "B": entry["B"], "note": note, "accepted": unverified}
     reasons = [str(r.get("error"))[:200] for r in mine if r.get("error") and r.get("status") != "no_submission"]
-    return {"outcome": "no_result", "real_correct": real, "B": entry["B"],
-            "note": f"the session's records: {what}" + (f"; {session_note}" if session_note else ""), "reasons": reasons[:3]}
+    return {"outcome": "no_result", "real_correct": real, "B": entry["B"], "note": note, "reasons": reasons[:3]}
 
 
 def scaling_result(records: list[dict], k: int) -> dict:
     mine = [r for r in records if r.get("round") == k and r.get("stage") == "scaling"]
-    lemmas = [{"record_id": r["record_id"], "theorem": r.get("theorem"), "statement": r.get("statement")}
+    # `locked_checker`: whether Lean found the locked checker in the lemma's submission, so that the checker's
+    # name in its statement is the locked checker (core.open_lane.lock.same_checker)
+    lemmas = [{"record_id": r["record_id"], "theorem": r.get("theorem"), "statement": r.get("statement"),
+               "locked_checker": bool((r.get("lock") or {}).get("intact")) and (r.get("lock") or {}).get("verified") is True,
+               "why": (r.get("lock") or {}).get("why")}
               for r in mine if r.get("status") == "lemma"]
     return {"lemmas": lemmas, "submissions": len([r for r in mine if r.get("status") != "no_submission"])}
 
@@ -331,13 +361,16 @@ def report_lines(run: RunDir) -> list[str]:
                       f"| {locked['network']} (written for) | {locked['certified']:,} of {locked['real_correct']:,} | {locked['length']:,} | {locked['B']:,} | {locked['ratio']:.3f} |",
                       f"| {check['network']} (second seed, checker locked) | {res['certified']:,} of {res['real_correct']:,} | {res['length']:,} | {res['B']:,} | {res['ratio']:.3f} |",
                       "",
-                      "The locked modules reached the service unchanged" + (", and the receipt's hashes say the same."
-                                                                           if res.get("lock_in_receipt") else " by the pipeline's own comparison; the receipt carried no hashes of them.")
-                      + {True: " The service measured the same description size for the checker on both networks.",
-                         False: " Warning: the service measured another description size for the checker than in the locked proof; "
-                                "read the two submissions before relying on this row.",
-                         None: ""}[res.get("same_description_size")],
+                      "The same checker on both: Lean reads the locked checker's kernel terms, the same graph and task and the "
+                      "same soundness statement from the modules the service compiled for the second network. The locked "
+                      "modules' text reached the service unchanged" + (", and the receipt's hashes say the same."
+                                                                    if res.get("lock_in_receipt") else " by the pipeline's own comparison; the receipt carried no hashes of them."),
                       ""]
+        elif res.get("outcome") == "unverified":
+            lines += [f"Unverified on {check['network']}: a scored proof was accepted, but it could not be established that "
+                      "its checker is the locked one. This is not a measurement of how the locked checker transfers.", ""]
+            lines += [f"- `{a['record_id']}`: {a['certified']:,} certified at length {a['length']:,}; {a['why']}" for a in res["accepted"]]
+            lines.append("")
         else:
             lines += [f"No accepted result on {check['network']}: {res.get('note')}. This is not a measurement of zero: "
                       "the session did not complete the check, so it does not say what the locked checker certifies there.", ""]
@@ -352,8 +385,11 @@ def report_lines(run: RunDir) -> list[str]:
             lines += [f"Not asked yet (round {scaling['round']}).", ""]
         else:
             lines += [f"The agent's answer is round {scaling['round']}'s response (`round_{scaling['round']:03d}/attempt_0/response.md`). "
-                      f"Lemmas accepted: {len(res['lemmas'])}. A lemma's statement is the agent's own: read it before relying on it.", ""]
-            lines += [f"- `{l['theorem']}`: {l['statement']}" for l in res["lemmas"]]
+                      f"Lemmas accepted: {len(res['lemmas'])}. A lemma's statement is the agent's own: read it before relying on it. "
+                      f"Where a statement names `{locked['checker']}`, that is the locked checker when the line says so: Lean found "
+                      "the locked checker's kernel terms in the modules the service compiled for the lemma.", ""]
+            lines += [f"- `{l['theorem']}`: {l['statement']} (" + ("the locked checker" if l.get("locked_checker") else
+                      "NOT shown to be about the locked checker" + (f": {l['why']}" if l.get("why") else "")) + ")" for l in res["lemmas"]]
             if res["lemmas"]:
                 lines.append("")
     return lines

@@ -31,6 +31,13 @@ service, as every submission is. session.json's `carried` says what was carried 
 
 Budgets persist in session.json, so a session that is started again (a resumed run) continues them rather
 than starting afresh, and its earlier submissions and their receipts stay.
+
+A session after the proof rounds (core.open_lane.stages) works under a lock (core.open_lane.lock): the
+locked proof's checker modules are in its workspace, cannot be saved over, and are written again from the
+lock before every compile and submission. When the service accepts a scored proof of the seed check, or a
+lemma of the scaling question, Lean is asked whether the modules the service compiled hold the locked
+checker; the answer goes into the submission's lock.json and to the agent (`locked_checker`). That is a
+question about which checker a proof has, never about whether the proof is valid: that stays the service's.
 """
 
 from __future__ import annotations
@@ -158,6 +165,17 @@ def carried_modules(run_path: Path, k: int) -> list[dict]:
     for n in sorted(names):
         visit(n)
     return [latest[names[n]] for n in order]
+
+
+def under_lock(stage: str | None, receipt: dict) -> bool:
+    """Whether Lean is asked if an accepted submission has the locked checker (core.open_lane.lock.same_checker):
+    a scored proof of the seed check, whose count is the locked checker's only then, and a lemma of the scaling
+    question, whose statement is about the locked checker only then."""
+    if receipt.get("status") != "accepted":
+        return False
+    if stage == "seed_check":
+        return (receipt.get("scoring") or {}).get("status") == "scored"
+    return stage == "scaling" and receipt.get("claim_kind") == "auxiliary"
 
 
 def round_of(path: Path) -> int | None:
@@ -532,21 +550,6 @@ class Session:
             if lock:  # the locked modules always go along, so the constants the manifest names are the locked ones
                 modules = list(dict.fromkeys(list(modules) + list(lock["modules"])))
             modules = self.with_imports(modules)
-            if lock:
-                # no other module may declare what the locked modules declare (the service would refuse the
-                # second declaration too; this says so before a submission is spent)
-                from .lock import LockError, declared_names
-
-                for m in modules:
-                    if m in lock["modules"]:
-                        continue
-                    try:
-                        again = sorted(declared_names((self.workspace / m).read_text()) & set(lock.get("declared") or []))
-                    except LockError as exc:
-                        raise ToolError(f"{m}: {exc}")
-                    if again:
-                        raise ToolError(f"{m} declares {', '.join(again[:5])}, which the locked modules declare; a locked "
-                                        "constant cannot be declared again")
             self._spend("submit_candidate")
             n = len(list((self.path / "submissions").glob("*"))) if (self.path / "submissions").is_dir() else 0
             cdir = self.path / "submissions" / f"{n:03d}"
@@ -576,6 +579,7 @@ class Session:
 
                 from .lock import renamed
 
+                unasked = None
                 seen = (receipt.get("digests") or {}).get("modules") or {}
                 expected = {rel: renamed(text, lock["protected"], applied["protected_to"]) if applied["protected_to"] else text
                             for rel, text in lock["modules"].items()}
@@ -583,15 +587,49 @@ class Session:
                 applied["in_receipt"] = bool(seen) and all(
                     seen.get(module_name(rel)) == hashlib.sha256(text.encode()).hexdigest() for rel, text in expected.items())
                 (cdir / "lock.json").write_text(json.dumps(applied, indent=1))
+                if under_lock(stage.get("name"), receipt):
+                    # the checker this proof (or lemma) was accepted with, read by Lean from the modules the service
+                    # has just compiled: is it the locked one? Asked now, before the session does anything else.
+                    from .lock import same_checker
+
+                    try:
+                        check = same_checker(lock, cdir, self.lean_project, scored=stage["name"] == "seed_check")
+                    except Exception as exc:  # the receipt is saved and must reach the agent whatever this question does
+                        check = {"verified": None, "why": f"the question failed: {exc!r}"}
+                    if check["verified"] is None:  # Lean could not be asked: nothing is recorded, the round asks again
+                        unasked = check["why"]
+                    else:
+                        applied.update(verified=check["verified"], why=check["why"], fingerprints=check.get("fingerprints"),
+                                       constants=check.get("constants"))
+                        tmp = cdir / "lock.json.tmp"
+                        tmp.write_text(json.dumps(applied, indent=1))
+                        tmp.replace(cdir / "lock.json")
             out = {k: receipt.get(k) for k in ("status", "reason", "claim_kind", "certified_count", "domain_size", "claimed_count",
                                                 "network", "statement", "axioms", "score_eligible", "execution_assurance", "scoring", "seconds")}
             out["submission"] = n
             out["modules"] = modules
+            if applied and "verified" in applied:
+                counts = applied["verified"] and applied["intact"]
+                why = (applied["why"] or "the locked modules did not reach the service unchanged") + "."
+                if stage["name"] == "seed_check":
+                    note = ("Lean finds the locked checker in this proof: it counts as a result of the seed check." if counts else
+                            "This proof was accepted, but it does not count as a result of the seed check: " + why)
+                else:
+                    note = (f"Lean finds the locked checker in this submission: {lock['checker']} in a statement of yours is the "
+                            "checker that was locked." if counts else
+                            f"This lemma was accepted, but {lock['checker']} in it is not shown to be the locked checker: " + why)
+                out["locked_checker"] = {"same": counts, "note": note}
+            elif applied and unasked:
+                out["locked_checker"] = {"same": None, "note": "This submission was accepted. Whether it has the locked checker could "
+                                                               f"not be asked now ({unasked}); it is asked again when this session ends."}
             out["remaining"] = self.remaining()
             scoring = receipt.get("scoring") or {}
-            self._log("submit_candidate", args, {"status": receipt.get("status"), "scoring": scoring.get("status"),
-                                                 "reason": (receipt.get("reason") or scoring.get("reason") or "")[:300],
-                                                 "length": scoring.get("length"), "certified": receipt.get("certified_count")}, time.monotonic() - t0)
+            outcome = {"status": receipt.get("status"), "scoring": scoring.get("status"),
+                       "reason": (receipt.get("reason") or scoring.get("reason") or "")[:300],
+                       "length": scoring.get("length"), "certified": receipt.get("certified_count")}
+            if "locked_checker" in out:
+                outcome["locked_checker"] = out["locked_checker"]["same"]
+            self._log("submit_candidate", args, outcome, time.monotonic() - t0)
             return out
         except ToolError as exc:
             self._log("submit_candidate", args, {"error": str(exc)}, time.monotonic() - t0)

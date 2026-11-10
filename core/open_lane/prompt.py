@@ -184,11 +184,12 @@ MODULES_RULE = """- Keep the checker and the instance in separate modules, from 
   first scored submission on. One or more modules hold `D`, `D_sound`
   and everything they use. A module of its own, which imports them,
   holds `D_instance`, the facts it is built from and the theorem proving
-  `Target`. Name each constant after its module (`Candidate.Check.D` in
-  `Candidate/Check.lean`) and declare it in plain view, as a `def` or
-  `theorem` that starts a line: the lock finds a constant by its
-  declaration in a module's text. The checker's modules may import the
-  protected module for `graph` and `task`.
+  `Target`. Which module declares a constant and what a module imports
+  is read from the compiled modules by Lean, not from their text: the
+  modules that declare `D` and `D_sound`, with every module of yours
+  they import, are the checker's, and `D_instance` must be declared
+  outside them. The checker's modules may import the protected module
+  for `graph` and `task`.
 """
 MODULES_WHY = {
     "seed_check": """  The seed check locks the first kind and you rewrite the second for the
@@ -369,16 +370,22 @@ def scoreboard(records: list[dict], entries: list[dict], budget_ratio, metric: s
     return "\n".join(lines) if lines else "nothing checked yet"
 
 
-def lock_readiness(run: RunDir, records: list[dict]) -> dict:
+def lock_readiness(run: RunDir, records: list[dict], project: Path, unread: list | None = None) -> dict:
     """For a run with a seed check: per scored open-lane proof, None if its checker can be locked and taken
-    to the second network, else the reason it cannot (core.open_lane.lock)."""
-    from .lock import lockable
+    to the second network, else the reason it cannot (core.open_lane.lock: Lean is asked what the modules
+    the service compiled declare). A proof Lean could not be asked about is left out, since nothing is known
+    about it, and named in `unread` for the log."""
+    from .lock import LockUnread, lockable
 
     out = {}
     for r in records:
         if r.get("lane") == "open" and r.get("status") == "ok" and not r.get("stage"):
             d = run.round_path(r["round"]) / f"attempt_{r['attempt']}" / "open_lane" / "submissions" / f"{int(r.get('submission') or 0):03d}"
-            out[r["record_id"]] = lockable(d)
+            try:
+                out[r["record_id"]] = lockable(d, project)
+            except LockUnread as exc:
+                if unread is not None:
+                    unread.append(f"{r['record_id']}: {exc}")
     return out
 
 
@@ -525,7 +532,8 @@ def build_open_lane_prompt(cfg: dict, folder: ModelFolder, entries: list[dict], 
     # the round's first session, made now so that the prompt can say what was carried into its workspace and
     # whether it compiled; the backend opens the same session (Session.create returns an existing one)
     session = Session.create(run.round_path(k) / "attempt_0" / "open_lane", cfg, cfg["model"], entries, run.path)
-    ready = lock_readiness(run, records) if cfg["open_lane"].get("seed_check") else None
+    unread: list[str] = []
+    ready = lock_readiness(run, records, lean_project(cfg), unread) if cfg["open_lane"].get("seed_check") else None
     nudge = not_ready_line(records, entries, ready)
     values = {
         "SCOREBOARD": scoreboard(records, entries, cfg.get("budget_ratio"), cfg["metric"]),
@@ -547,4 +555,6 @@ def build_open_lane_prompt(cfg: dict, folder: ModelFolder, entries: list[dict], 
             trimmed.append("notes")
     stats = {"chars": len(part1) + len(part2), "tokens_estimate": (len(part1) + len(part2)) // CHARS_PER_TOKEN,
              "trimmed": trimmed, "template": cfg["prompt_template"], "lane": "open", "stalled": stalled(records, k, cfg["open_lane"]["stall_rounds"])}
+    if unread:  # for the log: the prompt says nothing about these proofs' readiness for the seed check
+        stats["lock_unread"] = unread
     return Prompt(part1, part2, stats)

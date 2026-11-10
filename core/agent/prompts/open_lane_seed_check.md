@@ -31,6 +31,12 @@ YOURS TO WRITE
 Submit with submit_candidate: kind performance, with scored.checker
 {CHECKER} and scored.sound {SOUND} (anything else is refused), your
 instance theorem, the certificate and the bill.
+An accepted proof counts as this session's result only if Lean finds
+the locked checker in it: the modules the service compiled are read,
+and the checker's kernel terms, with those of everything it depends on,
+must be the ones that were locked. The answer to submit_candidate says
+whether it counts (`locked_checker`). A module of yours that declares
+one of the checker's constants again makes the proof not count.
 
 HOW TO ANSWER
 End with these sections in this order, each starting on its own line:

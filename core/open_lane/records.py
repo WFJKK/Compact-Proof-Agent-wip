@@ -9,8 +9,10 @@ one record of status `no_submission`, so the round is never empty.
 
 A session after the proof rounds (core.open_lane.stages: the seed check, the scaling question) marks its
 records with `stage`, and a submission made under a lock with `lock`: the lock's digest, the proof it locks,
-and whether the locked modules reached the service unchanged (the pipeline's own comparison and the hashes
-in the receipt). Records with a stage are never part of the run's frontier or score.
+whether the locked modules' text reached the service unchanged (the pipeline's own comparison and the hashes
+in the receipt) and, for an accepted scored proof of the seed check and an accepted lemma of the scaling
+question, whether Lean finds the locked checker in the modules the service compiled (`verified`, with the
+reason when not). Records with a stage are never part of the run's frontier or score.
 
 A count above the exact reference count of the zoo (`checked_correct` with `checked_semantics` exact, from
 `python -m core.check.exact_counts`) halts the run; above the float count alone it is flagged, since the
@@ -22,7 +24,7 @@ from __future__ import annotations
 import json
 
 from ..archive import record_id
-from .session import Session
+from .session import Session, under_lock
 
 
 def _fields() -> dict:
@@ -100,10 +102,22 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
             applied = json.loads(lock_file.read_text())
             rec["lock"] = {"digest": applied.get("digest"), "of": stage.get("of"), "intact": bool(applied.get("intact")),
                            "in_receipt": bool(applied.get("in_receipt"))}
-            # the service's own measure of the checker: on a network of the same sizes the locked checker has the
-            # description size it had in the locked proof. None when either receipt has no such measure.
-            was, now = stage.get("description_size"), (receipt.get("scoring") or {}).get("description_size")
-            rec["lock"]["same_description_size"] = None if was is None or now is None else was == now
+            if under_lock(stage["name"], receipt):
+                # the checker this proof or lemma was accepted with, read by Lean from the modules the service
+                # compiled: is it the locked one? (core.open_lane.lock.same_checker) The session asks when the
+                # receipt arrives; a session that ended between the two is asked for here.
+                if "verified" not in applied:
+                    from .lock import same_checker
+
+                    try:
+                        check = same_checker(stage["lock"], lock_file.parent, session.lean_project, scored=stage["name"] == "seed_check")
+                    except Exception as exc:
+                        check = {"verified": None, "why": f"the question failed: {exc!r}"}
+                    if check["verified"] is None:
+                        raise RuntimeError(f"{receipt.get('receipt_path')}: this submission was accepted, and whether it has the locked "
+                                           f"checker is not known ({check['why']}); the run halts and can be resumed")
+                    applied.update(verified=check["verified"], why=check["why"], fingerprints=check.get("fingerprints"))
+                rec["lock"].update(verified=applied["verified"] is True, why=applied.get("why"), fingerprints=applied.get("fingerprints"))
         if entry:
             rec.update(n_inputs=entry["n_inputs"], real_correct=entry.get("real_correct"), real_accuracy=entry.get("real_accuracy"),
                        E=entry.get("E"), B=entry.get("B"))

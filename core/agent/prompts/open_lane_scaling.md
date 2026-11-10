@@ -54,7 +54,11 @@ WHAT TO HAND IN
       that it is the locked checker at this network's sizes, and say
       what it does at the others;
    c. the comparison with brute force's formula.
-Proofs of `Target` are not accepted in this session.
+Proofs of `Target` are not accepted in this session. For each accepted
+lemma, Lean is asked whether the modules the service compiled hold the
+locked checker, term for term, and the answer to submit_candidate says
+so (`locked_checker`): only then is {CHECKER} in your statement the
+checker that was locked.
 
 HOW TO ANSWER
 End with these sections in this order, each starting on its own line:

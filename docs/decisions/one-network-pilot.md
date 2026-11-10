@@ -72,53 +72,92 @@ Not stopped by the score, and what answers each:
 
 A scored proof has a general part (the checker `D`, its soundness theorem and what they use, all proved
 for every weight) and an instance (the kernel's run of `D` on one network's weights). The lock tells them
-apart by module (`core/open_lane/lock.py`):
+apart by module (`core/open_lane/lock.py`), and what a module declares and imports is asked of Lean:
 
 - The locked modules are the ones that declare the checker and the soundness theorem, and every submitted
-  module they import. Where a constant is declared is read from the modules' text (comments removed,
-  namespaces followed), never guessed from its name: Lean lets `Candidate.Check.D` be declared in any file.
-  A constant that is declared nowhere in plain view, or in two modules, or in a module that ends early
-  with `#exit`, is not locked.
+  module they import. Both facts are read by a Lean program (`core/open_lane/inspect_oleans.lean`, run
+  with the service's own Lean) from the `.olean` files the acceptance service compiled for the accepted
+  proof. Nothing is read off the source: Lean lets `Candidate.Check.D` be declared in any file, by a macro
+  as well as by a `def`, a string can look like a declaration, and an import can span lines.
 - A proof can be locked when its instance theorem is declared outside them. A proof kept in one module
   cannot. Template v5 says so from the first round, each round's receipts say of every scored proof
   whether it is ready, and the aim says so when the proof the score rests on is not.
 - When the rounds end, the best scored proof that can be locked is locked (the one that finishes the
   network cheapest). A better proof passed over is recorded with the reason.
 
-In the seed check's session the locked modules cannot be saved over, and before every compile and every
-submission they are written into the workspace again from the lock. One change is made: a locked module
-may import the protected module of the network it was written for (the checker reads its `graph` and
-`task`), and that name is replaced by the second network's. Two networks of the same sizes have the same
-graph and task, so a checker and a soundness proof that never look at the weights compile as they are.
-The submission must name the locked checker and soundness theorem, and the locked modules always go along.
-The receipt carries a hash of every module the service compiled, and the record says whether those hashes
-are the locked text's (`lock.in_receipt`).
+The lock holds two things: the locked modules' text, and the checker's fingerprints.
+
+The text keeps a session from editing the checker. In the seed check's session the locked modules cannot
+be saved over, and before every compile and every submission they are written into the workspace again
+from the lock. One change is made: a locked module may import the protected module of the network it was
+written for (the checker reads its `graph` and `task`), and that name is replaced by the second
+network's. The submission must name the locked checker and soundness theorem, and the locked modules
+always go along. The receipt carries a hash of every module the service compiled, and the record says
+whether those hashes are the locked text's (`lock.in_receipt`).
+
+The fingerprints establish, afterwards, that the checker a proof was accepted with is the locked one.
+They are three digests of kernel terms, as Lean reads them from the compiled modules, with the protected
+module's name left out:
+
+- `checker`: the checker and every constant of the candidate's it depends on, definitions with their
+  values and theorems with their statements (a proof changes nothing a definition computes);
+- `sound_statement`: the soundness theorem's statement, with every constant of the candidate's it is
+  written in;
+- `context`: the constants of the protected module those reach, which are the network's graph and task.
+  Two networks of one size setting have the same graph and task (the pilot's two protected modules define
+  them word for word alike), so the context is the same when only the seed differs.
+
+When the service accepts a scored proof in the seed check, Lean is asked about the modules it has just
+compiled, and the three digests are compared with the lock's (`lock.same_checker`). Equal digests mean
+the same checker term for term, on the same graph and task, with the same soundness statement, whatever
+any source text looks like. The session is told at once whether its proof counts, and the record carries
+`lock.verified` with the reason when not, naming the constants that differ.
 
 What it rests on:
 
-- Reading declarations and imports from Lean source text, which is a careful approximation and not Lean's
-  parser. A review on 10 November showed what a guess from names allows: the lock froze an empty file named
-  like the checker while the file with the real definition stayed editable, and an import with a comment
-  after it left a dependency outside the lock. Both are tests now. Because the reading is an approximation,
-  two things stand behind it: the next point, and the checker's description size, which the service
-  measures itself and which must be the same in the seed check's receipt as in the locked proof's (a
-  difference is flagged in the result).
-- The service refusing a submission that declares a constant twice (its kernel replay does). The locked
-  modules are in every submission of the session, so the name the manifest gives for the checker can only
-  be the locked declaration.
+- The inspection program is the pipeline's, not the acceptance service's, and it trusts the service's
+  work folder to hold what the service compiled. It checks that the folder's copy of the modules' sources
+  is the submitted one, and no more than that. A receipt does not carry the fingerprints. Putting them
+  into the receipt needs a change to the Lean project and a new lock commit, and is not done.
+- A name saying which constant is meant. A submission in which two modules declare one constant, or one
+  is named under the marker that stands for the protected module (`Protected._`), is refused. The service
+  refuses a candidate that declares a constant twice, so this does not happen to a proof it accepted.
+- The compiled module showing what a definition is. A file written in Lean's module system (it begins with
+  `module`) keeps the bodies of its definitions out of the `.olean`, and an axiom has none: a checker that
+  depends on either cannot be locked.
+- Lean compiling the same text to the same terms on both networks. On small modules with structures,
+  recursion and proofs inside definitions it does (`tests/test_lock_lean.py`). If it did not somewhere,
+  the result would be reported as unverified, not as a transfer.
 - The second network being unseen until then. It is a development network of the model that is not the
   run's, never named in the proof rounds' prompts, and `run_python` is given the run's network only. On a
-  Mac the sandbox does not stop a program from reading other files (frozen-transfer.md), so there the
-  second seed is unseen by instruction, not by enforcement.
+  Mac the sandbox does not stop a program from reading or writing other files (frozen-transfer.md), so
+  there the second seed is unseen, and the work folder untouched, by instruction and not by enforcement.
+
+Two reviews on 10 November are why it is built this way. The first lock guessed a constant's module from
+its name: it froze an empty file named like the checker while the file with the real definition stayed
+editable. The second read declarations and imports from source text: an import written over two lines
+escaped it, text in a string was taken for declarations, and it compared the checker's description size,
+which does not establish identity and only raised a warning. Each case is a test now, on modules compiled
+by Lean.
 
 The check uses a development seed, so the model's held-out seeds stay untouched for a final evaluation.
 
 Its result is reported next to the run's score, never folded into it: per network, the count certified
-of the count correct, the length, and the cost of finishing. There are two outcomes and they are kept
-apart. A scored proof accepted under the lock is a result, a claim of 0 included: that is a checked
-statement that the checker certifies nothing there. A session that ends without one (out of time, nothing
-compiled, submissions rejected) is "no accepted result", with what happened, and is never reported as zero
-coverage.
+of the count correct, the length, and the cost of finishing. There are three outcomes and they are kept
+apart:
+
+- `certified`: a scored proof was accepted and Lean finds the locked checker in it. Its count is a result,
+  a claim of 0 included: that is a checked statement that the checker certifies nothing there.
+- `unverified`: a scored proof was accepted, but its checker is not the locked one, or its declarations do
+  not single one out. It is listed with the reason and is not a measurement of how the checker transfers.
+- `no_result`: the session ended without an accepted scored proof (out of time, nothing compiled,
+  submissions rejected). It is reported with what happened, never as zero coverage.
+
+Lean not answering is none of the three. If Lean cannot be run, or the compiled modules are not where the
+service keeps them, nothing is known about the proof: the run halts and a resume asks again. This holds
+when the lock is read (no proof is passed over for it) and when an accepted proof is compared (it is not
+recorded as unverified). A run with a seed check also checks before it starts that the inspection program
+runs with the Lean project's Lean.
 
 ## The scaling question
 
@@ -139,7 +178,9 @@ A version that is the locked checker at this size and certifies nothing elsewher
 size and say nothing, so cheap checking and a useful accuracy bound are asked for as separate claims.
 
 A lemma's statement is the agent's own, and the service checks only that it is proved. A person reads the
-statement before relying on it.
+statement before relying on it. One thing is checked for the reader: for each accepted lemma Lean is asked,
+as in the seed check, whether the modules the service compiled hold the locked checker term for term. The
+report says so per lemma, so that the checker's name in a statement can be read as the locked checker.
 
 ## The first pilot
 
@@ -197,4 +238,5 @@ change reaches old configs: a new run with `metric: cost_of_finishing` on severa
 the geometric mean over a size setting's networks instead of the median.
 
 Not built: the seed check without an agent (the service running the locked checker itself, from a
-certificate recipe), and any check that a scaling lemma says what its author claims.
+certificate recipe), the checker's fingerprints computed by the acceptance service and carried in its
+receipt (a change to the Lean project), and any check that a scaling lemma says what its author claims.

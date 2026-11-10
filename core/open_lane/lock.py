@@ -5,29 +5,26 @@ everything they use: definitions and lemmas that hold for every weight. The inst
 `D` on one network's weights and the theorem that follows from it. The seed check keeps the first part and
 replaces the second: the same checker, another network of the same sizes, a new instance.
 
-The parts are told apart by module. The locked modules are the ones that declare the checker and the
-soundness theorem (the manifest names both) and every submitted module they import, directly or not. A
-proof can be locked when its instance theorem is declared outside them, in a module that imports them.
+Which part a module belongs to is asked of Lean, never read off the source (core.open_lane.inspect): Lean
+lets `Candidate.Check.D` be declared in any file, by a macro as well as by a `def`, text inside a string can
+look like a declaration, and an import can span lines. From the modules the acceptance service compiled:
 
-Where a constant is declared is read from the modules' text, never guessed from its name: Lean lets
-`Candidate.Check.D` be declared in any file. Each module is read with its comments removed, following its
-`namespace` and `section` commands, and a constant's module is the one module with a declaration of that
-full name (`declared_names`). A proof whose checker, soundness theorem or instance cannot be placed this way
-(no such declaration in the text, or one in two modules, or a module that ends early with `#exit`) is not
-locked, and the reason says so. Imports are read the same way, with any comment after them and several
-modules on one line (`imports_of`).
+- the module that declares the checker, and the one that declares the soundness theorem;
+- the locked modules: those two and every submitted module they import, directly or not;
+- a proof can be locked when its instance theorem is declared outside the locked modules.
 
-This reading of Lean source is a careful approximation, not Lean's parser, so the lock does not rest on it
-alone. The locked modules go into every submission of the session, and the service refuses a submission that
-declares a constant twice; and the seed check counts a result only when the checker's description size in
-its receipt equals the locked proof's (core.open_lane.stages).
+The lock then holds two things. The locked modules' source text, which a session under the lock cannot
+change (core.open_lane.session writes it into the workspace again before every compile and submission).
+And the checker's fingerprints (`inspect.fingerprints`): digests of the kernel terms of the checker and of
+everything of the candidate's it depends on, of the soundness statement and what it is written in, and of
+the protected graph and task they reach. The text is what keeps a session from editing the checker; the
+fingerprints are what establishes, afterwards, that the checker a seed-check submission was accepted with
+is the locked one (`same_checker`). A result counts only with that.
 
 A locked module may import the protected module of the network it was written for (the checker reads that
 module's `graph` and `task`). On another network the protected module has another name, so the locked text
-is taken over with that one name replaced and nothing else: `renamed`. Two networks of the same sizes have
-the same graph and task, so a checker and a soundness proof that never look at the weights compile as they
-are. The name of a network's protected module is the Lean project's to give (scripts/make_protected.py),
-and it is asked for there, never rebuilt here.
+is taken over with that one name replaced and nothing else: `renamed`. The name of a network's protected
+module is the Lean project's to give (scripts/make_protected.py), and it is asked for there.
 """
 
 from __future__ import annotations
@@ -39,111 +36,27 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import inspect
+
+
 class LockError(ValueError):
     """Why a proof cannot be locked, in words for the agent and the log."""
+
+
+class LockUnread(LockError):
+    """The lock could not be read for a reason that is not the proof's: Lean could not be run, or the modules
+    the service compiled are not where it keeps them. Nothing is known about the proof; it is no ground to
+    pass a proof over, and asking again later may work."""
 
 
 def _module_name(rel: str) -> str:
     return rel[: -len(".lean")].replace("/", ".")
 
 
-def without_comments(text: str) -> str:
-    """Lean source with its comments blanked out: `--` to the end of the line and `/- ... -/` blocks, which
-    nest. String literals are kept and a comment marker inside one is not a comment. Line breaks stay."""
-    out, i, n, depth, in_string = [], 0, len(text), 0, False
-    while i < n:
-        c, two = text[i], text[i:i + 2]
-        if depth:
-            if two == "/-":
-                depth, i = depth + 1, i + 2
-            elif two == "-/":
-                depth, i = depth - 1, i + 2
-            else:
-                out.append("\n" if c == "\n" else " ")
-                i += 1
-        elif in_string:
-            out.append(c)
-            if c == "\\" and i + 1 < n:
-                out.append(text[i + 1])
-                i += 1
-            elif c == '"':
-                in_string = False
-            i += 1
-        elif two == "/-":
-            depth, i = 1, i + 2
-        elif two == "--":
-            while i < n and text[i] != "\n":
-                i += 1
-        else:
-            in_string = c == '"'
-            out.append(c)
-            i += 1
-    return "".join(out)
-
-
-IMPORT = re.compile(r"^\s*(?:(?:public|private|meta|protected)\s+)*import\b(.*)$")
-MODULE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
-
-
-def imports_of(text: str) -> list[str]:
-    """The modules a Lean module imports: every module named on the import lines at its head, whatever
-    comment follows them and however many stand on one line."""
-    out = []
-    for line in without_comments(text).splitlines():
-        if not line.strip():
-            continue
-        m = IMPORT.match(line)
-        if not m:
-            break
-        out += [t for t in m.group(1).split() if t != "all" and MODULE.match(t)]
-    return out
-
-
-DECLARATION = re.compile(
-    r"^\s*(?:@\[[^\]]*\]\s*)*((?:(?:private|protected|noncomputable|partial|unsafe|nonrec|public|meta|local|scoped)\s+)*)"
-    r"(def|abbrev|theorem|lemma|opaque|axiom|instance|structure|inductive|class|alias)\s+([^\s:({\[⦃]+)")
-SCOPE = re.compile(r"^\s*(namespace|section|end|mutual)\b\s*([A-Za-z_][A-Za-z0-9_.]*)?")
-
-
-def declared_names(text: str) -> set[str]:
-    """The full names of the constants a Lean module declares, as far as its text shows: the declarations
-    that start a line (def, abbrev, theorem, lemma, opaque, axiom, instance, structure, inductive, class,
-    alias), each under the namespaces open at that point. A private declaration has no public name and is
-    left out. Raises LockError on `#exit`, after which a module's text is not what it declares."""
-    plain = without_comments(text)
-    if re.search(r"^\s*#exit\b", plain, re.M):
-        raise LockError("a module uses #exit, so its text does not show what it declares")
-    names, scopes = set(), []  # scopes: the namespace parts each open scope adds (none for a section)
-    for line in plain.splitlines():
-        m = SCOPE.match(line)
-        if m:
-            kind, name = m.group(1), m.group(2)
-            if kind == "namespace" and name:
-                scopes.append(name.split("."))
-            elif kind in ("section", "mutual"):
-                scopes.append([])
-            elif kind == "end" and scopes:
-                scopes.pop()
-            continue
-        m = DECLARATION.match(line)
-        if not m or "private" in m.group(1).split():
-            continue
-        name = m.group(3)
-        if name.startswith("_root_."):
-            names.add(name[len("_root_."):])
-        else:
-            names.add(".".join([part for scope in scopes for part in scope] + [name]))
-    return names
-
-
-def declaring_modules(constant: str, declared: dict[str, set[str]]) -> list[str]:
-    """The modules whose text declares the constant (`declared`: module name to its declared names)."""
-    return sorted(name for name, names in declared.items() if constant in names)
-
-
-def read_lock(submission: Path) -> dict:
-    """The lock of the scored submission in folder `submission` (manifest.json and its Candidate/ modules).
-    Raises LockError, with the reason, when the proof cannot be locked."""
+def read_lock(submission: Path, lean_project: Path) -> dict:
+    """The lock of the accepted, scored submission in folder `submission` (manifest.json, receipt.json and
+    its Candidate/ modules), from what Lean says about the modules the service compiled for it. Raises
+    LockError, with the reason, when the proof cannot be locked. The reason is shown to the agent."""
     submission = Path(submission)
     try:
         manifest = json.loads((submission / "manifest.json").read_text())
@@ -158,51 +71,139 @@ def read_lock(submission: Path) -> dict:
         if not isinstance(rel, str) or not rel.endswith(".lean") or f.is_symlink() or not f.is_file():
             raise LockError(f"its module {rel!r} is missing")
         names[_module_name(rel)] = rel
-    texts = {name: (submission / rel).read_text() for name, rel in names.items()}
-    declared = {name: declared_names(text) for name, text in texts.items()}
+    roots = {key: scored.get(key) for key in ("checker", "sound", "instance")}
+    if not all(isinstance(v, str) for v in roots.values()):
+        raise LockError("its manifest does not name a checker, a soundness theorem and an instance")
+    try:
+        info = inspect.inspect_submission(lean_project, submission, where=list(roots.values()),
+                                          closure=[roots["checker"], roots["sound"]])
+    except inspect.Refused as exc:
+        raise LockError(f"what its modules declare does not single out its checker: {exc}")
+    except inspect.InspectError as exc:
+        raise LockUnread(f"Lean could not be asked what its modules declare: {exc}")
     home = {}
-    for key in ("checker", "sound", "instance"):
-        constant = scored.get(key)
-        where = declaring_modules(constant, declared) if isinstance(constant, str) else []
+    for key, constant in roots.items():
+        where = [m for m in (info["where"].get(constant) or []) if m in names]
         if len(where) != 1:
             found = "none of the submitted modules" if not where else " and ".join(names[w] for w in where)
-            raise LockError(f"{constant} must be declared in exactly one submitted module, in plain view (a def or "
-                            f"theorem that starts a line, under its namespace); found in {found}")
+            raise LockError(f"{constant} must be declared in exactly one submitted module; Lean finds it in {found}")
         home[key] = where[0]
+    try:
+        prints, constants = inspect.fingerprints(info, roots["checker"], roots["sound"])
+    except inspect.Refused as exc:
+        raise LockError(f"its checker cannot be told from another: {exc}")
+    imports = {m: [i for i in (info["modules"].get(m) or {}).get("imports", []) if i in names] for m in names}
     locked, todo = [], [home["checker"], home["sound"]]
     while todo:
         name = todo.pop()
         if name in locked:
             continue
         locked.append(name)
-        todo += [m for m in imports_of(texts[name]) if m in names]
+        todo += imports[name]
     if home["instance"] in locked:
-        raise LockError(f"the instance theorem {scored['instance']} is in {names[home['instance']]}, a module the checker "
+        raise LockError(f"the instance theorem {roots['instance']} is in {names[home['instance']]}, a module the checker "
                         "and its soundness proof are in or import; the instance belongs in a module of its own that "
                         "imports them")
-    protected = sorted({m[len("Protected."):] for name in locked for m in imports_of(texts[name]) if m.startswith("Protected.")})
-    if len(protected) > 1:
-        raise LockError(f"its checker's modules import more than one protected module ({', '.join(protected)})")
-    modules = {names[name]: texts[name] for name in sorted(locked)}
+    used = {m for key in ("checker", "sound") for e in info["closures"][roots[key]]["constants"] for m in e["modules"]}
+    outside = sorted(m for m in used if m in names and m not in locked)
+    if outside:  # cannot happen for modules that compiled: what a definition uses, its module imports
+        raise LockError(f"the checker depends on {', '.join(names[m] for m in outside)}, which its module does not import")
+    protected = info.get("protected")
+    modules = {names[name]: (submission / names[name]).read_text() for name in sorted(locked)}
     digest = hashlib.sha256(json.dumps(modules, sort_keys=True).encode()).hexdigest()
     return {
-        "checker": scored["checker"], "sound": scored["sound"], "instance": scored["instance"],
+        "checker": roots["checker"], "sound": roots["sound"], "instance": roots["instance"],
+        "home": {key: names[home[key]] for key in ("checker", "sound")},
         "network": manifest.get("network"), "claimed_count": manifest.get("claimed_count"),
-        "protected": protected[0] if protected else None,
+        "protected": protected[len("Protected."):] if protected else None,
         "modules": modules,
         "free": sorted(rel for name, rel in names.items() if name not in locked),
-        "declared": sorted(set().union(*(declared[name] for name in locked))),
+        "fingerprints": prints,
+        "constants": constants,
         "digest": digest,
     }
 
 
-def lockable(submission: Path) -> str | None:
-    """None when the scored submission can be locked, else the reason it cannot."""
+_lockable: dict[tuple[str, str], str | None] = {}
+
+
+def lockable(submission: Path, lean_project: Path) -> str | None:
+    """None when the scored submission can be locked, else the reason it cannot. Asked of Lean once per
+    submission and process: a submission's folder does not change once its receipt is written. Raises
+    LockUnread when Lean could not be asked: that says nothing about the proof."""
+    key = (str(Path(submission).resolve()), str(Path(lean_project).resolve()))
+    if key not in _lockable:
+        try:
+            read_lock(submission, lean_project)
+            _lockable[key] = None
+        except LockUnread:
+            raise
+        except LockError as exc:
+            _lockable[key] = str(exc)
+    return _lockable[key]
+
+
+def _difference(was: dict, now: dict) -> str:
+    """Which constants differ between two closures (name to digest), in a few words."""
+    def some(names):
+        names = sorted(names)
+        return ", ".join(names[:4]) + (f" and {len(names) - 4} more" if len(names) > 4 else "")
+
+    parts = []
+    changed = [n for n in was if n in now and was[n] != now[n]]
+    if changed:
+        parts.append(f"changed: {some(changed)}")
+    if set(was) - set(now):
+        parts.append(f"no longer among them: {some(set(was) - set(now))}")
+    if set(now) - set(was):
+        parts.append(f"new among them: {some(set(now) - set(was))}")
+    return "; ".join(parts)
+
+
+def same_checker(lock: dict, submission: Path, lean_project: Path, scored: bool = True) -> dict:
+    """Whether an accepted submission made under the lock has the locked checker, by Lean's account of the
+    modules the service compiled for it. `verified` is True only if the submission names the locked checker
+    and soundness theorem, Lean finds each declared in the module it was locked in and nowhere else, and the
+    three fingerprints are the lock's: the kernel terms of the checker and of what it depends on, the
+    soundness statement with what it is written in, and the graph and task they reach. It is False when one
+    of these fails, and `why` says which, with the constants that differ. It is None when Lean could not be
+    asked: then nothing is known, and the question is to be asked again.
+
+    With `scored` False the submission is a lemma (the scaling question): it names no checker, and the
+    question is whether the constants its statement may mention are the locked ones."""
+    submission = Path(submission)
     try:
-        read_lock(submission)
-    except LockError as exc:
-        return str(exc)
-    return None
+        block = json.loads((submission / "manifest.json").read_text()).get("scored") or {}
+    except (OSError, ValueError) as exc:
+        return {"verified": False, "why": f"its manifest cannot be read ({exc})"}
+    named = [f"the submission names {block.get(key)} as its {what}, not the locked {lock[key]}"
+             for key, what in (("checker", "checker"), ("sound", "soundness theorem")) if block.get(key) != lock[key]]
+    if scored and named:
+        return {"verified": False, "why": "; ".join(named)}
+    try:
+        info = inspect.inspect_submission(lean_project, submission, where=[lock["checker"], lock["sound"]],
+                                          closure=[lock["checker"], lock["sound"]])
+        prints, constants = inspect.fingerprints(info, lock["checker"], lock["sound"])
+    except inspect.Refused as exc:
+        return {"verified": False, "why": f"what the submission declares does not single out its checker: {exc}"}
+    except inspect.InspectError as exc:
+        return {"verified": None, "why": f"Lean could not be asked what the submission declares: {exc}"}
+    out = {"verified": True, "why": None, "fingerprints": prints, "constants": {key: len(value) for key, value in constants.items()}}
+    problems = []
+    for key in ("checker", "sound"):
+        where = info["where"].get(lock[key]) or []
+        expected = _module_name(lock["home"][key])
+        if where != [expected]:
+            problems.append(f"{lock[key]} is declared in {', '.join(where) or 'no module'}, not only in {expected}")
+    for key, what in (("checker", "the checker's kernel terms differ from the locked checker's"),
+                      ("sound_statement", "the soundness statement, or a constant it is written in, differs from the locked one"),
+                      ("context", "the network's graph or task, as the checker uses them, differ from the first network's")):
+        if prints[key] != lock["fingerprints"][key]:
+            detail = _difference((lock.get("constants") or {}).get(key) or {}, constants[key])
+            problems.append(what + (f" ({detail})" if detail else ""))
+    if problems:
+        out.update(verified=False, why="; ".join(problems))
+    return out
 
 
 def renamed(text: str, old: str | None, new: str) -> str:

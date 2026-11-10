@@ -190,6 +190,21 @@ def test_a_fake_session_submits_the_scored_example_and_the_receipt_becomes_a_rec
             loop.resume(ctx.run.path, log=lines.append)
     finally:
         loop.lean_identity, loop.LEAN_LOCK = real_identity, real_lock
+    # the lock's questions (core.open_lane.inspect), asked of Lean about the modules the real service compiled:
+    # where the checker is declared, what it depends on, its fingerprints. The scored example keeps its
+    # instance in the checker's module, so it cannot be locked, and the reason is that one: it is found
+    # after Lean has read the compiled modules where the service keeps them
+    from core.open_lane import inspect
+    from core.open_lane.lock import lockable
+
+    sent = ctx.run.round_path(1) / "attempt_0" / "open_lane" / "submissions" / "000"
+    D, sound = "Candidate.Max2TinyScored.D", "Candidate.Max2TinyScored.D_sound"
+    info = inspect.inspect_submission(LEAN, sent, where=[D], closure=[D, sound])
+    assert info["where"] == {D: ["Candidate.Max2TinyScored"]} and info["protected"] == "Protected.N_max2_tiny_v8_s0_c64"
+    prints, parts = inspect.fingerprints(info, D, sound)
+    assert {D, "Candidate.Max2TinyScored.countSingles"} <= set(parts["checker"]) and sound in parts["sound_statement"]
+    assert set(parts["context"]) == {"Protected._.graph", "Protected._.task"} and len(set(prints.values())) == 3
+    assert "the instance belongs in a module of its own" in lockable(sent, LEAN)
     # resume: nothing is redone, nothing is added
     before = len(records)
     ctx2 = loop.resume(ctx.run.path, log=lines.append)

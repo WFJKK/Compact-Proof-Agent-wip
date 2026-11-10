@@ -246,6 +246,8 @@ def round_prompt(ctx: Context, k: int) -> Prompt:
     else:
         p = build_prompt(ctx.cfg, ctx.folder, ctx.entries, ctx.run, k)
     ctx.log(f"  prompt: about {p.stats['tokens_estimate']:,} tokens" + (f"; trimmed {', '.join(p.stats['trimmed'])}" if p.stats["trimmed"] else ""))
+    for line in p.stats.get("lock_unread") or []:
+        ctx.log(f"  warning: could not ask Lean whether this proof can go to the seed check, so the prompt does not say: {line}")
     return p
 
 
@@ -316,11 +318,27 @@ def preflight(cfg: dict, folder) -> None:
         if not binary.is_file():
             raise LoopError(f"the Lean project at {project} has no built acceptcheck (lake build acceptcheck there first)")
         check_lean_lock(project)
+        from .open_lane.stages import planned
+
+        if planned(cfg):
+            check_inspection(project)
     if cfg["backend"] in ("api", "claude_code"):
         g = git_state()
         if g["commit"] is None or g["dirty"]:
             raise LoopError(f"a run with the {cfg['backend']} backend starts only from a clean commit; commit or stash your changes first")
         make_backend(cfg)  # fails here, before the run exists, if the key is missing or the CLI is not logged in
+
+
+def check_inspection(project: Path) -> None:
+    """A run with a session after its proof rounds locks a checker, and the lock asks Lean what the compiled
+    modules declare (core.open_lane.inspect). That program must run with the Lean project's Lean: found here,
+    before the run exists, not when the proof rounds are over."""
+    from .open_lane.inspect import InspectError, self_check
+
+    try:
+        self_check(project)
+    except InspectError as exc:
+        raise LoopError(f"the lock of the seed check cannot ask the Lean of {project} about compiled modules: {exc}")
 
 
 LEAN_LOCK = REPO_ROOT / "lean-checker.lock"

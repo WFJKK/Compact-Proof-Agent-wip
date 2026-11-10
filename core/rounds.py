@@ -311,7 +311,11 @@ def _line(rec: dict) -> str:
 def _open_line(rec: dict) -> str:
     head = f"    {rec.get('network') or '-'} submission {rec.get('submission', '-')}: {rec['status']}"
     if rec["status"] == "ok":
-        return f"{head}, certified {rec['certified']}/{rec['n_inputs']}, length {rec['length']:,}"
+        lock = rec.get("lock") or {}
+        # a seed check's accepted proof: whether Lean found the locked checker in it (core.open_lane.lock)
+        said = ("" if "verified" not in lock else "; the locked checker" if lock["verified"] and lock.get("intact") else
+                f"; NOT the locked checker, so not a result of the seed check: {(lock.get('why') or 'the locked modules changed')[:200]}")
+        return f"{head}, certified {rec['certified']}/{rec['n_inputs']}, length {rec['length']:,}{said}"
     if rec["status"] == "verified":
         return f"{head}, certified {rec['certified']}/{rec['n_inputs']}; {(rec.get('error') or '')[:120]}"
     return f"{head}: {(rec.get('error') or '').splitlines()[-1][:120] if rec.get('error') else ''}"
