@@ -374,6 +374,32 @@ def shortcut (n : Nat) : Nat := n
 
 theorem shortcut_eq (n : Nat) : shortcut n = n := rfl
 
+/-- A proof of the rules that unfolds a definition of the base. The equations Lean makes of `count` for
+    it (`Toy.count.eq_1` and the like) are kept in this module, not in the base. -/
+theorem count_one (I : Interp) : count I 1 = I.step 0 := by simp [count]
+
+end Toy
+"""
+# a module shown in part, as the Lean project's soundness file is: one lemma of the base, and a proof about
+# the rule, which unfolds it, so that this module keeps the equations Lean makes of the rule
+TOY_SOUND = """import Toy.Rules
+
+namespace Toy
+
+/-- Shown: counting two steps. -/
+theorem count_two : count counting 2 = 2 := count_counting 2
+
+/-- Not shown: a proof about the rule. -/
+theorem shortcut_two : shortcut 2 = 2 := by simp [shortcut]
+
+end Toy
+"""
+TOY_SOUND_EXCERPT = """-- [excerpt] Toy/Sound.lean as this run offers it.
+namespace Toy
+
+/-- Shown: counting two steps. -/
+theorem count_two : count counting 2 = 2 := count_counting 2
+
 end Toy
 """
 # what a run shows of Toy/Base.lean: everything but the rule for groups
@@ -403,9 +429,10 @@ theorem count_counting (n : Nat) : count counting n = n := by
 
 end Toy
 """
-TOY_SHOWN = ["Toy.Interp", "Toy.Interp.step", "Toy.Interp.mk", "Toy.Interp.rec", "Toy.count", "Toy.counting", "Toy.count_counting"]
-TOY_CLOSED = ["Toy.Interp.leap", "Toy.leap_counting", "Toy.shortcut", "Toy.shortcut_eq"]
-TOY_SURFACE = {"excerpts": ["Toy/Base.lean"], "library": "Toy", "forbidden": [r"\bleap", "shortcut", "rule for groups"],
+TOY_SHOWN = ["Toy.Interp", "Toy.Interp.step", "Toy.Interp.mk", "Toy.Interp.rec", "Toy.count", "Toy.counting", "Toy.count_counting",
+             "Toy.count_two"]
+TOY_CLOSED = ["Toy.Interp.leap", "Toy.leap_counting", "Toy.shortcut", "Toy.shortcut_eq", "Toy.count_one", "Toy.shortcut_two"]
+TOY_SURFACE = {"excerpts": ["Toy/Base.lean", "Toy/Sound.lean"], "library": "Toy", "forbidden": [r"\bleap", "shortcut", "rule for groups"],
                "probes": {"shown": TOY_SHOWN, "closed": TOY_CLOSED}}
 
 
@@ -421,11 +448,11 @@ def compile_lean(root: Path, rel: str, out: Path, path: list[Path]) -> None:
 def toy(tmp_path_factory) -> Path:
     """A Lean project with a library `Toy` of two modules, built where lake builds a library."""
     project = tmp_path_factory.mktemp("toy")
-    for rel, text in (("Toy/Base.lean", TOY_BASE), ("Toy/Rules.lean", TOY_RULES), ("scripts/accept.py", "")):
+    for rel, text in (("Toy/Base.lean", TOY_BASE), ("Toy/Rules.lean", TOY_RULES), ("Toy/Sound.lean", TOY_SOUND), ("scripts/accept.py", "")):
         (project / rel).parent.mkdir(parents=True, exist_ok=True)
         (project / rel).write_text(text)
     lib = project / ".lake" / "build" / "lib" / "lean"
-    for rel in ("Toy/Base.lean", "Toy/Rules.lean"):
+    for rel in ("Toy/Base.lean", "Toy/Rules.lean", "Toy/Sound.lean"):
         compile_lean(project, rel, lib, [lib])
     return project
 
@@ -437,6 +464,7 @@ def toy_surface(toy, tmp_path, monkeypatch) -> dict:
     (d / "Toy").mkdir(parents=True)
     (d / "SURFACE.yaml").write_text(yaml.safe_dump(TOY_SURFACE))
     (d / "Toy" / "Base.lean").write_text(TOY_EXCERPT)
+    (d / "Toy" / "Sound.lean").write_text(TOY_SOUND_EXCERPT)
     monkeypatch.setattr(surface, "SURFACES", tmp_path / "surfaces")
     monkeypatch.setattr(inspect, "lean_binary", lambda project: LEAN)
     return surface.of_run(run_of(toy))
@@ -449,14 +477,21 @@ def test_lean_says_which_constants_of_the_library_a_run_shows(toy, toy_surface):
     definition's value mentions is exposed. Everything else of the library is closed, a hidden field of a
     shown structure and a whole module that is not shown among it."""
     surface.check(toy_surface, toy, {})
-    assert surface.shown_lines(toy_surface, toy) == {"Toy.Base": [1, 3, 4, 5, 6, 10, 11, 12, 13, 18, 19, 20, 23, 24, 25, 26, 30]}
-    names = TOY_SHOWN + TOY_CLOSED + ["Toy.leapBy", "Toy.Interp.casesOn", "Toy.count.match_1", "Nat.succ", "Toy.nothing"]
+    assert surface.shown_lines(toy_surface, toy) == {"Toy.Base": [1, 3, 4, 5, 6, 10, 11, 12, 13, 18, 19, 20, 23, 24, 25, 26, 30],
+                                                     "Toy.Sound": [3, 5, 6, 11]}
+    # the equations Lean made on demand: of the shown `count`, kept by the module of the rules, which is not
+    # shown; of the rule `shortcut`, kept by the module that is shown in part
+    made = ["Toy.count.eq_1", "Toy.shortcut.eq_1"]
+    names = TOY_SHOWN + TOY_CLOSED + made + ["Toy.leapBy", "Toy.Interp.casesOn", "Toy.count.match_1", "Nat.succ", "Toy.nothing"]
     got = offered.classify(toy_surface, toy, names)
     assert {n: got["classes"][n] for n in TOY_SHOWN} == {n: "shown" for n in TOY_SHOWN}
     assert {n: got["classes"][n] for n in TOY_CLOSED} == {n: "closed" for n in TOY_CLOSED}
+    # a constant Lean made goes with the declaration its name extends, in whichever module Lean keeps it: an
+    # equation of a shown definition is shown, and an equation of the rule shows nothing of the rule
+    assert {n: got["classes"][n] for n in made} == {"Toy.count.eq_1": "shown", "Toy.shortcut.eq_1": "closed"}
     assert got["classes"]["Toy.leapBy"] == "exposed" and got["library"]["exposed"] == ["Toy.leapBy"]
     assert got["classes"]["Toy.Interp.casesOn"] == "shown" and got["classes"]["Nat.succ"] == "absent" == got["classes"]["Toy.nothing"]
-    assert got["library"]["modules"] == 2 and got["library"]["shown"] < got["library"]["constants"]
+    assert got["library"]["modules"] == 3 and got["library"]["shown"] < got["library"]["constants"]
     assert offered.self_check(toy_surface, toy) == got["library"]
 
 
@@ -471,7 +506,8 @@ def test_excerpts_source_and_build_must_fit_together_before_a_run_starts(toy, to
         offered.self_check(toy_surface, toy)
     excerpt.write_text(TOY_EXCERPT)
     moved = tmp_path / "moved"
-    for rel in ("Toy/Base.lean", "Toy/Rules.lean", ".lake/build/lib/lean/Toy/Base.olean", ".lake/build/lib/lean/Toy/Rules.olean"):
+    for rel in ("Toy/Base.lean", "Toy/Rules.lean", "Toy/Sound.lean", ".lake/build/lib/lean/Toy/Base.olean",
+                ".lake/build/lib/lean/Toy/Rules.olean", ".lake/build/lib/lean/Toy/Sound.olean"):
         (moved / rel).parent.mkdir(parents=True, exist_ok=True)
         (moved / rel).write_bytes((toy / rel).read_bytes())
     (moved / "Toy" / "Base.lean").write_text(TOY_BASE.replace("namespace Toy\n", "namespace Toy\n\n-- a line the build has not seen\n", 1))
@@ -489,6 +525,14 @@ theorem D_sound (n : Nat) : D n = n := Toy.count_counting n
 theorem unfolded : Toy.counting.step 0 = 1 := by unfold Toy.counting; rfl
 theorem by_cases (I : Toy.Interp) : I.step 0 = I.step 0 := by cases I; rfl
 end Candidate.Clean
+"""
+# a proof as every real one is: it imports the library's proofs, the rules' among them, and rewrites with a
+# shown definition. The equation of `count` it rewrites with is the one the module of the rules keeps
+CLEAN_TOO = """import Toy.Sound
+namespace Candidate.CleanToo
+theorem one_step (I : Toy.Interp) (n : Nat) : Toy.count I (n + 1) = I.step (Toy.count I n) := by rw [Toy.count]
+theorem two (n : Nat) (h : n = 2) : Toy.count Toy.counting n = 2 := by subst h; exact Toy.count_two
+end Candidate.CleanToo
 """
 BEYOND = """import Toy.Rules
 import Lean
@@ -513,13 +557,17 @@ end Candidate.Beyond
 @needs_lean
 def test_a_module_that_mentions_what_the_run_does_not_show_is_found_constant_by_constant(toy, toy_surface, tmp_path):
     lib = toy / ".lake" / "build" / "lib" / "lean"
-    for name, text in (("Clean", CLEAN), ("Beyond", BEYOND)):
+    for name, text in (("Clean", CLEAN), ("CleanToo", CLEAN_TOO), ("Beyond", BEYOND)):
         (tmp_path / "Candidate").mkdir(exist_ok=True)
         (tmp_path / "Candidate" / f"{name}.lean").write_text(text)
         compile_lean(tmp_path, f"Candidate/{name}.lean", tmp_path / "out", [lib])
-    oleans = {f"Candidate.{name}": tmp_path / "out" / "Candidate" / f"{name}.olean" for name in ("Clean", "Beyond")}
-    clean = offered.of_oleans(toy_surface, toy, {"Candidate.Clean": oleans["Candidate.Clean"]})
+    oleans = {f"Candidate.{name}": tmp_path / "out" / "Candidate" / f"{name}.olean" for name in ("Clean", "CleanToo", "Beyond")}
+    clean = offered.of_oleans(toy_surface, toy, {name: oleans[name] for name in ("Candidate.Clean", "Candidate.CleanToo")})
     assert clean["clean"] is True and clean["uses"] == [] and "uses nothing of the Lean project's library beyond" in offered.note(clean)
+    # the equation the second proof rewrites with is not its own: Lean made it for the rules' module and keeps it there
+    info = inspect.inspect_oleans(LEAN, {"Candidate.CleanToo": oleans["Candidate.CleanToo"], "Toy.Rules": lib / "Toy" / "Rules.olean"},
+                                  where=["Toy.count.eq_2"])
+    assert info["where"] == {"Toy.count.eq_2": ["Toy.Rules"]} and info["modules"]["Candidate.CleanToo"]["constants"] == 2
     verdict = offered.of_oleans(toy_surface, toy, oleans)
     uses = {u["constant"]: u["closed"] for u in verdict["uses"]}
     assert verdict["clean"] is False and uses == {
@@ -545,6 +593,7 @@ def toy_run(tmp_path: Path, monkeypatch, toy: Path, scripts: list[dict], rounds_
     whole = ["CompactCheck/Spec.lean", "CompactCheck/Counted.lean", "CompactCheck/CountedOps.lean"]  # what the prompt pastes
     (d / "SURFACE.yaml").write_text(yaml.safe_dump({**TOY_SURFACE, "whole": whole}))
     (d / "Toy" / "Base.lean").write_text(TOY_EXCERPT)
+    (d / "Toy" / "Sound.lean").write_text(TOY_SOUND_EXCERPT)
     monkeypatch.setattr(surface, "SURFACES", tmp_path / "surfaces")
     return path, project
 
@@ -731,8 +780,9 @@ def real_surface(tmp_path: Path) -> dict:
 def test_the_library_the_lean_project_built_is_read_as_the_minimal_surface_says(tmp_path, monkeypatch):
     """Lean's reading of the real library: the interface's single rule is shown and its rules for groups are
     closed, field by field of one structure; the task's label is shown and its rule fields are closed; the
-    fixed rules' modules are closed; what a shown definition unfolds to is exposed. With the whole project
-    built, the run's own check (the surface's probes) passes."""
+    fixed rules' modules are closed; what a shown definition unfolds to is exposed; a constant Lean made goes
+    with the declaration it belongs to, whichever module keeps it. With the whole project built, the run's
+    own check (the surface's probes) passes."""
     monkeypatch.setattr(inspect, "lean_binary", lambda project: LEAN)
     s = real_surface(tmp_path)
     shown = ["CompactCheck.Interp.single", "CompactCheck.Interp.weight", "CompactCheck.Interp.rec", "CompactCheck.Interp.counting",
@@ -744,10 +794,16 @@ def test_the_library_the_lean_project_built_is_read_as_the_minimal_surface_says(
               "CompactCheck.Task.labelSymmetric", "CompactCheck.rootBox", "CompactCheck.Range", "CompactCheck.intervalCost", "CompactCheck.matMul",
               "CompactCheck.checkProof", "CompactCheck.symmetricNet"]
     exposed = ["CompactCheck.CostM.interval", "CompactCheck.Box", "CompactCheck.cornerLabel"]
-    got = offered.classify(s, PROJECT, shown + closed + exposed)
-    want = {**{n: "shown" for n in shown}, **{n: "closed" for n in closed}, **{n: "exposed" for n in exposed}}
-    assert {n: got["classes"][n] for n in want} == want
-    assert len(got["library"]["exposed"]) < 80  # what unfolding the shown definitions reaches: a few dozen constants at most
+    # equations Lean made on demand, both kept by the module of the general single rule, which is shown in
+    # part: one of a definition the run shows, one of a definition of the general checker, which it does not.
+    # (On the whole library the soundness file keeps such equations of the rules' definitions, `rootBox` among
+    # them. Taking them for shown is what first made `rootBox` and `Range` come out exposed there.)
+    made = {"CompactCheck.Cost.add.eq_1": "shown", "CompactCheck.gevalOps.eq_1": "closed"}
+    want = {**{n: "shown" for n in shown}, **{n: "closed" for n in closed}, **{n: "exposed" for n in exposed}, **made}
+    got = offered.classify(s, PROJECT, list(want))
+    off = {n: f"{got['classes'][n]}, not {w}" for n, w in want.items() if got["classes"][n] != w}
+    assert not off, f"{off}; exposed: {got['library']['exposed']}"
+    assert len(got["library"]["exposed"]) < 80, got["library"]["exposed"]  # what unfolding the shown definitions reaches
     if WHOLE_BUILD:
         assert offered.self_check(s, PROJECT)["constants"] == got["library"]["constants"]
 

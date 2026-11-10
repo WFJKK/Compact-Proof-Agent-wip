@@ -42,7 +42,10 @@ also prints `surface`:
 
 Which line declares a constant is Lean's own record (the declaration ranges it keeps for editors),
 read from the library's .olean files. A constant Lean made itself (a recursor, a matcher, an equation)
-has none and goes with the declaration its name extends.
+has none and goes with the declaration its name extends, in whichever module Lean keeps it: an
+equation of `f` that Lean makes on demand is kept by the first module that asked for it, which need
+not be the module of `f`. So an equation of a hidden definition shows nothing of it, though a shown
+module keeps it, and an equation of a shown definition is shown, though a hidden module keeps it.
 
 Nothing here is trusted by the Lean acceptance service; it reads what the service compiled.
 -/
@@ -173,40 +176,36 @@ inductive Shown where
 structure Library where
   /-- Every constant of the library's modules. -/
   consts : Std.HashMap Name ConstantInfo := {}
-  /-- The modules that declare a constant (one, unless two modules declare the same name). -/
+  /-- The modules that keep a constant (one, unless two modules keep the same name). -/
   homes : Std.HashMap Name (Array String) := {}
-  /-- Per module, the line on which a constant's name is declared, for the constants that have one. -/
-  lines : Std.HashMap String (Std.HashMap Name Nat) := {}
+  /-- Per constant that was written in a source file: its module, and the line its name stands on. -/
+  declared : Std.HashMap Name (String × Nat) := {}
   shown : Std.HashMap String Shown := {}
 
-/-- The line that declares `n` in module `m`: its own, or that of the nearest declaration its name
-    extends (`f.match_1`, `S.rec` and `S.mk.injEq` go with `f`, `S` and `S.mk`). A private name is
-    also looked up as the name the user wrote. -/
-def Library.lineOf (lib : Library) (m : String) (n : Name) : Option Nat := Id.run do
-  let some ls := lib.lines[m]? | return none
+/-- The declaration behind `n`: `n` itself if it was written in a source file, else the nearest
+    declaration its name extends (`f.eq_1`, `f.match_1`, `S.rec` and `S.mk.injEq` go with `f`, `f`,
+    `S` and `S.mk`), whichever module keeps `n`. A private name is also looked up as the name the
+    user wrote. -/
+def Library.declOf (lib : Library) (n : Name) : Option (String × Nat) := Id.run do
   for start in [n, (privateToUserName? n).getD n] do
     let mut p := start
     while !p.isAnonymous do
-      if let some l := ls[p]? then return some l
+      if let some d := lib.declared[p]? then return some d
       p := p.getPrefix
   return none
 
-/-- Whether module `m` shows constant `n`. A constant with no declared line at all (an instance Lean
-    derived, say) counts as shown: it is nothing a person wrote. -/
-def Library.showsIn (lib : Library) (m : String) (n : Name) : Bool :=
-  match lib.shown[m]? with
-  | none => false
-  | some .whole => true
-  | some (.lines ls) =>
-    match lib.lineOf m n with
-    | some l => ls.contains l
-    | none => true
-
-/-- Whether the run shows the library constant `n`: every module that declares it does. -/
+/-- Whether the run shows the library constant `n`: the module of the declaration behind it is shown
+    whole, or that declaration's line is one of the lines shown. A constant with no declaration of
+    the library behind it (what Lean made for a declaration of its own library or of Mathlib, and a
+    module of this library happens to keep) is nothing the library wrote and counts as shown. -/
 def Library.shows (lib : Library) (n : Name) : Bool :=
-  match lib.homes[n]? with
-  | some ms => ms.all fun m => lib.showsIn m n
-  | none => false
+  match lib.declOf n with
+  | some (m, l) =>
+    match lib.shown[m]? with
+    | some .whole => true
+    | some (.lines ls) => ls.contains l
+    | none => false
+  | none => true
 
 /-- The projection function of field `i` of the library structure `s`, by the constructor's binders. -/
 def Library.fieldOf (lib : Library) (s : Name) (i : Nat) : Option Name := do
@@ -316,7 +315,7 @@ def run (args : List String) : IO UInt32 := do
   if !library.isEmpty then
     let mut libConsts : Std.HashMap Name ConstantInfo := {}
     let mut libHomes : Std.HashMap Name (Array String) := {}
-    let mut libLines : Std.HashMap String (Std.HashMap Name Nat) := {}
+    let mut libDeclared : Std.HashMap Name (String × Nat) := {}
     for (m, f) in library do
       let (data, _region) ← readModuleData f
       if data.isModule then
@@ -327,11 +326,12 @@ def run (args : List String) : IO UInt32 := do
       if !ranges.isEmpty && !(ranges.any fun r => own.contains r.1) then
         IO.eprintln s!"the declaration ranges of {m} name none of its constants: they were not read as what they are"
         return 3
-      libLines := libLines.insert m (ranges.foldl (fun acc r => acc.insert r.1 r.2.selectionRange.pos.line) {})
+      for r in ranges do
+        if !libDeclared.contains r.1 then libDeclared := libDeclared.insert r.1 (m, r.2.selectionRange.pos.line)
       for ci in data.constants do
         libConsts := libConsts.insert ci.name ci
         libHomes := libHomes.insert ci.name ((libHomes.getD ci.name #[]).push m)
-    let lib : Library := { consts := libConsts, homes := libHomes, lines := libLines,
+    let lib : Library := { consts := libConsts, homes := libHomes, declared := libDeclared,
                            shown := shownSpec.foldl (fun acc (m, sh) => acc.insert m sh) {} }
     let shownSet : Std.HashSet Name := lib.homes.fold (fun acc n _ => if lib.shows n then acc.insert n else acc) {}
     let mut exposed : Std.HashSet Name := {}

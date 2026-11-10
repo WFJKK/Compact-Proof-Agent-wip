@@ -12,8 +12,11 @@ say which module declares a constant and on which line, the surface says which l
 modules the acceptance service compiled for a submission say what its constants mention, in their types,
 their values and their proofs. A library constant is
 
-- shown, when its module is shown whole or the line that declares it is a line of the module's excerpt (a
-  constant Lean made itself, a recursor or a matcher, goes with the declaration its name extends);
+- shown, when its module is shown whole or the line that declares it is a line of the module's excerpt. A
+  constant Lean made itself (a recursor, a matcher, an equation) goes with the declaration its name extends,
+  in whichever module Lean keeps it: an equation of `f` that Lean makes on demand is kept by the first
+  module that asked for it. The Lean project's soundness file keeps equations of the rules' definitions,
+  and the rules' files keep equations of the base's;
 - exposed, when it is not shown but the type or the value of a shown constant mentions it: unfolding a shown
   definition puts such a constant into a term without anyone having looked for it;
 - closed otherwise. A constant of the submission that mentions a closed constant is a use of what the run
@@ -93,8 +96,9 @@ def self_check(surface: dict, lean_project: Path) -> dict:
     off = [f"{n} is {got['classes'].get(n, 'absent')}, not {w}" for n, w in want.items() if got["classes"].get(n) != w]
     if off:
         raise surfaces.SurfaceError(
-            f"the {surface['knowledge']}-knowledge surface and the library the Lean project at {lean_project} built do not "
-            "fit together (an excerpt, the source or the build is not the one the others were made for): " + "; ".join(off[:8]))
+            f"the {surface['knowledge']}-knowledge surface and Lean's reading of the library the Lean project at {lean_project} "
+            "built do not fit together (an excerpt, the source or the build is not the one the others were made for, or "
+            "the reading is at fault): " + "; ".join(off[:8]) + (f" (and {len(off) - 8} more)" if len(off) > 8 else ""))
     return got["library"]
 
 

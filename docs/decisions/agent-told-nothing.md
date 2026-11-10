@@ -51,12 +51,15 @@ works on a network: no rule, no earlier proof or its length, no doc. Four things
    therefore counted only if none of its own constants (a definition, a statement or a proof) mentions a
    constant of the library that the surface does not show. Lean is asked, as for the lock: its own record
    of where each constant is declared says whether the line is one the run shows, and the modules the
-   service compiled say what a submission's constants mention. What a shown definition unfolds to is not
-   held against a proof. The agent is told at the compile and again with the receipt: which of its
-   constants, and what they mention. A proof that is not clean stays accepted and is recorded without a
-   length; the receipt is kept as the service wrote it. Before a run starts, Lean's reading is checked
-   against constants the surface names as shown and as closed, on the library the project built. The base allowlist of the Lean service still admits the linear interval rule
-   (`Interp.interval`), so without this rule a minimal-knowledge run would have scored a checker built on it.
+   service compiled say what a submission's constants mention. A constant Lean made itself (an equation
+   of a definition, a matcher, a recursor) goes with the declaration its name extends, in whichever module
+   Lean keeps it. What a shown definition unfolds to is not held against a proof. The agent is told at
+   the compile and again with the receipt: which of its constants, and what they mention. A proof that
+   is not clean stays accepted and is recorded without a length; the receipt is kept as the service
+   wrote it. Before a run starts, Lean's reading is checked against constants the surface names as shown
+   and as closed, on the library the project built. The base allowlist of the Lean service still admits
+   the linear interval rule (`Interp.interval`), so without this rule a minimal-knowledge run would have
+   scored a checker built on it.
 
 The maximum-knowledge condition supplies the rules on purpose and keeps what it showed, without the README.
 
