@@ -49,6 +49,11 @@ def _lean() -> str | None:
 LEAN = _lean()
 pytestmark = pytest.mark.skipif(LEAN is None, reason="needs the Lean project (COMPACT_PROOF_LEAN or its usual places) and its Lean")
 
+
+@pytest.fixture(autouse=True)
+def _surface(stand_in_surface):
+    """The whole run at the end is on a stand-in Lean project, so on the stand-in surface (tests/conftest.py)."""
+
 PA, PB = "N_toy_s0_c3", "N_toy_s1_c2"  # the protected modules of two networks of the same sizes
 # the identity a run records of its Lean service, as the stand-ins of tests/test_stages.py give it
 IDENT = {"commit": json.loads(LEAN_LOCK.read_text())["commit"], "toolchain": "t", "lean_project": "p", "policy": "q", "acceptcheck": "b"}
@@ -427,33 +432,49 @@ def test_a_checker_with_types_recursion_and_proofs_inside_compiles_to_the_same_t
     assert same["verified"] is True and same["fingerprints"] == lock["fingerprints"] and same["constants"]["checker"] == len(names)
 
 
-def lean_service(counter: dict):
+def lean_service(counter: dict, library: tuple = (), compiles: bool = False):
     """In place of the acceptance service for a whole run: its layout, with Lean alone. A submission's
     modules are compiled by Lean in a workspace under <work>/submissions, against a protected module under
     <work>/protected (the same graph and task for every network, other weights), and the receipt is written
-    under <work>/receipts. Nothing is checked beyond compiling: what is tested is everything around it."""
+    under <work>/receipts. Nothing is checked beyond compiling: what is tested is everything around it.
+    `library` is further folders of compiled modules the candidates may import (a library standing in for the
+    Lean project's); with `compiles`, a lean_check is compiled into the workspace too, as the service does."""
     import hashlib
     import re
 
-    def compile_in(base: Path, rel: str, path: list[Path]) -> str:
+    def run_lean(base: Path, rel: str, path: list[Path]) -> tuple[bool, str]:
         out = base / "out" / (rel[: -len(".lean")] + ".olean")
         out.parent.mkdir(parents=True, exist_ok=True)
         r = subprocess.run([LEAN, "-DElab.async=false", "-R", str(base), "-o", str(out), str(base / rel)], capture_output=True,
                            text=True, env={**os.environ, "LEAN_PATH": ":".join(str(p) for p in path)}, timeout=600)
-        return "" if r.returncode == 0 else (r.stdout + r.stderr)
+        return r.returncode == 0, r.stdout + r.stderr
+
+    def compile_in(base: Path, rel: str, path: list[Path]) -> str:
+        ok, said = run_lean(base, rel, path)
+        return "" if ok else said
+
+    def protect(work: Path, network: str, claimed: int) -> tuple[str, Path]:
+        short = "N_" + re.sub(r"[^A-Za-z0-9]", "_", network) + f"_c{claimed}"
+        prot = work / "protected" / short
+        if not (prot / "out" / "Protected" / f"{short}.olean").is_file():
+            (prot / "Protected").mkdir(parents=True, exist_ok=True)
+            source = protected(short, weights=str([len(network), int(network[-1])]), claimed=claimed)
+            (prot / "Protected" / f"{short}.lean").write_text(source.replace("claimedCount ≤ 3", "claimedCount ≤ 600"))
+            assert compile_in(prot, f"Protected/{short}.lean", []) == ""
+        return short, prot
 
     def service(self, args, timeout_s):
+        if args[0] == "compile" and compiles:
+            ws, rel = Path(args[1]), args[2]
+            short, prot = protect(Path(self.state["work_dir"]), args[args.index("--network") + 1], int(args[args.index("--claimed") + 1]))
+            ok, said = run_lean(ws, rel, [*library, prot / "out", ws / "out"])  # the compiler's messages, as the service returns them
+            return {"ok": ok, "messages": said, "module": rel[: -len(".lean")].replace("/", "."),
+                    "protected_module": f"Protected.{short}", "seconds": 1.0}
         if args[0] != "submit":
             return {"ok": True, "messages": ""}
         cdir, work = Path(args[1]), Path(self.state["work_dir"])
         m = json.loads((cdir / "manifest.json").read_text())
-        short = "N_" + re.sub(r"[^A-Za-z0-9]", "_", m["network"]) + f"_c{m['claimed_count']}"
-        prot = work / "protected" / short
-        if not (prot / "out" / "Protected" / f"{short}.olean").is_file():
-            (prot / "Protected").mkdir(parents=True, exist_ok=True)
-            source = protected(short, weights=str([len(m["network"]), int(m["network"][-1])]), claimed=m["claimed_count"])
-            (prot / "Protected" / f"{short}.lean").write_text(source.replace("claimedCount ≤ 3", "claimedCount ≤ 600"))
-            assert compile_in(prot, f"Protected/{short}.lean", []) == ""
+        short, prot = protect(work, m["network"], m["claimed_count"])
         counter["n"] = counter.get("n", 0) + 1
         stem = f"{m['candidate_id']}-{1762780000 + counter['n']}"
         ws = work / "submissions" / stem
@@ -462,9 +483,9 @@ def lean_service(counter: dict):
             (ws / rel).write_bytes((cdir / rel).read_bytes())
         left, problem = list(m["modules"]), ""
         while left:  # every module after the ones it imports: compile what compiles, until nothing more does
-            done = [rel for rel in left if compile_in(ws, rel, [prot / "out", ws / "out"]) == ""]
+            done = [rel for rel in left if compile_in(ws, rel, [*library, prot / "out", ws / "out"]) == ""]
             if not done:
-                problem = compile_in(ws, left[0], [prot / "out", ws / "out"])
+                problem = compile_in(ws, left[0], [*library, prot / "out", ws / "out"])
                 break
             left = [rel for rel in left if rel not in done]
         digests = {**IDENT, "modules": {rel[:-5].replace("/", "."): hashlib.sha256((cdir / rel).read_bytes()).hexdigest() for rel in m["modules"]}}

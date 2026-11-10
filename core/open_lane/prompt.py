@@ -1,20 +1,25 @@
 """The open-lane prompt: the specification, the cost language with its prices, the tools, the scoreboard,
 the receipts so far, the agent's accepted lemmas from earlier rounds and its latest notes. No rule
-descriptions: the agent is told what a proof is and what it costs, not which argument shapes to use.
+descriptions: the agent is told what a proof is and what it costs, not which argument shapes to use, and
+nothing about what works on a network (docs/decisions/agent-told-nothing.md). Every file of the Lean project
+that the prompt pastes is read as the run's surface serves it (core.open_lane.surface): in the
+minimal-knowledge condition CountedOps.lean is an excerpt without the rules for groups of inputs.
 
 Templates: core/agent/prompts/open_lane_v1.md (the pilot's), open_lane_v2.md (adds the further sources
 and the split instance), open_lane_v3.md (the modules carried into the workspace listed instead of the
 accepted sources pasted in; the instance as one `decide +kernel` with Lean's recursion limit raised, which
-is what the kernel needs to compute a bill of thousands of charges) and open_lane_v4.md (for runs over
+is what the kernel needs to compute a bill of thousands of charges), open_lane_v4.md (for runs over
 several networks scored on cost of finishing: the goal is the mechanism shared by seeds and sizes, the
-score comes before the rules, the rules of scoring are lists, and there is advice on how to work). Under
+score comes before the rules, the rules of scoring are lists, and there is advice on how to work) and
+open_lane_v5.md (one network per run, with what follows its proof rounds). Under
 the metric cost_of_finishing the scoreboard shows that one score and, per network, the cheapest way to
 finish; under the other metrics it is unchanged. Part 1 is the same every round; part 2
 is rebuilt from the archive. Building it opens the round's first session, which carries
 the earlier rounds' accepted modules into its workspace (core.open_lane.session). The Lean
 sources shown (Spec.lean, Counted.lean, CountedOps.lean, the scored example of `open_lane.example`, the
 files of `open_lane.extra_sources`) are read from the Lean project the run config names, so the prompt
-always matches the service that will check the proof.
+always matches the service that will check the proof; an excerpt is checked against the Lean project's
+file before a run starts.
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ from ..model_folder import ModelFolder
 from ..scoring import (brute_force_line, finishing_detail, finishing_ratio, frontier, line_certified, run_cost_of_finishing,
                        summarize)
 from ..util import REPO_ROOT
+from . import surface as surfaces
 from .session import Session
 
 MAX_LEMMA_CHARS = 12000
@@ -82,8 +88,13 @@ def lean_project(cfg: dict) -> Path:
     return Path(cfg["open_lane"]["lean_project"]).expanduser().resolve()
 
 
-def _read(project: Path, rel: str) -> str:
-    p = project / rel
+def _read(project: Path, rel: str, surface: dict) -> str:
+    """A file of the Lean project as the run's surface serves it: the file, or the run's excerpt of it. What
+    the prompt pastes is always something read_file reads as well."""
+    p = surfaces.served(surface, project, rel)
+    if p is None:
+        raise PromptError(f"the {surface['knowledge']}-knowledge surface does not show {rel}, which the prompt would paste "
+                          f"(core/open_lane/surface/{surface['knowledge']}/SURFACE.yaml)")
     if not p.is_file():
         raise PromptError(f"the Lean project has no {rel}")
     return p.read_text().rstrip()
@@ -117,9 +128,9 @@ def elide_repeats(text: str, keep_first: int = 2, keep_last: int = 1, least: int
 
 KNOWLEDGE_TEXT = {
     "minimal": (
-        "This run is the minimal-knowledge condition: a checker may use every field of Interp except ginterval "
-        "and gtokenIntervals, which belong to another experimental condition (a checker that reaches one, by "
-        "name or otherwise, is refused scoring)."
+        "The interface above is the part of Interp that this run offers. The structure has further fields, kept "
+        "for other experiments: a proof whose checker reaches one of them is not counted in this run (the section "
+        "on your tools says what the run offers and how you are told)."
     ),
     "maximum": (
         "This run is the maximum-knowledge condition: a checker may use every field of Interp, including two of "
@@ -221,15 +232,24 @@ def modules_rule_text(ol: dict) -> str:
     return MODULES_RULE + why if why else ""
 
 
-SPLIT_EXAMPLE_TEXT = (
-    "  The Lean project's docs/COUNTED.md describes this under \"Split instances\", with a trap to avoid, and\n"
-    "  {path} is a complete example of it (brute force on a small\n"
-    "  network, one decided fact per input and a lemma that glues them); read_file reads both."
+# What the template says where an instance is put together from parts (open_lane.split_example): the one trap
+# of doing so, and where a complete example is. Nothing here points to a doc: the agent reads none.
+SPLIT_TRAP = (
+    "  One trap when you do: never leave it to the kernel to see that two\n"
+    "  different `CostM.run` terms are equal by unfolding them. It unfolds a\n"
+    "  structure projection before anything else, and unfolding this one\n"
+    "  runs the whole checker, the evaluation the split avoids. Rewrite with\n"
+    "  the definitions' equations instead (`rw [CostM.billed, CostM.exec]`,\n"
+    "  and your checker's own definition as a separate `rfl` equation), so\n"
+    "  that the terms compared are identical.\n"
 )
-SPLIT_EXAMPLE_SAME = (
-    "  The Lean project's docs/COUNTED.md describes this under \"Split instances\", with a trap to avoid, and the\n"
-    "  worked example below is put together this way."
+SPLIT_EXAMPLE_TEXT = SPLIT_TRAP + (
+    "  A complete example of an instance put together this way (brute force\n"
+    "  on a small network, one decided fact per input and a lemma that glues\n"
+    "  them), which read_file reads:\n"
+    "  {path}"
 )
+SPLIT_EXAMPLE_SAME = SPLIT_TRAP + "  The worked example below is put together this way."
 
 
 def split_example_text(ol: dict) -> str:
@@ -246,10 +266,10 @@ def second_example_text(rel: str | None) -> str:
     return SECOND_EXAMPLE_TEXT.format(path=rel) if rel else ""
 
 
-def extra_sources_text(project: Path, rels: list[str]) -> str:
+def extra_sources_text(project: Path, rels: list[str], surface: dict) -> str:
     if not rels:
         return ""
-    return "\n".join(f"From {rel}:\n{lean_block(_read(project, rel))}" for rel in rels)
+    return "\n".join(f"From {rel}:\n{lean_block(_read(project, rel, surface))}" for rel in rels)
 
 
 def protected_interface() -> str:
@@ -265,8 +285,9 @@ def protected_interface() -> str:
     )
 
 
-def tools_text() -> str:
-    return "\n".join(f"- {name}: {spec['description']}" for name, spec in Session.TOOLS.items())
+def tools_text(surface: dict) -> str:
+    """The tools, and what two of them reach: the files of the Lean project that the run offers."""
+    return "\n".join(f"- {name}: {spec['description']}" for name, spec in Session.TOOLS.items()) + "\n" + surfaces.describe(surface)
 
 
 def networks_text(entries: list[dict]) -> str:
@@ -280,6 +301,7 @@ def networks_text(entries: list[dict]) -> str:
 
 def static_values(cfg: dict, folder: ModelFolder, entries: list[dict]) -> dict:
     project = lean_project(cfg)
+    surface = surfaces.of_run(cfg)
     settings = list(dict.fromkeys(e["setting"] for e in entries))
     size_settings = "; ".join(
         f"{s}: " + ", ".join(f"{k}={v}" for k, v in folder.sizes(s).items()) + f" ({folder.n_inputs(s):,} inputs)" for s in settings
@@ -293,18 +315,18 @@ def static_values(cfg: dict, folder: ModelFolder, entries: list[dict]) -> dict:
         "SIZE_SETTINGS": size_settings,
         "NETWORKS": networks_text(entries),
         "PROTECTED_INTERFACE": protected_interface(),
-        "SPEC": lean_block(_read(project, "CompactCheck/Spec.lean")),
-        "COUNTED": lean_block(_read(project, "CompactCheck/Counted.lean")),
-        "COUNTED_OPS": lean_block(_read(project, "CompactCheck/CountedOps.lean")),
-        "EXAMPLE": lean_block(elide_repeats(_read(project, ol["example"]))),
-        "EXTRA_SOURCES": extra_sources_text(project, ol["extra_sources"]),
+        "SPEC": lean_block(_read(project, "CompactCheck/Spec.lean", surface)),
+        "COUNTED": lean_block(_read(project, "CompactCheck/Counted.lean", surface)),
+        "COUNTED_OPS": lean_block(_read(project, "CompactCheck/CountedOps.lean", surface)),
+        "EXAMPLE": lean_block(elide_repeats(_read(project, ol["example"], surface))),
+        "EXTRA_SOURCES": extra_sources_text(project, ol["extra_sources"], surface),
         "SECOND_EXAMPLE": second_example_text(ol.get("second_example")),
         "SPLIT_EXAMPLE": split_example_text(ol),
         "MODEL_NOTES": (ol.get("notes") or "").strip(),
         "AFTER_ROUNDS": after_rounds_text(ol),
         "MODULES_RULE": modules_rule_text(ol),
         "KNOWLEDGE": KNOWLEDGE_TEXT[ol.get("knowledge", "minimal")],
-        "TOOLS": tools_text(),
+        "TOOLS": tools_text(surface),
         "BUDGETS": budgets,
         "METRIC": metric_text(cfg, folder, entries) + (
             f"\nThe budget grid, per size setting: {grid_text(entries, cfg['budget_ratio'])}." if cfg["metric"] == "Q_grid" else ""),
@@ -422,7 +444,8 @@ def receipts_text(records: list[dict], entries: list[dict] | None = None, metric
                 above += "; ready for the seed check" if why is None else f"; not ready for the seed check: {why[:MAX_REASON]}"
             lines.append(f"{head}, certified {r['certified']}, length {r['length']:,} (bill {r['length_by_rule']['bill']:,}){above}")
         elif r["status"] == "lemma":
-            lines.append(f"{head} (auxiliary lemma accepted): {(r.get('statement') or '')[:MAX_REASON]}")
+            beyond = f"; {r['error'][:MAX_REASON]}" if r.get("error") else ""  # it uses what the run does not offer
+            lines.append(f"{head} (auxiliary lemma accepted): {(r.get('statement') or '')[:MAX_REASON]}{beyond}")
         elif r["status"] == "verified":
             lines.append(f"{head}, certified {r['certified']}; {(r.get('error') or '')[:MAX_REASON]}")
         else:
@@ -464,7 +487,9 @@ def workspace_text(carried) -> str:
         return "none yet"
     lines = [WORKSPACE_HEAD]
     for m in carried:
-        if m.get("kind") == "auxiliary":
+        if m.get("beyond_offered"):
+            what = "accepted, not counted: it uses what this run does not offer"
+        elif m.get("kind") == "auxiliary":
             what = f"accepted lemma {m.get('theorem')}"
         elif m.get("scored"):
             what = f"scored proof ({m.get('certified')} inputs, length {m.get('length'):,})" if m.get("length") else "scored proof"

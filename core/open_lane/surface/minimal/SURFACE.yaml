@@ -1,0 +1,130 @@
+# What a minimal-knowledge run shows the agent of the Lean project (core/open_lane/surface.py).
+#
+# The agent is told nothing about what works on a network (docs/decisions/agent-told-nothing.md): it gets the
+# specification, the network's semantics and the counted language with the single-input rule. No docs, no
+# README, none of the fixed rules' sources, no earlier proof.
+
+# Files of the Lean project it may read and search as they are.
+whole:
+  - CompactCheck/Spec.lean
+  - CompactCheck/Counted.lean
+  - CompactCheck/Tensor.lean
+  - CompactCheck/Network.lean
+  - CompactCheck/Eval.lean
+  - CompactCheck/Semantics.lean
+  - lean-toolchain
+
+# Files it sees as an excerpt: the file of the same path in this folder. Every line of an excerpt is a line
+# of the Lean project's file, in order, except its own notes (lines that say [excerpt]); a run checks that
+# before it starts, so an excerpt can leave things out and cannot differ from the code.
+#   CountedOps   the interface without the rules for groups of inputs, the counting interpreter, the lemmas
+#   Task         the specification's part of a task: its space and its label
+#   Walk         inputs
+#   LinAlg       vectors and the strict-maximum test
+#   Check        the exact test for one input
+#   CountedCheck what the single-input rule is charged on a linear network, and E
+#   CountedGeneral, CountedGeneralSound   the single rule on a general network (attention): its price, its
+#                run, its correctness and the lemmas an instance is put together with
+#   Soundness    the evaluator computes what the specification computes; an accepted input is correct
+#   allowlist    what a scored checker may use, without the linear rule for groups of inputs and its types
+excerpts:
+  - CompactCheck/CountedOps.lean
+  - CompactCheck/Task.lean
+  - CompactCheck/Walk.lean
+  - CompactCheck/LinAlg.lean
+  - CompactCheck/Check.lean
+  - CompactCheck/CountedCheck.lean
+  - CompactCheck/CountedGeneral.lean
+  - CompactCheck/CountedGeneralSound.lean
+  - CompactCheck/Soundness.lean
+  - accept/allowlist.txt
+
+# The Lean project's library. Its compiled modules hold everything, shown or not, and every module the agent
+# compiles has all of it in scope. So a proof is counted only if none of its own constants (a definition, a
+# statement or a proof) mentions a constant of the library that this surface does not show
+# (core/open_lane/offered.py). Lean is asked: which line declares a constant is its own record, and a constant
+# is shown when its module is shown whole or that line is a line of the module's excerpt. A constant that is
+# not shown but that the type or the value of a shown one mentions (what unfolding a shown definition puts
+# into a term) is not held against a proof either.
+library: CompactCheck
+
+# Constants that must come out shown, and closed, when Lean is asked about the library the project built:
+# checked before a run starts, so that excerpts, source and build that do not fit together are found then.
+probes:
+  shown:
+    - CompactCheck.Interp.single
+    - CompactCheck.Interp.weight
+    - CompactCheck.Interp.rec
+    - CompactCheck.Interp.counting
+    - CompactCheck.Interp.counting_single
+    - CompactCheck.CostM.single
+    - CompactCheck.CostM.single_spec
+    - CompactCheck.CostM.run_bind
+    - CompactCheck.CostM.weight
+    - CompactCheck.Task.label
+    - CompactCheck.maxTask
+    - CompactCheck.allInputs
+    - CompactCheck.strictMaxAt
+    - CompactCheck.singleOk
+    - CompactCheck.singleCost
+    - CompactCheck.singleOk_correct
+    - CompactCheck.numCorrect
+    - CompactCheck.CostM.gsingle
+    - CompactCheck.CostM.gsingle_run_of
+    - CompactCheck.CostM.gsingle_correct
+    - CompactCheck.gsingleRun
+    - CompactCheck.Cost.total_add
+  closed:
+    - CompactCheck.Interp.interval
+    - CompactCheck.Interp.ginterval
+    - CompactCheck.Interp.gtokenIntervals
+    - CompactCheck.Interp.counting_interval
+    - CompactCheck.CostM.ginterval_run_of
+    - CompactCheck.CostM.ginterval_correct
+    - CompactCheck.gintervalRun
+    - CompactCheck.CostM.interval_spec
+    - CompactCheck.Task.constantLabel
+    - CompactCheck.Task.labelSymmetric
+    - CompactCheck.rootBox
+    - CompactCheck.intervalCost
+    - CompactCheck.matMul
+    - CompactCheck.checkProof
+    - CompactCheck.check_sound
+    - CompactCheck.singleOk_perm
+    - CompactCheck.symmetricNet
+
+# The run's worked examples (open_lane.example, split_example, second_example) are added, each file alone.
+# What a run pastes into its prompt beyond these (open_lane.extra_sources) must be a file of this list.
+
+# Regular expressions, case ignored, that nothing shown to the agent may match: the prompt with everything
+# it pastes, and every file above. A run does not start otherwise. The model folder's own hygiene terms and
+# the ids of its held-out networks are added.
+forbidden:
+  # the paper this work follows and the projects around it
+  - '\bGross\b'
+  - 'Compact Proofs of Model Performance'
+  - 'Compact-Proof-Library'
+  # earlier runs, and what they and their reviews found
+  - '\bpilot'
+  - '\breviewer'
+  - 'review round'
+  - '\bcols[0-9]'
+  - 'column checker'
+  - 'decision[ _]tree'
+  # the fixed rules and their vocabulary
+  - 'fixed rules'
+  - '\binterval'
+  - 'ginterval'
+  - 'token_?interval'
+  - '\bcontract'
+  - '\bsymmetr'
+  - '\bapproximat'
+  - 'low[- ]rank'
+  - 'split[- ]tree'
+  - '\b(?-i:Box)\b'
+  - '\bboxes\b'
+  - 'rootBox'
+  - 'inBox'
+  - '\bpermut'
+  - 'constantLabel'
+  - 'labelSymmetric'

@@ -157,4 +157,10 @@ open_lane:
   # counted language; maximum adds the fixed rules lane's rules for groups of inputs on networks beyond linear maps
   # as operations (the interval rule, I.ginterval, so far). The service checks a checker against the
   # condition's allowlist and records the condition in every receipt and in its policy digest.
+  # The condition also names what the run shows the agent of the Lean project
+  # (core/open_lane/surface/<condition>/SURFACE.yaml, docs/decisions/agent-told-nothing.md): in the minimal
+  # condition the specification and the counted language, no docs and none of the fixed rules' sources, and a
+  # proof that uses a constant of the Lean library which the run does not show is recorded without a length. A run
+  # whose prompt or files would show something that surface forbids (an earlier proof as second_example, say)
+  # does not start.
   knowledge: minimal

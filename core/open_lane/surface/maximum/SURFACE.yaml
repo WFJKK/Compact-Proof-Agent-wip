@@ -1,0 +1,17 @@
+# What a maximum-knowledge run shows the agent of the Lean project (core/open_lane/surface.py).
+#
+# In this condition the fixed rules are supplied, so their sources and the docs that describe them are shown,
+# as they were to every run before 10 November 2026. The README is not: it names the paper this work follows,
+# which no prompt may (the model folders' hygiene lists).
+#
+# Not yet reviewed under docs/decisions/agent-told-nothing.md: the docs also tell of earlier runs and their
+# proofs. Nothing is forbidden here beyond the model folder's own hygiene terms, so that is a known gap.
+prefixes:
+  - CompactCheck/
+  - docs/
+  - accept/
+  - examples/open_lane/max2_tiny_brute/
+  - examples/open_lane/max2_tiny_scored/
+  - lean-toolchain
+  - lakefile.toml
+forbidden: []

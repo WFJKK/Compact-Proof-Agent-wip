@@ -26,6 +26,14 @@ from core.open_lane.session import Session
 from core.run_config import RunConfigError, load_run_config, read_run_config_file
 from core.util import REPO_ROOT
 
+
+@pytest.fixture(autouse=True)
+def _surface(request):
+    """These tests run on stand-in Lean projects, so on the stand-in surface (tests/conftest.py) unless a test
+    is marked real_surface. The surfaces a run uses are tested in tests/test_surface.py."""
+    if request.node.get_closest_marker("real_surface") is None:
+        request.getfixturevalue("stand_in_surface")
+
 A, B = "max2_ladder-n2v24d8-s0", "max2_ladder-n2v24d8-s3"  # two development seeds of one size
 PA = "N_max2_ladder_n2v24d8_s0_c576"
 
@@ -469,7 +477,9 @@ def test_a_run_proves_one_network_then_checks_a_second_seed_with_the_checker_loc
     assert "F(P) = length(P) + c * (correct - certified(P))" in p1 and "a computed figure, not a proof that was built and checked" in p1
     assert "A submission improves the score when it lowers" in p1 and "any shorter proof raises" not in p1
     assert "A short run: one `decide +kernel`" in p1 and "A long run: memory is the limit" in p1
-    assert "examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean is a complete example" in p1
+    # where an instance put together from parts can be seen, and its one trap, in the prompt itself (no doc is pointed to)
+    assert "which read_file reads:\n  examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean" in p1
+    assert "never leave it to the kernel to see that two\n  different `CostM.run` terms are equal by unfolding them" in p1 and "COUNTED.md" not in p1
     assert "another seed may compute\n  differently, or with smaller margins" in p1 and "certifies as much there" not in p1
     assert "A real network's weights written out measure more." in p1
     assert not any("{" + name + "}" in p for p in (p2, p3) for name in ("LOCKED", "RENAME", "FREE", "NETWORK", "SEED_CHECK_RESULT"))
@@ -637,9 +647,10 @@ def test_the_pilot_on_the_linear_max_of_2_network_is_one_network_a_second_seed_a
     ol = cfg["open_lane"]
     assert (cfg["metric"], cfg["prompt_template"], cfg["networks"], ol["scaling"]) == ("cost_of_finishing", "open_lane_v5", ["max2-v64-s0"], True)
     assert ol["seed_check"] == {"network": "max2-v64-s1"} and ol["example"].endswith("Max2TinyScored.lean") and "one theorem" in ol["notes"]
-    from core.open_lane.session import readable_paths
+    from core.open_lane import surface
 
-    assert "examples/open_lane/attn_max2_tiny_scored/" in readable_paths(ol["example"], ol["second_example"], ol["split_example"])
+    # the example of a split instance is one of the files the agent can read (here on the stand-in surface, by folder)
+    assert "examples/open_lane/attn_max2_tiny_scored/" in surface.of_run(cfg)["prefixes"]
     folder = load_model_folder(REPO_ROOT / cfg["model"])
     entries = loop.select_networks(folder, cfg)
     other = loop.seed_check_entry(cfg, folder, entries)

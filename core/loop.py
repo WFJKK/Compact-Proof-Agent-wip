@@ -267,7 +267,7 @@ def prepare_sandbox(cfg: dict, folder, run: RunDir, entries: list[dict], log=pri
     return sb, report
 
 
-def open_context(run: RunDir, cfg: dict, log=print) -> Context:
+def open_context(run: RunDir, cfg: dict, log=print, surface_checked: bool = False) -> Context:
     sys.dont_write_bytecode = True  # so compiled files that appear in trusted folders can only come from elsewhere
     folder = load_model_folder(resolve(cfg["model"]))
     started = read_json(run.path / "versions.json")
@@ -280,9 +280,21 @@ def open_context(run: RunDir, cfg: dict, log=print) -> Context:
     if cfg.get("open_lane", {}).get("enabled"):
         check_lean_checker(cfg, started, run.run_id)
     entries = select_networks(folder, cfg)
+    if cfg.get("open_lane", {}).get("enabled") and not surface_checked:
+        # a resumed run: what it shows the agent is checked again, and must be what it showed when it started
+        shown = check_surface(cfg, folder, entries, log)
+        if started.get("surface") and shown != started["surface"]:
+            raise LoopError(f"what run {run.run_id} shows the agent (its surface, or a file of it) changed since it started; its "
+                            "rounds would not be one experiment. Start a new run instead.")
     sb, report = prepare_sandbox(cfg, folder, run, entries, log)
     with open(run.path / "sandbox.jsonl", "a") as f:
         f.write(json.dumps({"at": now(), **sb.describe(), "probe": report}) + "\n")
+    if cfg.get("open_lane", {}).get("enabled") and not sb.hardened:
+        log("warning: in process mode the agent's run_python code can read this machine's files, among them the Lean "
+            "project's docs and sources and earlier runs" + ("" if sys.platform.startswith("linux") else
+            ", and on a machine without Landlock the Lean service compiles the agent's modules unconfined as well") +
+            ". What the agent can read is then not limited to the files this run offers: a run that is to count as "
+            "unaided needs a confined machine (docs/decisions/agent-told-nothing.md).")
     return Context(
         cfg=cfg,
         folder=folder,
@@ -305,8 +317,10 @@ def seed_check_entry(cfg: dict, folder, entries: list[dict]) -> dict | None:
         raise LoopError(str(exc)) from exc
 
 
-def preflight(cfg: dict, folder) -> None:
-    """Checks that must pass before a run folder is made."""
+def preflight(cfg: dict, folder, log=print) -> dict:
+    """Checks that must pass before a run folder is made. Returns what they found that the run records: for an
+    open-lane run, the digest of what it shows the agent (`surface`)."""
+    found = {}
     entries = select_networks(folder, cfg)
     seed_check_entry(cfg, folder, entries)  # a seed check on the wrong network fails here
     baseline_files(folder, cfg["baselines"])  # a misspelt baseline name fails here
@@ -322,11 +336,13 @@ def preflight(cfg: dict, folder) -> None:
 
         if planned(cfg):
             check_inspection(project)
+        found["surface"] = check_surface(cfg, folder, entries, log)
     if cfg["backend"] in ("api", "claude_code"):
         g = git_state()
         if g["commit"] is None or g["dirty"]:
             raise LoopError(f"a run with the {cfg['backend']} backend starts only from a clean commit; commit or stash your changes first")
         make_backend(cfg)  # fails here, before the run exists, if the key is missing or the CLI is not logged in
+    return found
 
 
 def check_inspection(project: Path) -> None:
@@ -339,6 +355,45 @@ def check_inspection(project: Path) -> None:
         self_check(project)
     except InspectError as exc:
         raise LoopError(f"the lock of the seed check cannot ask the Lean of {project} about compiled modules: {exc}")
+
+
+def check_surface(cfg: dict, folder, entries: list[dict], log=print) -> str:
+    """The agent is told nothing about what works on a network (docs/decisions/agent-told-nothing.md), so what
+    a run shows it of the Lean project is a named surface (core.open_lane.surface), checked here before the
+    run exists: the excerpts are parts of the Lean project's files; nothing the run sends (part 1 of the
+    prompt with everything it pastes, the texts of the sessions after the proof rounds) and no file the
+    agent's tools can read matches an expression the surface forbids, the model folder's own terms and its
+    held-out networks' names among them; and, for a surface that holds proofs to what it shows, Lean reads
+    the library the project built as the surface says (core.open_lane.offered). Returns the digest of what is
+    shown (core.open_lane.surface.digest), which a run records and keeps."""
+    from .agent.build_prompt import PromptError, TEMPLATES, fill, forbidden, load_template
+    from .open_lane import offered
+    from .open_lane import surface as surfaces
+    from .open_lane.prompt import static_values
+    from .open_lane.stages import planned
+
+    project = resolve(cfg["open_lane"]["lean_project"])
+    try:
+        surface = surfaces.of_run(cfg)
+        part1_t, part2_t = load_template(cfg["prompt_template"])
+        shown = {"the prompt's first part": fill(part1_t, static_values(cfg, folder, entries)),
+                 "the prompt's second part (its template)": part2_t}
+        for name in planned(cfg):
+            shown[f"the {name} session's text"] = (TEMPLATES / f"open_lane_{name}.md").read_text()
+        surfaces.check(surface, project, shown, extra_forbidden=forbidden(folder))
+        if offered.applies(surface):
+            library = offered.self_check(surface, project)
+            log(f"what the agent is shown: the {surface['knowledge']}-knowledge surface, {len(surface['files'])} files; of the "
+                f"library's {library['constants']:,} constants {library['shown']:,} are shown, and a proof that uses "
+                "another is not counted")
+        else:
+            log(f"what the agent is shown: the {surface['knowledge']}-knowledge surface (" +
+                ", ".join(surfaces.names(surface)[:8]) + (", ..." if len(surfaces.names(surface)) > 8 else "") + ")")
+        return surfaces.digest(surface, project)
+    except (surfaces.SurfaceError, PromptError, OSError) as exc:
+        raise LoopError(str(exc)) from exc
+    except offered.InspectError as exc:
+        raise LoopError(f"Lean could not be asked what this run shows of the library of {project}: {exc}") from exc
 
 
 LEAN_LOCK = REPO_ROOT / "lean-checker.lock"
@@ -428,19 +483,21 @@ def check_lean_lock(project: Path) -> dict:
 def start(config_path: str | Path, log=print, run_id: str | None = None, overrides: dict | None = None) -> Context:
     cfg = load_run_config(config_path, run_id=run_id, overrides=overrides)
     folder = load_model_folder(resolve(cfg["model"]))
-    preflight(cfg, folder)
+    found = preflight(cfg, folder, log) or {}
     run = RunDir(resolve(cfg["runs_dir"]), cfg["run_id"])
     run.create(cfg)
     config_sha = (run.path / "config.sha256").read_text().strip()
     versions = collect(folder, cfg, config_sha)
     if cfg.get("open_lane", {}).get("enabled"):
         versions["lean_checker"] = lean_identity(resolve(cfg["open_lane"]["lean_project"]), knowledge=cfg["open_lane"]["knowledge"])
+        if found.get("surface"):
+            versions["surface"] = found["surface"]  # what the run shows the agent, kept for the whole run
     write_json(run.path / "versions.json", {**versions, "git": git_state(), "created": now(),
                                             "config_file": str(config_path), "set_on_command_line": overrides or {}})
     log(f"run {cfg['run_id']} at {run.path}")
     if overrides:
         log("set on the command line: " + ", ".join(f"{k}={v}" for k, v in overrides.items()))
-    return open_context(run, run.config(), log)
+    return open_context(run, run.config(), log, surface_checked=True)
 
 
 def resume(run_path: str | Path, log=print) -> Context:
@@ -573,6 +630,7 @@ def main(argv=None):
         p.add_argument("--run", required=True, help="the run's folder, <runs_dir>/<run_id>")
     sub.choices["status"].add_argument("--diagnostics", action="store_true", help="show each attempt's diagnostics")
     args = ap.parse_args(argv)
+    ctx = None
     try:
         if args.cmd == "status":
             path = Path(args.run).expanduser().resolve()
@@ -586,7 +644,12 @@ def main(argv=None):
         print(status_text(ctx.run))
         return 0
     except StopRun as exc:
-        print(f"stopped: {exc}\nFix the cause, then continue with: python -m core.loop resume --run <the run's folder>", file=sys.stderr)
+        # the command as it can be pasted: a placeholder in angle brackets is a redirection to a shell
+        import shlex
+
+        where = ctx.run.path if ctx is not None else Path(args.run).expanduser().resolve() if args.cmd == "resume" else None
+        again = f"python -m core.loop resume --run {shlex.quote(str(where))}" if where else "python -m core.loop resume --run and the run's folder"
+        print(f"stopped: {exc}\nFix the cause, then continue with: {again}", file=sys.stderr)
         return 3
     except (LoopError, RoundError, BackendError, SandboxError, PromptError, LeanError, RunConfigError) as exc:
         print(f"error: {exc}", file=sys.stderr)

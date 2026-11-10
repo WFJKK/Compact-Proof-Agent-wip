@@ -37,10 +37,10 @@ response:
 - The tools (`core/open_lane/session.py`): `lean_check` saves a module in the session's workspace and
   compiles it through the service against the protected module of a network and claim;
   `run_python` runs code in the recipe sandbox with the network's weights; `search_library` searches the
-  Lean project's sources and docs and `read_file` reads a stretch of one of them, or of the examples the
-  prompt shows (the two brute-force examples, the run's worked example and, when the run config names one,
-  `open_lane.second_example`; never another example: the rest are earlier proofs of the pilots' own networks,
-  and reading one would be copying, not research);
+  files of the Lean project that the run shows the agent and `read_file` reads a stretch of one of them
+  (the run's surface, below: in the minimal-knowledge condition the specification, the semantics and the
+  counted language, with the run's worked examples; no docs, none of the fixed rules' sources, never another
+  example: the rest are earlier proofs of the pilots' own networks);
   `submit_candidate` hands
   modules to the acceptance service and returns the receipt. Each call is logged append-only (`tools.jsonl`); the budgets (`compile_calls`,
   `python_calls`, `submissions`) persist in `session.json`, so a session that is started again continues
@@ -55,9 +55,27 @@ response:
   checks every module of a submission afresh. Before this, each round started with an empty workspace and the
   prompt showed the latest accepted sources cut to 12,000 characters, and the server pilot of 26 October spent
   rounds 3 and 4 rebuilding modules it had already had accepted (claude/server-pilots-2026-10-26.md).
+- What the agent is shown (since 10 November 2026; docs/decisions/agent-told-nothing.md). The agent is told
+  nothing about what works on a network, so what a run shows of the Lean project is a surface
+  (`core/open_lane/surface.py`): per knowledge condition, a list of files in
+  `core/open_lane/surface/<condition>/SURFACE.yaml`, some of them as excerpts kept next to it (every line of
+  an excerpt is a line of the Lean project's file, in order, except its marked notes). The tools reach the
+  surface and nothing else, the prompt pastes what they serve, and before a run starts (and when it
+  resumes) `core.loop.check_surface` checks that the excerpts are parts of the files and that nothing shown
+  matches an expression the surface forbids. The Lean library is one package, though, with everything in
+  scope of what the agent compiles. So in the minimal condition a proof is counted only if none of its
+  constants mentions a constant of the library that the surface does not show
+  (`core/open_lane/offered.py`): Lean is asked where each constant is declared and what a submission's
+  constants mention (`inspect_oleans.lean`, with the library the project built), the agent is told at the
+  compile and with the receipt (`offered`), and the verdict is kept as `offered.json` next to the receipt.
+  Not closed by this: the agent can still ask Lean about the library (`#print`), and on an unconfined
+  machine its code can read files. The decision note says what a run on this version shows and what it
+  does not.
 - The records (`core/open_lane/records.py`) come from the receipts: `ok` when verified and scored (count
   and length; it enters the frontier like a proof file's record), `verified` when accepted without a
   length, else the receipt's status with its reason. An attempt without a submission gets `no_submission`.
+  A scored proof that uses what its run does not offer of the Lean library is `verified`, with the reason:
+  the service scored it, the run does not count it.
   A receipt certifying more inputs than the network gets right halts the run, as the Python checker's
   invariant does.
 - Round 0 still replays the baselines named in the config as proof files (`rule_set` must be written in

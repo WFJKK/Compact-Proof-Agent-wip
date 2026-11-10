@@ -33,3 +33,12 @@ working from the repositories can read them. Each is dated; later decisions supe
   in a checker (the first: the linear max-of-2 network at 64 tokens, width 8). The pilot is one config and the
   model a few lines of it; what differs between architectures is stated by the model folder. Runs over
   several sizes are parked.
+- [agent-told-nothing.md](agent-told-nothing.md) (10 November 2026): the agent is told the specification,
+  what a proof is and what it costs, and nothing about what works on a network. From 20 October its tools
+  reached the Lean project's docs, README and the fixed rules' sources, so no open-lane run since shows
+  unaided discovery (counts and lengths stand). What a run shows is now a surface per knowledge condition,
+  with excerpts that are parts of the Lean project's files; a run does not start if anything shown matches a
+  forbidden expression; and a proof that mentions a constant of the Lean library which the run does not
+  show is recorded without a length, by Lean's account of the compiled modules. Not closed: the agent can
+  ask Lean about the library, and an unconfined machine lets its code read files. Both are named, with what
+  the Lean project has to change.

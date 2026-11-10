@@ -9,3 +9,4 @@ dependencies = ["torch", "numpy", "pyyaml", "psutil", "anthropic", "matplotlib"]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q"
+markers = ["real_surface: the test runs on the surfaces of core/open_lane/surface, not on the stand-in of tests/conftest.py"]

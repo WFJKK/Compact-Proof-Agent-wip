@@ -15,7 +15,9 @@ The tools:
   box), returning the compiler's messages. Counts against the compile budget.
 - run_python(code, network): run code in the recipe sandbox with that network's weights and info, returning
   what it printed. Same limits as a recipe.
-- search_library(query, max_results): search the Lean project's sources and docs (the allowed package only).
+- search_library(query, max_results): search the files of the Lean project that the run shows the agent (its
+  surface, core.open_lane.surface: in the minimal-knowledge condition the specification, the network's
+  semantics and the counted language; no docs, none of the fixed rules' sources).
 - read_file(path, start, lines): read a stretch of one of those files, or of a module of the workspace, numbered.
 - submit_candidate(network, claimed_count, theorem, modules, scored, kind): hand the workspace's modules to
   the acceptance service (`accept.py submit`); returns the receipt. The workspace modules that the listed
@@ -38,6 +40,13 @@ lock before every compile and submission. When the service accepts a scored proo
 lemma of the scaling question, Lean is asked whether the modules the service compiled hold the locked
 checker; the answer goes into the submission's lock.json and to the agent (`locked_checker`). That is a
 question about which checker a proof has, never about whether the proof is valid: that stays the service's.
+
+In a run whose surface names the Lean project's library, Lean is also asked, of every module that compiled
+and of every accepted submission, whether its constants mention a constant of that library which the run does
+not show (core.open_lane.offered). The answer goes to the agent (`offered`) and, for a submission, into its
+offered.json; a proof that does is recorded without a length (core.open_lane.records). What the compiler
+prints is not filtered, and the agent can ask Lean about any constant: a compile whose output matches an
+expression the surface forbids is marked in the log (`showed`), for whoever reviews the run.
 """
 
 from __future__ import annotations
@@ -48,11 +57,13 @@ import re
 import subprocess
 import sys
 import time
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from ..runner import Limits, run_recipe
 from ..sandbox import Sandbox
 from ..util import REPO_ROOT
+from . import offered
+from . import surface as surfaces
 
 MAX_TEXT = 20000  # characters of compiler output, program output or search results returned to the agent
 
@@ -80,6 +91,7 @@ MAX_SOURCE = 400_000  # characters of one module
 MODULE_PATH = re.compile(r"^Candidate/([A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\.lean$")
 SUBMIT_TIMEOUT_S = 4 * 3600
 COMPILE_TIMEOUT_S = 3600
+EARLY_WORD_TIMEOUT_S = 180  # for Lean's word, at a compile, on what a module uses of the library; asked again at a submission
 IMPORT_LINE = re.compile(r"^\s*import\s+([A-Za-z_][A-Za-z0-9_.]*)\s*$")  # as the service reads imports
 ROUND_DIR = re.compile(r"^round_(\d+)$")
 
@@ -135,11 +147,13 @@ def carried_modules(run_path: Path, k: int) -> list[dict]:
                     continue
                 if receipt.get("status") != "accepted":
                     continue
+                kept = offered.read(d)  # in a run that holds proofs to its surface: is this one clean?
                 for rel in manifest.get("modules") or []:
                     f = d / rel
                     if not isinstance(rel, str) or not MODULE_PATH.match(rel) or f.is_symlink() or not f.is_file():
                         continue
                     latest[rel] = {
+                        "beyond_offered": bool(kept) and kept.get("clean") is False,
                         "path": rel, "source": str(f), "round": kk, "attempt": int(adir.name[len("attempt_"):]),
                         "submission": int(d.name), "kind": manifest.get("kind", "performance"),
                         "theorem": manifest.get("theorem"), "statement": receipt.get("statement"),
@@ -178,34 +192,32 @@ def under_lock(stage: str | None, receipt: dict) -> bool:
     return stage == "scaling" and receipt.get("claim_kind") == "auxiliary"
 
 
+def compiler_showed(path: Path) -> int:
+    """How many compiles of the session in `path` printed something that matches an expression its surface
+    forbids (tools.jsonl, `showed`): the agent can ask Lean about the whole library, and this is where that
+    would be seen. A match is a reason to read the log, not a verdict: the agent's own names can match too."""
+    log = Path(path) / "tools.jsonl"
+    if not log.is_file():
+        return 0
+    n = 0
+    for line in log.read_text().splitlines():
+        try:
+            n += bool((json.loads(line).get("outcome") or {}).get("showed"))
+        except ValueError:
+            pass
+    return n
+
+
 def round_of(path: Path) -> int | None:
     """The round of a session folder <run>/round_<k>/attempt_<j>/open_lane, or None for a folder elsewhere."""
     m = ROUND_DIR.match(Path(path).parent.parent.name)
     return int(m.group(1)) if m else None
 
 
-# What read_file may read: the sources, the docs, the allowlist, and the examples the prompt shows (the
-# verified and the scored brute force, and the run's worked example, open_lane.example) and nothing else under
-# examples/: the other examples are earlier proofs of the pilots' own networks (the agent's pilot proofs, a
-# hand port, review fixtures), and a pilot that could read them would show copying, not research.
-READABLE = ("CompactCheck/", "docs/", "examples/open_lane/max2_tiny_brute/", "examples/open_lane/max2_tiny_scored/",
-            "accept/", "README.md", "lean-toolchain", "lakefile.toml")
-
-
-def readable_paths(example: str | None, second_example: str | None = None, split_example: str | None = None) -> list[str]:
-    """READABLE and the folders of the run's worked examples (a candidate folder: the parent of Candidate/):
-    open_lane.example and, when the run config names them, open_lane.second_example and
-    open_lane.split_example."""
-    out = list(READABLE)
-    for shown in (example, second_example, split_example):
-        if not shown:
-            continue
-        p = PurePosixPath(shown)
-        folder = p.parent.parent if p.parent.name == "Candidate" else p.parent
-        prefix = str(folder) + "/"
-        if prefix.startswith("examples/") and ".." not in folder.parts and not prefix.startswith(tuple(out)):
-            out.append(prefix)
-    return out
+# What sessions made before a run had a surface could read: these folders of the Lean project, and the folders
+# of the run's worked examples (session.json's `readable`). A session of today records its surface instead.
+LEGACY_READABLE = ("CompactCheck/", "docs/", "examples/open_lane/max2_tiny_brute/", "examples/open_lane/max2_tiny_scored/",
+                   "accept/", "README.md", "lean-toolchain", "lakefile.toml")
 
 
 class Session:
@@ -250,7 +262,7 @@ class Session:
                        "max_proof_mb": cfg["max_proof_mb"], "threads_per_recipe": cfg["threads_per_recipe"]},
             "sandbox": cfg["sandbox"],
             "sandbox_dir": cfg["sandbox_dir"],
-            "readable": readable_paths(ol.get("example"), ol.get("second_example"), ol.get("split_example")),
+            "surface": surfaces.of_run(cfg),
             "knowledge": ol.get("knowledge", "minimal"),
             "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         }
@@ -268,6 +280,25 @@ class Session:
         elif carried:
             session._carry(carried)
         return session
+
+    def surface(self) -> dict:
+        """What this session shows of the Lean project (core.open_lane.surface)."""
+        if self.state.get("surface"):
+            return self.state["surface"]
+        return surfaces.legacy(list(self.state.get("readable") or LEGACY_READABLE), self.state.get("knowledge", "minimal"))
+
+    def _offered(self, oleans: dict, protected: str | None = None) -> dict | None:
+        """In a run that holds proofs to its surface: whether these compiled modules use only what the run
+        offers of the Lean project's library, for the agent. None when the run has no such rule, or when Lean
+        could not be asked (a module that was just compiled is asked about again when it is submitted)."""
+        surface = self.surface()
+        if not offered.applies(surface):
+            return None
+        try:
+            verdict = offered.of_oleans(surface, self.lean_project, oleans, protected, timeout_s=EARLY_WORD_TIMEOUT_S)
+        except Exception:  # the compile's result must reach the agent whatever this question does
+            return None
+        return {"clean": verdict["clean"], "note": offered.note(verdict)}
 
     # a session after the proof rounds: the locked proof --------------------------------------
     def _lock(self) -> dict | None:
@@ -413,7 +444,17 @@ class Session:
             out = {"ok": bool(res.get("ok")), "timed_out": bool(res.get("timed_out")), "module": res.get("module"),
                    "protected_module": res.get("protected_module"), "messages": excerpt(text) if text else "(no messages)",
                    "seconds": res.get("seconds"), "remaining": self.remaining()}
-            self._log("lean_check", args, {"ok": out["ok"], "messages": out["messages"][:500], "errors": error_lines(out["messages"])}, time.monotonic() - t0)
+            logged = {"ok": out["ok"], "messages": out["messages"][:500], "errors": error_lines(out["messages"])}
+            showed = surfaces.matches(text, self.surface().get("forbidden") or [])
+            if showed:  # Lean printed what the run does not show the agent (a #print, a goal, a suggestion): kept for review
+                logged["showed"] = [line for _, _, line in showed[:5]]
+            compiled = self.workspace / "out" / (path[: -len(".lean")] + ".olean")
+            if out["ok"] and compiled.is_file():
+                said = self._offered({module_name(path): compiled})
+                if said is not None and not said["clean"]:  # said now, while it costs a compile and not a submission
+                    out["offered"] = said
+                    logged["offered"] = False
+            self._log("lean_check", args, logged, time.monotonic() - t0)
             return out
         except ToolError as exc:
             self._log("lean_check", args, {"error": str(exc)}, time.monotonic() - t0)
@@ -455,25 +496,23 @@ class Session:
             self._log("run_python", args, {"error": str(exc)}, time.monotonic() - t0)
             raise
 
-    READABLE = READABLE
     MAX_READ_LINES = 400
 
     def read_file(self, path: str, start: int = 1, lines: int = 200) -> dict:
-        """A file of the Lean project (its sources, docs, the examples of the prompt and the allowlist),
-        by line range."""
+        """A module of the workspace, or a file of the Lean project that the run's surface shows, by line range."""
         t0 = time.monotonic()
         args = {"path": path, "start": start, "lines": lines}
-        readable = tuple(self.state.get("readable") or self.READABLE)
         try:
             if isinstance(path, str) and MODULE_PATH.match(path):  # a module of the agent's own workspace
                 p = self.workspace / path
                 if p.is_symlink() or not p.is_file():
                     raise ToolError(f"no module {path} in your workspace")
-            elif not isinstance(path, str) or ".." in path or path.startswith("/") or not path.startswith(readable):
-                raise ToolError(f"path must be a module of your workspace (Candidate/<Name>.lean) or inside the "
-                                f"Lean project's {', '.join(readable)}")
             else:
-                p = self.lean_project / path
+                surface = self.surface()
+                p = surfaces.served(surface, self.lean_project, path)
+                if p is None:
+                    raise ToolError("path must be a module of your workspace (Candidate/<Name>.lean) or one of the files of "
+                                    "the Lean project that this run offers: " + ", ".join(surfaces.names(surface)))
                 if p.is_symlink() or not p.is_file():
                     raise ToolError(f"no file {path} in the Lean project")
             all_lines = p.read_text().splitlines()
@@ -490,6 +529,7 @@ class Session:
             raise
 
     def search_library(self, query: str, max_results: int = 40) -> dict:
+        """The lines that match, in the files of the Lean project that the run's surface shows."""
         t0 = time.monotonic()
         args = {"query": query, "max_results": max_results}
         try:
@@ -501,15 +541,16 @@ class Session:
                 raise ToolError(f"not a regular expression: {exc}")
             n = max(1, min(int(max_results or 40), 200))
             hits = []
-            files = sorted((self.lean_project / "CompactCheck").glob("*.lean")) + sorted((self.lean_project / "docs").glob("*.md"))
-            for f in files:
+            for rel, f in surfaces.listing(self.surface(), self.lean_project):
+                if not rel.endswith((".lean", ".md", ".txt")):
+                    continue
                 try:
                     lines = f.read_text().splitlines()
-                except OSError:
+                except (OSError, UnicodeDecodeError):
                     continue
                 for i, line in enumerate(lines, 1):
                     if rx.search(line):
-                        hits.append(f"{f.relative_to(self.lean_project)}:{i}: {line.rstrip()[:240]}")
+                        hits.append(f"{rel}:{i}: {line.rstrip()[:240]}")
                         if len(hits) >= n:
                             break
                 if len(hits) >= n:
@@ -608,6 +649,17 @@ class Session:
                                                 "network", "statement", "axioms", "score_eligible", "execution_assurance", "scoring", "seconds")}
             out["submission"] = n
             out["modules"] = modules
+            surface = self.surface()
+            if offered.applies(surface) and receipt.get("status") == "accepted":
+                # does the accepted proof use only what this run offers of the Lean project's library? Asked of
+                # Lean now, of the modules the service has just compiled; the records ask again if this fails.
+                try:
+                    verdict = offered.ask(surface, self.lean_project, cdir)
+                    out["offered"] = {"clean": verdict["clean"], "note": offered.note(verdict)}
+                except Exception as exc:  # the receipt is saved and must reach the agent whatever this question does
+                    out["offered"] = {"clean": None, "note": "This submission was accepted. Whether it uses only what this run "
+                                                               f"offers could not be asked now ({exc}); it is asked again when "
+                                                               "this session ends."}
             if applied and "verified" in applied:
                 counts = applied["verified"] and applied["intact"]
                 why = (applied["why"] or "the locked modules did not reach the service unchanged") + "."
@@ -629,6 +681,8 @@ class Session:
                        "length": scoring.get("length"), "certified": receipt.get("certified_count")}
             if "locked_checker" in out:
                 outcome["locked_checker"] = out["locked_checker"]["same"]
+            if "offered" in out:
+                outcome["offered"] = out["offered"]["clean"]
             self._log("submit_candidate", args, outcome, time.monotonic() - t0)
             return out
         except ToolError as exc:
@@ -686,19 +740,18 @@ class Session:
                        "required": ["code", "network"]},
         },
         "search_library": {
-            "description": "Search the Lean project's sources (CompactCheck/*.lean) and docs with a regular expression, "
-                           "matched against each line's text (not against file names or line numbers); returns the "
-                           "matching lines as file:line: text. To read a stretch of a file, use read_file.",
+            "description": "Search the files of the Lean project that this run offers (your prompt lists them) with a "
+                           "regular expression, matched against each line's text (not against file names or line "
+                           "numbers); returns the matching lines as file:line: text. To read a stretch of a file, use "
+                           "read_file.",
             "schema": {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer"}},
                        "required": ["query"]},
         },
         "read_file": {
             "description": "Read lines of a module of your workspace (Candidate/<Name>.lean: those you saved with "
-                           "lean_check and those carried over from earlier rounds) or of a file of the Lean project: its "
-                           "sources (CompactCheck/<Name>.lean), docs (docs/COUNTED.md, docs/OPEN_LANE.md), the examples of "
-                           "your prompt (the worked example's folder, and examples/open_lane/max2_tiny_brute/..., "
-                           "examples/open_lane/max2_tiny_scored/...) and the allowlist (accept/allowlist.txt); no other "
-                           "example. Returns up to 400 numbered lines from `start`.",
+                           "lean_check and those carried over from earlier rounds) or of one of the files of the Lean "
+                           "project that this run offers (your prompt lists them; no other file can be read). Returns up "
+                           "to 400 numbered lines from `start`.",
             "schema": {"type": "object", "properties": {"path": {"type": "string"}, "start": {"type": "integer"},
                                                         "lines": {"type": "integer"}},
                        "required": ["path"]},

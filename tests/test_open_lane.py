@@ -33,6 +33,14 @@ LEAN = _lean_project()
 HAVE_LEAN = (LEAN / "scripts" / "accept.py").is_file() and (LEAN / ".lake" / "build" / "bin" / "acceptcheck").is_file()
 
 
+@pytest.fixture(autouse=True)
+def _surface(request):
+    """These tests run on stand-in Lean projects, so on the stand-in surface (tests/conftest.py) unless a test
+    is marked real_surface. The surfaces a run uses are tested in tests/test_surface.py."""
+    if request.node.get_closest_marker("real_surface") is None:
+        request.getfixturevalue("stand_in_surface")
+
+
 def base_config(tmp_path: Path, scripts: list[str], **extra) -> dict:
     return {
         "run_id": "open-lane-test", "model": "tests/max2_tiny", "backend": "fake", "rule_set": ["single", "skip"],
@@ -46,10 +54,11 @@ def base_config(tmp_path: Path, scripts: list[str], **extra) -> dict:
 
 def test_the_mcp_server_speaks_the_protocol(tmp_path):
     cfg = merge(base_config(tmp_path, [], open_lane={"enabled": False}))
-    cfg["open_lane"].update(lean_project=str(LEAN) if HAVE_LEAN else str(tmp_path), work_dir=str(tmp_path / "work"))
+    cfg["open_lane"].update(lean_project=str(tmp_path), work_dir=str(tmp_path / "work"))
     entries = [{"id": "max2_tiny-v8-s0", "setting": "v8", "n_inputs": 64}]
     session = Session.create(tmp_path / "attempt" / "open_lane", cfg, "tests/max2_tiny", entries, tmp_path / "run")
     (tmp_path / "docs").mkdir(exist_ok=True)
+    (tmp_path / "docs" / "COUNTED.md").write_text("# The counted language\n")  # a file of the stand-in surface
     requests = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}}},
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
@@ -64,8 +73,7 @@ def test_the_mcp_server_speaks_the_protocol(tmp_path):
     serve(session, io.StringIO("\n".join(json.dumps(r) for r in requests) + "\n"), out)
     replies = [json.loads(line) for line in out.getvalue().splitlines()]
     assert [r["id"] for r in replies] == [1, 2, 3, 4, 5, 6, 7]
-    if HAVE_LEAN:
-        assert replies[5]["result"]["isError"] is False and "1: # The counted language" in replies[5]["result"]["content"][0]["text"]
+    assert replies[5]["result"]["isError"] is False and "1: # The counted language" in replies[5]["result"]["content"][0]["text"]
     assert replies[6]["result"]["isError"] is True
     assert replies[0]["result"]["protocolVersion"] == "2025-06-18" and "tools" in replies[0]["result"]["capabilities"]
     assert {t["name"] for t in replies[1]["result"]["tools"]} == {"lean_check", "run_python", "search_library", "read_file", "submit_candidate"}
@@ -132,6 +140,7 @@ def test_budgets_persist_across_sessions(tmp_path):
         again._spend("lean_check")
 
 
+@pytest.mark.real_surface
 @pytest.mark.skipif(not HAVE_LEAN, reason="the Lean project with a built acceptcheck is not next to this repository")
 def test_a_fake_session_submits_the_scored_example_and_the_receipt_becomes_a_record(tmp_path):
     scripts = [str(REPO_ROOT / "tests" / "open_lane" / "scored_brute.json"), str(REPO_ROOT / "tests" / "open_lane" / "nothing.json")]
@@ -150,6 +159,11 @@ def test_a_fake_session_submits_the_scored_example_and_the_receipt_becomes_a_rec
     lemma = [r for r in records if r["status"] == "lemma"]
     assert len(lemma) == 1 and "countP" in lemma[0]["statement"] and lemma[0]["certified"] is None
     assert [r["status"] for r in records if r["round"] == 2] == ["no_submission"]
+    # the run is on the minimal-knowledge surface as it is, and holds proofs to it: before it started, Lean read
+    # the library the project built and the surface's probes came out as it says; the worked example, brute
+    # force through the single rule, and the lemma use nothing beyond what the run shows
+    assert any("the minimal-knowledge surface" in l and "a proof that uses another is not counted" in l for l in lines), lines
+    assert ok[0]["offered"] == {"clean": True, "uses": [], "count": 0} and lemma[0]["offered"]["clean"] is True
     meta = ctx.run.read(1, "attempt_0/response_meta.json")
     assert meta["submissions"] == 2 and meta["tools_used"] == {"lean_check": 1, "submit_candidate": 2, "run_python": 1}
     log = [json.loads(l) for l in (ctx.run.round_path(1) / "attempt_0" / "open_lane" / "tools.jsonl").read_text().splitlines()]
@@ -210,6 +224,28 @@ def test_a_fake_session_submits_the_scored_example_and_the_receipt_becomes_a_rec
     ctx2 = loop.resume(ctx.run.path, log=lines.append)
     loop.drive(ctx2)
     assert len(ctx2.run.read_archive()) == before
+
+
+@pytest.mark.real_surface
+@pytest.mark.skipif(not HAVE_LEAN, reason="the Lean project with a built acceptcheck is not next to this repository")
+def test_the_service_compiles_a_checker_on_the_interval_rule_and_the_agent_is_told_it_will_not_count(tmp_path):
+    """The Lean library is one package: a module that calls the linear interval rule compiles, and the base
+    allowlist admits the rule. The run does not offer it, and says so at the compile, with the constant."""
+    cfg = merge(base_config(tmp_path, []))
+    session = Session.create(tmp_path / "attempt" / "open_lane", cfg, "tests/max2_tiny",
+                             [{"id": "max2_tiny-v8-s0", "setting": "v8", "n_inputs": 64}], tmp_path / "run")
+    source = ("import Protected.N_max2_tiny_v8_s0_c64\nimport CompactCheck.CountedOps\n\nnamespace Candidate.Uses\n\n"
+              "open CompactCheck Protected.N_max2_tiny_v8_s0_c64\n\n"
+              "def D : Checker := fun I => do\n  let ok ← I.interval graph task (rootBox task.space)\n  pure (I.countB ok)\n\n"
+              "def fine : Checker := fun I => pure I.nzero\n\nend Candidate.Uses\n")
+    out = session.lean_check("Candidate/Uses.lean", source, "max2_tiny-v8-s0", 64)
+    assert out["ok"], out["messages"]
+    said = out["offered"]
+    assert said["clean"] is False and said["note"].startswith("not counted in this run")
+    assert "Candidate.Uses.D mentions CompactCheck.Interp.interval" in said["note"] and "Candidate.Uses.fine" not in said["note"]
+    clean = session.lean_check("Candidate/Fine.lean", source.replace("Uses", "Fine").split("def D")[0] +
+                               "def fine : Checker := fun I => pure I.nzero\n\nend Candidate.Fine\n", "max2_tiny-v8-s0", 64)
+    assert clean["ok"] and "offered" not in clean, clean
 
 
 def test_patience_counts_claims_not_files(tmp_path):
@@ -373,9 +409,10 @@ def test_the_identity_command_must_succeed_and_report_every_field():
 
 
 def test_read_file_reaches_the_sources_and_the_prompts_examples_only(tmp_path):
-    """No Lean: a fake project folder. The agent may read the Lean sources, the docs and the two examples
-    its prompt shows, not the other examples (earlier proofs of the same networks: reading one would be
-    copying, not research), and nothing outside the project."""
+    """No Lean: a fake project folder, and a surface of folders (the stand-in, as the maximum-knowledge
+    condition has one). read_file reads what the surface names and the two examples the prompt shows, not the
+    other examples (earlier proofs of the same networks: reading one would be copying, not research), and
+    nothing outside the project. What the minimal-knowledge condition shows is in tests/test_surface.py."""
     project = tmp_path / "lean"
     for rel in ("CompactCheck/Spec.lean", "docs/COUNTED.md", "examples/open_lane/max2_tiny_scored/Candidate/X.lean",
                 "examples/open_lane/max2_tiny_brute/Candidate/X.lean", "examples/open_lane/max2_tiny_cols23_v3/Candidate/X.lean",
@@ -740,8 +777,8 @@ def test_a_second_worked_example_is_named_and_readable_only_when_the_run_config_
     and readable with read_file, its source not pasted. Only that proof's folder becomes readable; its
     neighbours (other proofs of the same pilot) stay out of reach. It must be a file under examples/."""
     from core.model_folder import load_model_folder
+    from core.open_lane import surface
     from core.open_lane.prompt import static_values
-    from core.open_lane.session import readable_paths
     from core.run_config import RunConfigError
 
     project = fake_project(tmp_path, LADDER_FILES)
@@ -755,9 +792,8 @@ def test_a_second_worked_example_is_named_and_readable_only_when_the_run_config_
     assert static_values(off, folder, entries)["SECOND_EXAMPLE"] == ""
     text = static_values(on, folder, entries)["SECOND_EXAMPLE"]
     assert second in text and "read it with read_file" in text and "the column proof" not in text
-    example = on["open_lane"]["example"]
-    assert "examples/open_lane/pilot2_max2_tiny/r1_ColFull/" not in readable_paths(example)
-    readable = readable_paths(example, second)
+    assert "examples/open_lane/pilot2_max2_tiny/r1_ColFull/" not in surface.of_run(off)["prefixes"]
+    readable = surface.of_run(on)["prefixes"]  # the stand-in is a surface of folders: each example's folder is added
     assert "examples/open_lane/pilot2_max2_tiny/r1_ColFull/" in readable
     assert not "examples/open_lane/pilot2_max2_tiny/r4_Full64/Candidate/Full64.lean".startswith(tuple(readable))
     session = Session.create(tmp_path / "attempt" / "open_lane", on, on["model"], entries, tmp_path / "run")
@@ -777,8 +813,9 @@ def test_a_second_worked_example_is_named_and_readable_only_when_the_run_config_
 def test_the_knowledge_condition_reaches_every_service_call_and_the_prompt(tmp_path):
     """open_lane.knowledge chooses the experimental condition (minimal: the base counted language; maximum: plus
     the fixed rules lane's rules for groups of inputs as operations). The session passes it to every call of the
-    service, which checks a checker against that condition's allowlist; the prompt says which condition the
-    run is; the config refuses anything else."""
+    service, which checks a checker against that condition's allowlist. The prompt of the maximum condition
+    describes the supplied rules; the minimal condition's names none of them, and says that the interface
+    shown is what the run offers. The config refuses anything else."""
     from core.open_lane.prompt import static_values
     from core.model_folder import load_model_folder
     from core.run_config import RunConfigError
@@ -797,7 +834,10 @@ def test_the_knowledge_condition_reaches_every_service_call_and_the_prompt(tmp_p
         out = session.lean_check("Candidate/X.lean", "-- x", "max2_tiny-v8-s0", 64)
         assert f"--knowledge {knowledge}" in out["messages"], out
         text = static_values(cfg, folder, entries)["KNOWLEDGE"]
-        assert f"{knowledge}-knowledge condition" in text and "ginterval" in text and "gtokenIntervals" in text
+        if knowledge == "maximum":
+            assert "maximum-knowledge condition" in text and "ginterval" in text and "gtokenIntervals" in text
+        else:
+            assert "interval" not in text.lower() and "not counted in this run" in text
     cfg = base_config(tmp_path, [])
     cfg["open_lane"].update(lean_project=str(project), knowledge="everything")
     with pytest.raises(RunConfigError, match="knowledge must be one of"):

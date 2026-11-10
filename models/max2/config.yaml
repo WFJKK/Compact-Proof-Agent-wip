@@ -38,6 +38,8 @@ hygiene: ["Gross", "Compact Proofs of Model Performance"]
 # What an open-lane run on this model takes from the Lean project and tells the agent (a run config may set
 # any of these itself). The worked example is brute force on the tiny network of tests/max2_tiny, the same
 # architecture at 8 tokens: none of this folder's networks.
+# The notes say how the tools behave at this size, never what a proof of these networks looks like or how
+# short one has been (docs/decisions/agent-told-nothing.md).
 open_lane:
   example: examples/open_lane/max2_tiny_scored/Candidate/Max2TinyScored.lean
   extra_sources: []
@@ -47,10 +49,9 @@ open_lane:
       session's network. Its checker and its soundness proof hold for any
       size. Its instance is one theorem, and brute force on this session's
       network (B above) is far beyond what one theorem holds.
-    - On a network of this size no instance has fitted one theorem: one
-      `decide +kernel` over a whole run ran out of memory at 6 GB, for a
-      checker many times shorter than brute force. Build the instance from
-      small decided facts and combine them with lemmas about the run.
-    - Time: at vocabulary size 64 the service has taken about 15 minutes
-      to accept a scored proof (about 5 of them in the kernel). Plan your
-      compiles and submissions with that in mind.
+    - Whether an instance fits one theorem depends on the length of its
+      run (the limits above). When it does not, build it from small decided
+      facts and combine them with lemmas about the run.
+    - Time: at vocabulary size 64 the service can take a quarter of an
+      hour to accept a scored proof, a third of it in the kernel. Plan
+      your compiles and submissions with that in mind.

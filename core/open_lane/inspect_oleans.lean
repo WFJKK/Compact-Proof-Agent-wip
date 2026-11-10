@@ -24,6 +24,26 @@ same text exactly when its kernel terms are the same up to that one renaming. Th
 texts (core/open_lane/inspect.py) and refuses a submission with a duplicate or a reserved name, where
 a text would not say which constant it is about.
 
+With `--library <module>=<file.olean> ...` (the modules of the Lean project's own library, as its
+build compiled them) and what a run shows of them, `--shown-whole <module> ...` and
+`--shown-lines <module>=<line>,<line>,... ...` (the source lines of a module that the run shows), it
+also prints `surface`:
+
+* `classes`: per constant asked for with `--classify`, whether the library declares it and the run
+  shows it: `shown` (its module is shown whole, or the line that declares it is one of the lines
+  shown), `exposed` (not shown, but the type or the value of a shown constant mentions it, so that
+  unfolding what is shown puts it into a term), `closed` (neither) or `absent` (no constant of the
+  library);
+* `library`: how many modules and constants the library has, how many of them are shown, and the
+  exposed ones by name;
+* `uses`: every constant of the given modules, the protected module's apart, whose type, value or
+  proof mentions a closed constant of the library, with those constants. A projection written as a
+  number counts as the field it projects to.
+
+Which line declares a constant is Lean's own record (the declaration ranges it keeps for editors),
+read from the library's .olean files. A constant Lean made itself (a recursor, a matcher, an equation)
+has none and goes with the declaration its name extends.
+
 Nothing here is trusted by the Lean acceptance service; it reads what the service compiled.
 -/
 import Lean
@@ -132,6 +152,101 @@ def constText (prot : Option Name) (ci : ConstantInfo) : String :=
   let (_, st) := go.run {}
   "\n".intercalate st.out.toList
 
+/-! ## What a run shows of the library -/
+
+/-- The declaration ranges a module's .olean holds: per constant that was written in the source,
+    where. They are the entries of `Lean.declRangeExt`, which a file outside the module system
+    exports whole (`mkModuleData`); their type is that extension's entry type. -/
+unsafe def declRangesImpl (data : ModuleData) : Array (Name × DeclarationRanges) :=
+  match data.entries.find? (fun e => e.1 == `Lean.declRangeExt) with
+  | some (_, es) => unsafeCast es
+  | none => #[]
+
+@[implemented_by declRangesImpl]
+opaque declRanges (data : ModuleData) : Array (Name × DeclarationRanges)
+
+/-- What a run shows of one module: all of it, or these lines of its source. -/
+inductive Shown where
+  | whole
+  | lines (ls : Std.HashSet Nat)
+
+structure Library where
+  /-- Every constant of the library's modules. -/
+  consts : Std.HashMap Name ConstantInfo := {}
+  /-- The modules that declare a constant (one, unless two modules declare the same name). -/
+  homes : Std.HashMap Name (Array String) := {}
+  /-- Per module, the line on which a constant's name is declared, for the constants that have one. -/
+  lines : Std.HashMap String (Std.HashMap Name Nat) := {}
+  shown : Std.HashMap String Shown := {}
+
+/-- The line that declares `n` in module `m`: its own, or that of the nearest declaration its name
+    extends (`f.match_1`, `S.rec` and `S.mk.injEq` go with `f`, `S` and `S.mk`). A private name is
+    also looked up as the name the user wrote. -/
+def Library.lineOf (lib : Library) (m : String) (n : Name) : Option Nat := Id.run do
+  let some ls := lib.lines[m]? | return none
+  for start in [n, (privateToUserName? n).getD n] do
+    let mut p := start
+    while !p.isAnonymous do
+      if let some l := ls[p]? then return some l
+      p := p.getPrefix
+  return none
+
+/-- Whether module `m` shows constant `n`. A constant with no declared line at all (an instance Lean
+    derived, say) counts as shown: it is nothing a person wrote. -/
+def Library.showsIn (lib : Library) (m : String) (n : Name) : Bool :=
+  match lib.shown[m]? with
+  | none => false
+  | some .whole => true
+  | some (.lines ls) =>
+    match lib.lineOf m n with
+    | some l => ls.contains l
+    | none => true
+
+/-- Whether the run shows the library constant `n`: every module that declares it does. -/
+def Library.shows (lib : Library) (n : Name) : Bool :=
+  match lib.homes[n]? with
+  | some ms => ms.all fun m => lib.showsIn m n
+  | none => false
+
+/-- The projection function of field `i` of the library structure `s`, by the constructor's binders. -/
+def Library.fieldOf (lib : Library) (s : Name) (i : Nat) : Option Name := do
+  let .inductInfo v ← lib.consts[s]? | none
+  let [c] := v.ctors | none
+  let ci ← lib.consts[c]?
+  let rec go (t : Expr) (k : Nat) : Option Name :=
+    match t, k with
+    | .forallE n _ _ _, 0 => some (s ++ n)
+    | .forallE _ _ b _, k + 1 => go b k
+    | _, _ => none
+  go ci.type (v.numParams + i)
+
+/-- Every term of a constant: its type, the value of a definition, the proof of a theorem, the rules
+    of a recursor. -/
+def allTerms (ci : ConstantInfo) : Array Expr :=
+  match ci with
+  | .defnInfo v => #[ci.type, v.value]
+  | .thmInfo v => #[ci.type, v.value]
+  | .opaqueInfo v => #[ci.type, v.value]
+  | .recInfo v => v.rules.foldl (fun acc r => acc.push r.rhs) #[ci.type]
+  | _ => #[ci.type]
+
+/-- The closed constants of the library that `ci` mentions (`closed` decides), projections included. -/
+def closedUses (lib : Library) (closed : Name → Bool) (ci : ConstantInfo) : Array Name := Id.run do
+  let mut out : Array Name := #[]
+  for e in allTerms ci do
+    for n in e.getUsedConstants do
+      if closed n && !out.contains n then out := out.push n
+    -- a projection by number names no constant: find one that reaches a closed field
+    let hit := e.find? fun x => match x with
+      | .proj s i _ => match lib.fieldOf s i with
+        | some f => closed f
+        | none => false
+      | _ => false
+    if let some (.proj s i _) := hit then
+      if let some f := lib.fieldOf s i then
+        if !out.contains f then out := out.push f
+  return out
+
 def strs (xs : Array String) : Json := Json.arr (xs.map Json.str)
 
 def run (args : List String) : IO UInt32 := do
@@ -139,6 +254,9 @@ def run (args : List String) : IO UInt32 := do
   let mut prot : Option Name := none
   let mut wheres : Array Name := #[]
   let mut closures : Array Name := #[]
+  let mut library : Array (String × String) := #[]
+  let mut shownSpec : Array (String × Shown) := #[]
+  let mut classify : Array Name := #[]
   let mut rest := args
   while !rest.isEmpty do
     match rest with
@@ -150,6 +268,20 @@ def run (args : List String) : IO UInt32 := do
     | "--protected" :: n :: more => prot := some n.toName; rest := more
     | "--where" :: n :: more => wheres := wheres.push n.toName; rest := more
     | "--closure" :: n :: more => closures := closures.push n.toName; rest := more
+    | "--library" :: spec :: more =>
+      match spec.splitOn "=" with
+      | m :: f :: more => library := library.push (m, "=".intercalate (f :: more))
+      | _ => IO.eprintln s!"--library takes <module>=<file>, not {spec}"; return 2
+      rest := more
+    | "--shown-whole" :: m :: more => shownSpec := shownSpec.push (m, .whole); rest := more
+    | "--shown-lines" :: spec :: more =>
+      match spec.splitOn "=" with
+      | [m, ls] =>
+        let nums := (ls.splitOn ",").filterMap fun x => x.toNat?
+        shownSpec := shownSpec.push (m, .lines (nums.foldl (fun acc l => acc.insert l) {}))
+      | _ => IO.eprintln s!"--shown-lines takes <module>=<line>,<line>,..., not {spec}"; return 2
+      rest := more
+    | "--classify" :: n :: more => classify := classify.push n.toName; rest := more
     | other :: _ => IO.eprintln s!"unknown argument {other}"; return 2
     | [] => pure ()
   let mut consts : Std.HashMap Name ConstantInfo := {}
@@ -179,10 +311,55 @@ def run (args : List String) : IO UInt32 := do
       ("modules", strs (home.getD n #[])), ("kind", Json.str (kind ci)), ("text", Json.str (constText prot ci))]
     closureJson := closureJson.push (root.toString, Json.mkObj [
       ("found", Json.bool (consts.contains root)), ("constants", Json.arr entries)])
-  IO.println (Json.mkObj [
+  -- what the run shows of the library, and what the given modules use beyond it
+  let mut surface : List (String × Json) := []
+  if !library.isEmpty then
+    let mut libConsts : Std.HashMap Name ConstantInfo := {}
+    let mut libHomes : Std.HashMap Name (Array String) := {}
+    let mut libLines : Std.HashMap String (Std.HashMap Name Nat) := {}
+    for (m, f) in library do
+      let (data, _region) ← readModuleData f
+      if data.isModule then
+        IO.eprintln s!"{m} is written in the module system: its .olean does not say where its constants are declared"
+        return 3
+      let ranges := declRanges data
+      let own : Std.HashSet Name := data.constants.foldl (fun acc ci => acc.insert ci.name) {}
+      if !ranges.isEmpty && !(ranges.any fun r => own.contains r.1) then
+        IO.eprintln s!"the declaration ranges of {m} name none of its constants: they were not read as what they are"
+        return 3
+      libLines := libLines.insert m (ranges.foldl (fun acc r => acc.insert r.1 r.2.selectionRange.pos.line) {})
+      for ci in data.constants do
+        libConsts := libConsts.insert ci.name ci
+        libHomes := libHomes.insert ci.name ((libHomes.getD ci.name #[]).push m)
+    let lib : Library := { consts := libConsts, homes := libHomes, lines := libLines,
+                           shown := shownSpec.foldl (fun acc (m, sh) => acc.insert m sh) {} }
+    let shownSet : Std.HashSet Name := lib.homes.fold (fun acc n _ => if lib.shows n then acc.insert n else acc) {}
+    let mut exposed : Std.HashSet Name := {}
+    for n in shownSet do
+      if let some ci := lib.consts[n]? then
+        for d in deps ci do
+          if lib.homes.contains d && !shownSet.contains d then exposed := exposed.insert d
+    let closed (n : Name) : Bool := lib.homes.contains n && !shownSet.contains n && !exposed.contains n
+    let classes := classify.map fun n =>
+      (n.toString, Json.str (if !lib.homes.contains n then "absent" else if shownSet.contains n then "shown"
+        else if exposed.contains n then "exposed" else "closed"))
+    let mut uses : Array Json := #[]
+    for (m, f) in oleans do
+      if prot == some m.toName then continue
+      let (data, _region) ← readModuleData f
+      for ci in data.constants do
+        let found := (closedUses lib closed ci).qsort byName
+        if !found.isEmpty then
+          uses := uses.push (Json.mkObj [("constant", Json.str ci.name.toString), ("module", Json.str m),
+            ("kind", Json.str (kind ci)), ("closed", strs (found.map (·.toString)))])
+    surface := [("surface", Json.mkObj [
+      ("library", Json.mkObj [("modules", Json.num library.size), ("constants", Json.num lib.homes.size),
+        ("shown", Json.num shownSet.size), ("exposed", strs ((exposed.toArray.qsort byName).map (·.toString)))]),
+      ("classes", Json.mkObj classes.toList), ("uses", Json.arr uses)])]
+  IO.println (Json.mkObj ([
     ("modules", Json.mkObj modules.toList), ("duplicates", Json.arr duplicates),
     ("reserved", strs ((reserved.qsort byName).map (·.toString))),
-    ("where", Json.mkObj whereJson.toList), ("closures", Json.mkObj closureJson.toList)]).compress
+    ("where", Json.mkObj whereJson.toList), ("closures", Json.mkObj closureJson.toList)] ++ surface)).compress
   return 0
 
 end InspectOleans

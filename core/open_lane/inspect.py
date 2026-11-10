@@ -71,10 +71,11 @@ def lean_binary(lean_project: Path) -> str:
 
 
 def inspect_oleans(lean: str, oleans: dict[str, Path], protected: str | None = None, where=(), closure=(),
-                   cwd: Path | None = None) -> dict:
+                   cwd: Path | None = None, extra=(), timeout_s: float = TIMEOUT_S) -> dict:
     """Run inspect_oleans.lean on compiled modules (module name to .olean file) and return what it prints.
     `protected` is the name of the protected module among them, left out of the canonical texts. `cwd` is
-    the Lean project: a `lean` that is elan's proxy picks its toolchain from the folder it is started in."""
+    the Lean project: a `lean` that is elan's proxy picks its toolchain from the folder it is started in.
+    `extra` is further arguments for the program (core.open_lane.offered: the library and what a run shows)."""
     missing = [str(f) for f in oleans.values() if not Path(f).is_file()]
     if missing:
         raise InspectError(f"compiled modules are missing: {', '.join(missing[:3])}")
@@ -86,8 +87,9 @@ def inspect_oleans(lean: str, oleans: dict[str, Path], protected: str | None = N
     for flag, names in (("--where", where), ("--closure", closure)):
         for n in names:
             cmd += [flag, n]
+    cmd += list(extra)
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT_S,
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s,
                            cwd=str(cwd) if cwd is not None and Path(cwd).is_dir() else None)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise InspectError(f"Lean could not read the compiled modules: {exc}")

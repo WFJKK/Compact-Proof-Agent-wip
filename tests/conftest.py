@@ -66,3 +66,32 @@ def make_sandbox(mode: str, protected=()):
         image = os.environ.get("CPL_TEST_SANDBOX_IMAGE", DEFAULT_IMAGE)
         return Sandbox("container", runtime=rt, image=image, image_id=image_id(rt, image), protected=tuple(protected))
     return Sandbox(mode, protected=tuple(protected))
+
+
+# What the open lane shows the agent of the Lean project is a surface (core/open_lane/surface.py), and a run
+# checks it against the Lean project's files before it starts. Most tests run on a stand-in Lean project of a
+# few placeholder files, which the minimal-knowledge surface cannot fit (its excerpts are parts of the real
+# files). They get a surface that fits a stand-in: folders, nothing forbidden, no library, as every run had
+# before 10 November 2026. tests/test_surface.py tests the real surfaces against the real Lean project.
+STAND_IN_SURFACE = """prefixes:
+  - CompactCheck/
+  - docs/
+  - accept/
+  - examples/open_lane/max2_tiny_brute/
+  - examples/open_lane/max2_tiny_scored/
+  - lean-toolchain
+  - lakefile.toml
+forbidden: []
+"""
+
+
+@pytest.fixture
+def stand_in_surface(monkeypatch, tmp_path_factory) -> Path:
+    from core.open_lane import surface
+
+    d = tmp_path_factory.mktemp("surfaces")
+    for knowledge in ("minimal", "maximum"):
+        (d / knowledge).mkdir()
+        (d / knowledge / "SURFACE.yaml").write_text(STAND_IN_SURFACE)
+    monkeypatch.setattr(surface, "SURFACES", d)
+    return d

@@ -14,6 +14,12 @@ in the receipt) and, for an accepted scored proof of the seed check and an accep
 question, whether Lean finds the locked checker in the modules the service compiled (`verified`, with the
 reason when not). Records with a stage are never part of the run's frontier or score.
 
+In a run that holds proofs to what it shows of the Lean project (a surface with a library:
+core.open_lane.surface, core.open_lane.offered), every accepted submission carries `offered`: whether Lean
+finds that its constants mention only what the run offers of that library, and the first uses if not. A
+scored proof that is not clean is recorded as `verified`, without a length: the service scored it, the run
+does not count it. The receipt in the record is unchanged.
+
 A count above the exact reference count of the zoo (`checked_correct` with `checked_semantics` exact, from
 `python -m core.check.exact_counts`) halts the run; above the float count alone it is flagged, since the
 float count only approximates the real-semantics count.
@@ -24,6 +30,7 @@ from __future__ import annotations
 import json
 
 from ..archive import record_id
+from . import offered
 from .session import Session, under_lock
 
 
@@ -70,6 +77,7 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
     if stage:
         base["stage"] = stage["name"]
     by_id = {e["id"]: e for e in ctx.entries}
+    surface = session.surface()
     out = []
     for receipt in session.receipts():
         n = receipt.get("submission", len(out))
@@ -128,8 +136,20 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
                        error=receipt.get("reason") or ("the receipt names no network of this run" if not entry else "no reason given"))
             out.append(rec)
             continue
+        verdict = None
+        if offered.applies(surface):
+            # does the accepted submission use only what the run offers of the Lean project's library? The session
+            # asks when the receipt arrives; a session that ended between the two is asked for here.
+            try:
+                verdict = offered.ask(surface, session.lean_project, lock_file.parent)
+            except Exception as exc:
+                raise RuntimeError(f"{receipt.get('receipt_path')}: this submission was accepted, and whether it uses only what "
+                                   f"the run offers of the Lean project's library is not known ({exc}); the run halts and can "
+                                   "be resumed")
+            rec["offered"] = offered.summary(verdict)
+        unclean = verdict is not None and not verdict["clean"]
         if receipt.get("claim_kind") == "auxiliary":
-            rec.update(status="lemma", statement=receipt.get("statement"), error=None)
+            rec.update(status="lemma", statement=receipt.get("statement"), error=offered.note(verdict) if unclean else None)
             out.append(rec)
             continue
         certified = int(receipt["certified_count"])
@@ -150,7 +170,11 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
         rec.update(certified=certified, certified_accuracy=f"{certified}/{entry['n_inputs']}",
                    certified_accuracy_float=certified / entry["n_inputs"], checked_by="lean", check_s=receipt.get("seconds"))
         scoring = receipt.get("scoring") or {}
-        if scoring.get("status") == "scored":
+        if unclean:
+            # the service's verdict stands (rec["receipt"]); the run does not count a proof built on what it does not offer
+            was = f"; the service scored it at length {int(scoring['length']):,}" if scoring.get("status") == "scored" else ""
+            rec.update(status="verified", error=offered.note(verdict) + was)
+        elif scoring.get("status") == "scored":
             rec.update(status="ok", length=int(scoring["length"]),
                        length_by_rule={"bill": scoring.get("bill"), "extract": scoring.get("extract"), "read": scoring.get("read")},
                        description_size=scoring.get("description_size"))

@@ -339,6 +339,12 @@ def run_attempt(ctx: Context, k: int, j: int, source: str, text: str) -> list[di
             raise RoundError(str(exc)) from exc
         for r in records:
             ctx.log(_open_line(r))
+        from .open_lane.session import compiler_showed
+
+        showed = compiler_showed(ctx.run.round_path(k) / rel / "open_lane")
+        if showed:
+            ctx.log(f"    note: in {showed} compile(s) of this session Lean's output matched what the run does not show the agent "
+                    f"(\"showed\" in {rel}/open_lane/tools.jsonl); read what it printed before taking the round as unaided")
         ctx.run.write(k, f"{rel}/results.json", records)
         return records
     try:
