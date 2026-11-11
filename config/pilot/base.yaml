@@ -17,7 +17,7 @@
 backend: claude_code
 agent_model: claude-fable-5-1   # the earlier pilots' model, for comparison with them
 effort: xhigh
-prompt_template: open_lane_v5
+prompt_template: open_lane_v6   # v5 with the work in Python first, edits, the clock and the drafts (v5 is kept)
 # The fixed rules lane (round 0's baselines) limited to single and skip; explicit, as the ticket asks.
 rule_set: [single, skip]
 # The score the agent is shown and asked to raise: B over the cheapest way to finish the network from the

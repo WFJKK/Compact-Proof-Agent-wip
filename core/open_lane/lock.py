@@ -160,7 +160,7 @@ def _difference(was: dict, now: dict) -> str:
     return "; ".join(parts)
 
 
-def same_checker(lock: dict, submission: Path, lean_project: Path, scored: bool = True) -> dict:
+def same_checker(lock: dict, submission: Path, lean_project: Path, scored: bool = True, timeout_s: float = inspect.TIMEOUT_S) -> dict:
     """Whether an accepted submission made under the lock has the locked checker, by Lean's account of the
     modules the service compiled for it. `verified` is True only if the submission names the locked checker
     and soundness theorem, Lean finds each declared in the module it was locked in and nowhere else, and the
@@ -182,7 +182,7 @@ def same_checker(lock: dict, submission: Path, lean_project: Path, scored: bool 
         return {"verified": False, "why": "; ".join(named)}
     try:
         info = inspect.inspect_submission(lean_project, submission, where=[lock["checker"], lock["sound"]],
-                                          closure=[lock["checker"], lock["sound"]])
+                                          closure=[lock["checker"], lock["sound"]], timeout_s=timeout_s)
         prints, constants = inspect.fingerprints(info, lock["checker"], lock["sound"])
     except inspect.Refused as exc:
         return {"verified": False, "why": f"what the submission declares does not single out its checker: {exc}"}

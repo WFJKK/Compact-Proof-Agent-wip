@@ -13,7 +13,7 @@ there). This document is the pipeline side: how a run uses it.
 With `open_lane.enabled: true` in the run config, an agent round is a session with tools instead of one
 response:
 
-- The prompt (`core/agent/prompts/open_lane_v1.md` to `open_lane_v5.md`, built by
+- The prompt (`core/agent/prompts/open_lane_v1.md` to `open_lane_v6.md`, built by
   `core/open_lane/prompt.py`) gives the specification (Spec.lean), the protected module's interface, the
   counted language with its prices (Counted.lean, CountedOps.lean), a scored brute-force proof as the worked
   example (`open_lane.example`), the tools and their budgets, the scoreboard, the receipts so far, the sources
@@ -25,17 +25,26 @@ response:
   run with `set_option maxRecDepth 1000000 in` before it: Lean's default recursion limit stops the kernel's
   evaluation of a bill after a few thousand charges, and the server pilot of 26 October built a model of its
   checker and run lemmas to get past it (the Lean project's docs/COUNTED.md, "The instance in one theorem").
-  Template v5 (10 November 2026, the pilot's) is for a run on one network scored on cost of finishing: the
+  Template v5 (10 November 2026) is for a run on one network scored on cost of finishing: the
   goal says what follows the rounds (the seed check and the scaling question, below) and what that asks of a
   proof, the score comes before the rules, the rules of scoring are lists, there is advice on how to work
   (the checker's modules apart from the instance's), and the answer's WHY IT HELPS asks for the mechanism,
   the checker step that relies on it and what would make the checker certify less on another network.
-  Template v4 is its counterpart for a run over several networks (parked). Under `metric: cost_of_finishing`
+  Template v6 (11 November 2026, the pilot's) is v5 with the work in Python first: the agent formalises a
+  checker when it has a clear reason to expect it to be valuable (a better score, a new mechanism, a cost that
+  grows more slowly with the sizes; when is its to decide), runs it on the protected weights with `#eval`
+  before proving it, for a count and a bill the prompt calls provisional (the count is what the checker
+  claims, true only by its soundness proof; the bill is the compiled code's, which the kernel has not checked;
+  the service runs the checker itself), and submits the central lemma of a soundness proof early, as a lemma,
+  so that it is carried. It tells of edits, the clock and the drafts (below). v5 is kept.
+  Template v4 is v5's counterpart for a run over several networks (parked). Under `metric: cost_of_finishing`
   the scoreboard, the receipts and the aim show that one score and the cheapest way to finish; under the
   other metrics they are what they were. Neither template says anything about an architecture: that comes
   from the model folder (`open_lane.notes`, below).
 - The tools (`core/open_lane/session.py`): `lean_check` saves a module in the session's workspace and
-  compiles it through the service against the protected module of a network and claim;
+  compiles it through the service against the protected module of a network and claim (its full source, or
+  since 11 November 2026 `edits` to the module saved at that path: each replaces an `old` text that must
+  occur exactly once, in order, and no edits compile the module as saved);
   `run_python` runs code in the recipe sandbox with the network's weights, in a folder that holds the
   model's code, the harness and the weights and nothing of the fixed rules (no `helpers.py`, which names
   them; the check before a run scans the folder's text files); `search_library` searches the
@@ -44,9 +53,22 @@ response:
   counted language, with the run's worked examples; no docs, none of the fixed rules' sources, never another
   example: the rest are earlier proofs of the pilots' own networks);
   `submit_candidate` hands
-  modules to the acceptance service and returns the receipt. Each call is logged append-only (`tools.jsonl`); the budgets (`compile_calls`,
-  `python_calls`, `submissions`) persist in `session.json`, so a session that is started again continues
-  them.
+  modules to the acceptance service and returns the receipt. Each call is logged append-only (`tools.jsonl`;
+  a lean_check's entry has the module's lines and hash as saved, and `run_python`'s code is kept whole in
+  `python/<n>.py`); the budgets (`compile_calls`, `python_calls`, `submissions`) persist in `session.json`,
+  so a session that is started again continues them. Every answer says what is left of them, and of the
+  clock.
+- The clock (since 11 November 2026). The backend starts it in the session before each run of the agent,
+  for that run's limit (`open_lane.worker_seconds`), and its last `open_lane.notes_reserve_seconds` (600 by
+  default) are kept for the agent's answer, whose NOTES the next round starts from. Every tool's answer says
+  how many seconds are left before them (`remaining.seconds`). No call starts when none are left: the tools
+  refuse, and say to answer. No call runs past them: a compile, a program or a submission still running then
+  is stopped with every process it started (the box's runner and Lean included), and the agent gets a
+  compile's answer saying so, or a receipt with status timeout. Lean's further questions after a compile or
+  a submission wait for the session's end when the time is too short. The module is saved before a compile
+  starts, and the program before it runs. Before this, a compile could take an hour while the session's own
+  limit ran out (the first test run on the Mac, 11 November), and the session ended with no answer and so no
+  notes.
 - Carried modules (since 27 October 2026): a round's session starts with the modules of every submission
   the service accepted in the run's earlier rounds (the latest accepted version of each module path) in its
   workspace, compiled there before the agent begins, in import order, through the same `accept.py compile` as
@@ -57,6 +79,16 @@ response:
   checks every module of a submission afresh. Before this, each round started with an empty workspace and the
   prompt showed the latest accepted sources cut to 12,000 characters, and the server pilot of 26 October spent
   rounds 3 and 4 rebuilding modules it had already had accepted (claude/server-pilots-2026-10-26.md).
+- Drafts (since 11 November 2026): the agent's unfinished work goes on with it. A new session of a proof
+  round also gets the modules that the workspace of the latest earlier round's session held when it ended and
+  that are not the version a carried module has (`session.draft_modules`): at their own path, or set apart in
+  `drafts/` (which `read_file` reads, as `drafts/Candidate/<Name>.lean`) when an accepted module holds the
+  path. The prompt lists them apart from the carried modules as drafts, not accepted, with when each was last
+  saved and whether it compiled then; they are never compiled before the agent begins, and nothing in them
+  counts until a submission of them is accepted. A draft left as it was goes on to the next round the same way;
+  one set apart goes no further once something else is saved at its path. The sessions after the proof rounds
+  get none. A round whose session ended without the agent's answer leaves no notes: the next prompt says so
+  and shows the latest notes there are.
 - What the agent is shown (since 10 November 2026; docs/decisions/agent-told-nothing.md). The agent is told
   nothing about what works on a network, so what a run shows of the Lean project is a surface
   (`core/open_lane/surface.py`): per knowledge condition, a list of files in
@@ -99,7 +131,8 @@ response:
 Layout of an open-lane attempt:
 
     round_003/attempt_0/
-        open_lane/session.json, tools.jsonl, workspace/, submissions/000/{manifest.json, Candidate/, receipt.json}
+        open_lane/session.json, tools.jsonl, context.jsonl, workspace/, drafts/, python/,
+                 submissions/000/{manifest.json, Candidate/, receipt.json}
                                  (and lock.json in a session after the proof rounds: the lock as applied,
                                  and for the seed check whether Lean found the locked checker in the proof)
         mcp.json                 the CLI's MCP configuration (claude_code backend)
@@ -206,7 +239,9 @@ approximation.
 - `claude_code`: the Claude Code CLI headless, as in the fixed rules lane, with the tools attached as an MCP
   server over stdio (`core/open_lane/mcp_server.py`, started by the CLI with the command in `mcp.json`) and
   nothing else: no built-in tools, no files, no project settings, no memory, `--max-turns
-  open_lane.max_turns`, the session's wall clock `open_lane.worker_seconds`. The CLI's environment has the
+  open_lane.max_turns`, the session's wall clock `open_lane.worker_seconds` (the clock above, started before
+  each run of the CLI; a run that reaches the limit is stopped with every process under it, the tools' server
+  and a compile it was waiting for included). The CLI's environment has the
   API keys removed and its auto-memory and an organisation's memory switched off. Its init event, where it
   says what it loaded, is kept with every session (`cli` in the response's metadata) and must show the five
   tools of the `cpl` server, connected, and nothing else, or the run stops, and none of the session's proofs

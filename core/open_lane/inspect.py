@@ -165,11 +165,11 @@ def self_check(lean_project: Path) -> None:
         raise InspectError(f"Lean did not read {built[0]}")
 
 
-def inspect_submission(lean_project: Path, submission: Path, where=(), closure=()) -> dict:
+def inspect_submission(lean_project: Path, submission: Path, where=(), closure=(), timeout_s: float = TIMEOUT_S) -> dict:
     """What Lean says about an accepted submission's compiled modules: see inspect_oleans.lean. Adds
     `protected`, the protected module's name. Raises Refused when the answer would be ambiguous."""
     oleans, protected = submission_oleans(submission)
-    info = inspect_oleans(lean_binary(lean_project), oleans, protected, where, closure, cwd=lean_project)
+    info = inspect_oleans(lean_binary(lean_project), oleans, protected, where, closure, cwd=lean_project, timeout_s=timeout_s)
     info["protected"] = protected
     unambiguous(info)
     return info

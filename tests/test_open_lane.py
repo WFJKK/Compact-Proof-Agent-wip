@@ -1160,3 +1160,265 @@ def test_lean_messages_reach_the_agent_with_short_paths_and_a_run_named_for_a_pi
     assert sess.shorten_paths(f"{run}/round_002/attempt_0/open_lane/submissions/003/Candidate/B.lean:1:1: error; "
                               f"{run}/open_lane_work/x; {home}/.elan/toolchains/t", run) == \
         "Candidate/B.lean:1:1: error; <run>/open_lane_work/x; ~/.elan/toolchains/t"
+
+
+def _plain_session(tmp_path, k: int = 1, **open_lane):
+    """A session of a stand-in run, round k: no Lean (the service is replaced where a test needs it), no model."""
+    cfg = merge(base_config(tmp_path, [], open_lane={"enabled": False}))
+    cfg["open_lane"].update({"lean_project": str(tmp_path), "work_dir": str(tmp_path / "work"), **open_lane})
+    entries = [{"id": "max2_tiny-v8-s0", "setting": "v8", "n_inputs": 64}]
+    run = tmp_path / "run"
+    return Session.create(run / f"round_{k:03d}" / "attempt_0" / "open_lane", cfg, "tests/max2_tiny", entries, run)
+
+
+def test_every_tool_call_is_bounded_by_the_time_the_session_has_left(tmp_path, monkeypatch):
+    """Showing the time left does not help if the next compile blocks for an hour (the review of 11 November
+    2026): each call may take only what is left before the time kept for the agent's answer, no call starts when
+    none is left, and every answer says how much is left. The service is replaced and the clock moved by hand."""
+    from core.open_lane import session as sess
+
+    s = _plain_session(tmp_path)
+    asked = []
+
+    def service(self, cmd, timeout_s):
+        asked.append((cmd[0], timeout_s))
+        return {"ok": True, "messages": ""}
+
+    monkeypatch.setattr(Session, "_service", service)
+    net = "max2_tiny-v8-s0"
+    s.lean_check(path="Candidate/A.lean", source="def a := 1\n", network=net, claimed_count=64)
+    assert asked[-1] == ("compile", sess.COMPILE_TIMEOUT_S) and "seconds" not in s.remaining()  # no clock: the limits of old
+    now, wall = [1000.0], [50_000.0]
+    monkeypatch.setattr(sess, "_monotonic", lambda: now[0])
+    monkeypatch.setattr(sess, "_wall", lambda: wall[0])
+    s.start_clock(3000, 600)
+    assert Session(s.path).seconds_left() == 2400  # kept in session.json, where the tools' server reads it
+    out = s.lean_check(path="Candidate/A.lean", source="def a := 2\n", network=net, claimed_count=64)
+    assert asked[-1] == ("compile", 2400) and out["remaining"]["seconds"] == 2400
+    assert s.read_file("Candidate/A.lean")["remaining"]["seconds"] == 2400
+    now[0] += 2000
+    wall[0] += 2000
+    s.lean_check(path="Candidate/A.lean", edits=[], network=net, claimed_count=64)
+    assert asked[-1] == ("compile", 400)
+    with pytest.raises(ToolError, match=r"not one of this run's networks.*\(400 s of this session left\)"):
+        s.call("run_python", {"code": "print(1)", "network": "other"})
+    # a machine asleep stops the monotonic clock, not the wall clock: the backend's own limit is on the first
+    wall[0] += 7200
+    assert s.seconds_left() == 400
+    # a monotonic clock that is not the backend's (it says more is left than the run lasts): the wall clock decides
+    s.state["clock"]["monotonic_deadline"] += 10_000
+    assert s.seconds_left() == s.state["clock"]["wall_deadline"] - wall[0] - 600
+    s.state["clock"]["monotonic_deadline"] -= 10_000
+    # the time kept for the answer is never given to a call: every tool refuses, and nothing is spent or saved
+    now[0] += 400
+    used, n = dict(s.state["used"]), len(asked)
+    calls = {"lean_check": {"path": "Candidate/A.lean", "source": "def a := 3\n", "network": net, "claimed_count": 64},
+             "run_python": {"code": "print(1)", "network": net}, "read_file": {"path": "Candidate/A.lean"},
+             "search_library": {"query": "x"},
+             "submit_candidate": {"network": net, "claimed_count": 64, "theorem": "Candidate.A.t", "modules": ["Candidate/A.lean"]}}
+    for tool, args in calls.items():
+        with pytest.raises(ToolError, match="time is up: its last 600 s are kept for your answer"):
+            s.call(tool, args)
+    assert s.state["used"] == used and len(asked) == n and (s.workspace / "Candidate/A.lean").read_text() == "def a := 2\n"
+
+
+def test_a_stopped_call_stops_every_process_it_started_and_the_session_gets_an_answer(tmp_path, monkeypatch):
+    """The service compiles in a grandchild (the box's runner, which becomes Lean). A call stopped at its limit
+    stops that too, and the agent gets a compile's answer, not a refusal. A stand-in service, no Lean."""
+    pids = tmp_path / "pids"
+    project = tmp_path / "project"
+    (project / "scripts").mkdir(parents=True)
+    (project / "scripts" / "accept.py").write_text(
+        "import subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
+        f"open({str(pids)!r}, 'w').write(str(child.pid))\n"
+        "time.sleep(300)\n")
+    s = _plain_session(tmp_path, lean_project=str(project))
+    from core.open_lane import session as sess
+
+    now = [0.0]
+    monkeypatch.setattr(sess, "_monotonic", lambda: now[0])
+    monkeypatch.setattr(sess, "_wall", lambda: now[0])
+    s.start_clock(602, 600)  # two seconds for the call
+    out = s.lean_check(path="Candidate/A.lean", source="def a := 1\n", network="max2_tiny-v8-s0", claimed_count=64)
+    assert out["ok"] is False and out["timed_out"] is True
+    assert out["messages"] == "The compile was stopped: it did not finish within the 2 s this session had left. The module is saved."
+    child = int(pids.read_text())
+    assert not psutil_alive(child)
+    assert (s.workspace / "Candidate/A.lean").read_text() == "def a := 1\n"
+    log = [json.loads(l) for l in (s.path / "tools.jsonl").read_text().splitlines()]
+    assert log[-1]["outcome"]["timed_out"] is True and log[-1]["outcome"]["saved"]["lines"] == 1
+
+
+def psutil_alive(pid: int) -> bool:
+    import psutil
+
+    try:
+        return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
+
+
+def test_a_session_of_the_cli_that_reaches_its_limit_is_stopped_with_its_tools_server(tmp_path):
+    """subprocess.run would kill the CLI alone; the tools' server under it would finish its call beside the next
+    session. What the CLI printed until then still comes back, for the check of its context."""
+    import subprocess as sp
+    import sys
+
+    from core.open_lane.backends import _run_cli
+
+    pids = tmp_path / "pids"
+    code = ("import subprocess, sys, time\n"
+            "print('{\"type\": \"system\", \"subtype\": \"init\"}', flush=True)\n"
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
+            f"open({str(pids)!r}, 'w').write(str(child.pid))\n"
+            "time.sleep(300)\n")
+    with pytest.raises(sp.TimeoutExpired) as exc:
+        _run_cli([sys.executable, "-c", code], "the prompt", dict(os.environ), str(tmp_path), 3)
+    out = exc.value.stdout if exc.value.stdout is not None else exc.value.output
+    assert '"subtype": "init"' in (out.decode() if isinstance(out, bytes) else out)
+    assert not psutil_alive(int(pids.read_text()))
+    done = _run_cli([sys.executable, "-c", "import sys; print(sys.stdin.read().upper())"], "the prompt", dict(os.environ),
+                    str(tmp_path), 30)
+    assert done.returncode == 0 and done.stdout.strip() == "THE PROMPT"
+
+
+def test_the_backend_starts_the_sessions_clock_before_each_run_of_the_cli(tmp_path):
+    """The tools' server reads the clock from session.json when the CLI starts it, so the backend writes it first,
+    for the run's limit, with the reserve of the config."""
+    from core.agent.build_prompt import Prompt
+
+    b, where, calls = tool_backend_session(tmp_path, answered(cli_init_event()))
+    seen = []
+    cli = b.run
+
+    def run(cmd, prompt_text, env, cwd, timeout_s):
+        seen.append((json.loads((where / "open_lane" / "session.json").read_text())["clock"], timeout_s))
+        return cli(cmd, prompt_text, env, cwd, timeout_s)
+
+    b.run = run
+    b.respond(Prompt("one", "two", {}), 0, where=where)
+    clock, timeout_s = seen[0]
+    assert clock["seconds"] == timeout_s == b.cfg["open_lane"]["worker_seconds"]
+    assert clock["reserve_s"] == b.cfg["open_lane"]["notes_reserve_seconds"] == 600
+
+
+def test_lean_check_takes_edits_to_the_saved_module(tmp_path, monkeypatch):
+    """An edit replaces text that occurs exactly once; edits apply in order; none at all compiles the module as
+    saved. A refused edit saves, compiles and spends nothing. The log keeps the edits, not the whole module."""
+    s = _plain_session(tmp_path)
+    compiled = []
+    monkeypatch.setattr(Session, "_service", lambda self, cmd, timeout_s: compiled.append((self.workspace / cmd[2]).read_text())
+                        or {"ok": True, "messages": ""})
+    net = "max2_tiny-v8-s0"
+    s.lean_check(path="Candidate/A.lean", source="def a := 1\ndef b := 1\n", network=net, claimed_count=64)
+    out = s.lean_check(path="Candidate/A.lean", edits=[{"old": "a := 1", "new": "a := 2"}, {"old": "a := 2\ndef b", "new": "a := 3\ndef c"}],
+                       network=net, claimed_count=64)
+    assert compiled[-1] == "def a := 3\ndef c := 1\n" == (s.workspace / "Candidate/A.lean").read_text() and out["lines"] == 2
+    s.lean_check(path="Candidate/A.lean", edits=[], network=net, claimed_count=64)
+    assert compiled[-1] == "def a := 3\ndef c := 1\n" and s.state["used"]["lean_check"] == 3
+    refused = {
+        "occurs more than once": [{"old": ":= ", "new": "="}],
+        "does not occur": [{"old": "def z", "new": "def y"}],
+        "edit 2 of 2: its old text does not occur in Candidate/A.lean as the edits before it left it": [
+            {"old": "def a", "new": "def q"}, {"old": "def a", "new": "def r"}],
+        "edits must be a list": [{"old": "def a"}],
+    }
+    for why, edits in refused.items():
+        with pytest.raises(ToolError, match=why):
+            s.lean_check(path="Candidate/A.lean", edits=edits, network=net, claimed_count=64)
+    with pytest.raises(ToolError, match="no module Candidate/B.lean in your workspace to edit"):
+        s.lean_check(path="Candidate/B.lean", edits=[], network=net, claimed_count=64)
+    for both in ({"source": "x", "edits": []}, {}):
+        with pytest.raises(ToolError, match="give either the module's full source or edits"):
+            s.call("lean_check", {"path": "Candidate/A.lean", "network": net, "claimed_count": 64, **both})
+    assert s.state["used"]["lean_check"] == 3 and (s.workspace / "Candidate/A.lean").read_text() == "def a := 3\ndef c := 1\n"
+    log = [json.loads(l) for l in (s.path / "tools.jsonl").read_text().splitlines()]
+    assert log[1]["args"]["edits"][0] == {"old": "a := 1", "new": "a := 2"} and "source" not in log[1]["args"]
+    assert log[1]["outcome"]["saved"]["lines"] == 2
+    assert Session.TOOLS["lean_check"]["schema"]["required"] == ["path", "network", "claimed_count"]
+
+
+def _left(run: Path, k: int, modules: dict, log: list[tuple[str, dict]]) -> Path:
+    """A session of round k as it ended: its workspace's modules and its tools.jsonl (lean_check outcomes)."""
+    s = run / f"round_{k:03d}" / "attempt_0" / "open_lane"
+    for rel, text in modules.items():
+        (s / "workspace" / rel).parent.mkdir(parents=True, exist_ok=True)
+        (s / "workspace" / rel).write_text(text)
+    with open(s / "tools.jsonl", "a") as f:
+        for path, outcome in log:
+            f.write(json.dumps({"tool": "lean_check", "args": {"path": path}, "outcome": outcome}) + "\n")
+    return s
+
+
+def test_unfinished_modules_go_on_to_the_next_round_as_drafts_and_never_as_accepted(tmp_path, monkeypatch):
+    """A timeout must not erase the agent's work, and a module must not become accepted by surviving into another
+    round (the review of 11 November 2026). No Lean: the service's compile is replaced."""
+    from core.open_lane.prompt import latest_notes, workspace_text
+
+    run = tmp_path / "run"
+    a1, a2 = "theorem t : 1 = 1 := rfl\n", "theorem t : 1 = 1 := rfl\ntheorem t2 : 2 = 2 := rfl\n"
+    _submission(run, 1, 0, {"Candidate/A.lean": a1})
+    _left(run, 1, {"Candidate/A.lean": a2, "Candidate/B.lean": "def b := 1\n", "Candidate/C.lean": "def c := oops\n",
+                   "Candidate/D.lean": "def d := 1\n"},
+          [("Candidate/A.lean", {"ok": True}), ("Candidate/B.lean", {"ok": True}), ("Candidate/C.lean", {"ok": True}),
+           ("Candidate/C.lean", {"ok": False}), ("Candidate/D.lean", {"ok": False, "timed_out": True}),
+           ("Candidate/D.lean", {"error": "refused"})])
+    compiled = []
+    monkeypatch.setattr(Session, "_service", lambda self, cmd, timeout_s: compiled.append(cmd[2]) or {"ok": True, "messages": ""})
+    cfg = merge(base_config(tmp_path, [], open_lane={"enabled": False}))
+    cfg["open_lane"].update(lean_project=str(tmp_path), work_dir=str(tmp_path / "work"))
+    entries = [{"id": "max2_tiny-v8-s0", "setting": "v8", "n_inputs": 64}]
+    s2 = Session.create(run / "round_002" / "attempt_0" / "open_lane", cfg, "tests/max2_tiny", entries, run)
+    assert compiled == ["Candidate/A.lean"]  # the accepted module is compiled before the agent begins; no draft is
+    assert (s2.workspace / "Candidate/A.lean").read_text() == a1  # the accepted version holds its path
+    assert (s2.path / "drafts/Candidate/A.lean").read_text() == a2  # the newer, unaccepted one is set apart
+    assert (s2.workspace / "Candidate/B.lean").read_text() == "def b := 1\n"
+    drafts = {d["path"]: d for d in s2.state["drafts"]}
+    assert {p: (d["set_apart"], d["saved_round"], d["compiled"], d["stopped"]) for p, d in drafts.items()} == {
+        "Candidate/A.lean": (True, 1, True, False), "Candidate/B.lean": (False, 1, True, False),
+        "Candidate/C.lean": (False, 1, False, False), "Candidate/D.lean": (False, 1, False, True)}
+    assert [m["path"] for m in s2.state["carried"]] == ["Candidate/A.lean"]
+    assert s2.read_file("drafts/Candidate/A.lean")["text"].endswith("theorem t2 : 2 = 2 := rfl")
+    with pytest.raises(ToolError, match="no draft drafts/Candidate/B.lean"):
+        s2.read_file("drafts/Candidate/B.lean")
+    text = workspace_text(s2.state["carried"], s2.state["drafts"])
+    accepted, unfinished = text.split("\n\n")
+    assert "Candidate/A.lean (1 lines; round 1, submission 0, accepted lemma Candidate.A.t): compiled" in accepted
+    assert "drafts/" not in accepted and "B.lean" not in accepted
+    assert unfinished.startswith("Your unfinished work") and "not accepted" in unfinished
+    assert "- drafts/Candidate/A.lean (2 lines; last saved in round 1; it compiled then; the accepted Candidate/A.lean holds its path)" in unfinished
+    assert "- Candidate/C.lean (1 lines; last saved in round 1; it did not compile then)" in unfinished
+    assert "- Candidate/D.lean (1 lines; last saved in round 1; its compile was stopped then)" in unfinished
+    # round 2 leaves B and the set-apart A as they were and saves a new C: round 3 gets all three, each from its round
+    s2.state["drafts"] = json.loads((s2.path / "session.json").read_text())["drafts"]
+    _left(run, 2, {"Candidate/C.lean": "def c := 2\n"}, [("Candidate/C.lean", {"ok": True})])
+    s3 = Session.create(run / "round_003" / "attempt_0" / "open_lane", cfg, "tests/max2_tiny", entries, run)
+    drafts = {d["path"]: (d["set_apart"], d["saved_round"], d["compiled"]) for d in s3.state["drafts"]}
+    assert drafts == {"Candidate/A.lean": (True, 1, True), "Candidate/B.lean": (False, 1, True), "Candidate/C.lean": (False, 2, True),
+                      "Candidate/D.lean": (False, 1, False)}
+    assert (s3.path / "drafts/Candidate/A.lean").read_text() == a2
+    # once something else is saved at a set-apart draft's path, that is the newer work, and the old draft goes no further
+    _left(run, 3, {"Candidate/A.lean": "theorem t : 1 = 1 := rfl\ntheorem t3 : 3 = 3 := rfl\n"}, [("Candidate/A.lean", {"ok": True})])
+    s4 = Session.create(run / "round_004" / "attempt_0" / "open_lane", cfg, "tests/max2_tiny", entries, run)
+    assert "t3" in (s4.path / "drafts/Candidate/A.lean").read_text()
+    # a draft accepted since is carried, and no longer a draft
+    _submission(run, 4, 0, {"Candidate/B.lean": "def b := 1\n"})
+    _left(run, 4, {}, [])
+    s5 = Session.create(run / "round_005" / "attempt_0" / "open_lane", cfg, "tests/max2_tiny", entries, run)
+    assert "Candidate/B.lean" in [m["path"] for m in s5.state["carried"]]
+    assert "Candidate/B.lean" not in [d["path"] for d in s5.state["drafts"]]
+    # the sessions after the proof rounds start from the locked proof alone
+    lock = {"modules": {}, "free": [], "protected": None}
+    s6 = Session.create(run / "round_006" / "attempt_0" / "open_lane", cfg, "tests/max2_tiny", entries, run,
+                        stage={"name": "scaling", "lock": lock, "submission": str(run)})
+    assert s6.state["drafts"] == [] and not (s6.workspace / "Candidate/C.lean").exists()
+    # notes: a round that ended without the agent's answer is named, and the notes are the latest there are
+    (run / "round_001" / "attempt_0" / "response.md").write_text("CLAIM: x\nNOTES: try the symmetric checker next.")
+    (run / "round_002" / "attempt_0" / "response.md").write_text("(the session ran out of time)")
+    from core.archive import RunDir
+
+    notes = latest_notes(RunDir(run.parent, run.name), 3, 6000)
+    assert notes == ("Round 2 ended without notes: the session ended before your answer. Its unfinished modules are in your "
+                     "workspace. These are the notes of round 1.\ntry the symmetric checker next.")
+    assert latest_notes(RunDir(run.parent, run.name), 2, 6000) == "try the symmetric checker next."

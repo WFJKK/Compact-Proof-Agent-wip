@@ -9,7 +9,10 @@
   its verdict kept next to the session's receipts (Session.log_context): a run that fails the check, or
   whose context cannot be checked, stops the run, and none of the session's proofs is counted, a resumed
   session's included (core.open_lane.records).
-  The session's wall clock is open_lane.worker_seconds; the tools' budgets are the session's.
+  The session's wall clock is open_lane.worker_seconds, started in the session (Session.start_clock) before
+  each run of the CLI, with its last open_lane.notes_reserve_seconds kept for the agent's answer: no tool call
+  runs into them. A run of the CLI that reaches the limit is stopped with every process under it (the tools'
+  server, and a compile it was waiting for). The tools' budgets are the session's.
 - FakeToolBackend: replays scripted tool calls from JSON files, in order, against the same session code,
   so the whole loop (tools, submissions, receipts, records, resume) runs without a model. A script is
 
@@ -36,7 +39,7 @@ from ..agent.backends.api import StopRun
 from ..agent.backends.claude_code import (ClaudeCodeBackend, _join, _parse_output, cli_init, isolation_problems, model_events,
                                           models_used, refused, swapped)
 from ..util import REPO_ROOT
-from .session import Session, ToolError
+from .session import Session, ToolError, kill_tree
 
 TOOL_NAMES = ("lean_check", "run_python", "search_library", "read_file", "submit_candidate")
 SERVER = "cpl"
@@ -62,8 +65,31 @@ class _Bound:
         return Session.create(Path(where) / "open_lane", self.cfg, self.model, self.entries, self.run_path)
 
 
+def _run_cli(cmd, prompt_text, env, cwd, timeout_s):
+    """subprocess.run for one session of the CLI, except that a session stopped at its limit, or interrupted, is
+    stopped with every process under it: subprocess.run kills the CLI alone, and the tools' server would finish
+    the call it was serving (a compile can take an hour) beside whatever comes next."""
+    with subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                          env=env, cwd=cwd) as proc:
+        try:
+            out, err = proc.communicate(prompt_text, timeout=timeout_s)
+        except subprocess.TimeoutExpired:  # it carries what the CLI printed until then
+            kill_tree(proc.pid)
+            proc.wait()
+            raise
+        except BaseException:
+            kill_tree(proc.pid)
+            raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
 class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
     name = "claude_code_tools"
+
+    def __init__(self, cfg: dict, log=print, runner=None, **kwargs):
+        super().__init__(cfg, log=log, runner=runner, **kwargs)
+        if runner is None:  # the real CLI (checked by ClaudeCodeBackend), run so that its whole tree stops with it
+            self.run = _run_cli
 
     def command_line(self, mcp_config: Path | None = None) -> list[str]:
         cmd = [self.command, "-p", "--tools", "", "--output-format", "stream-json", "--verbose", "--no-session-persistence"]
@@ -116,9 +142,11 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
         failures = []
         tries = int(self.retries["tries"])
         timeout = float(self.cfg["open_lane"]["worker_seconds"])
+        reserve = float(self.cfg["open_lane"].get("notes_reserve_seconds", 0))  # a run from before the reserve has none
         events, declined, init = [], None, None
         for attempt in range(tries):
             with tempfile.TemporaryDirectory(prefix="cpl-claude-code-") as cwd:
+                session.start_clock(timeout, reserve)  # read by the tools' server when the CLI starts it
                 try:
                     r = self.run(cmd, prompt.text, self.env, cwd, timeout)
                 except subprocess.TimeoutExpired as exc:
@@ -248,6 +276,8 @@ class FakeToolBackend(_Bound):
         path = self.items[index]
         script = json.loads(path.read_text())
         session = self.session(where)
+        ol = self.cfg["open_lane"]
+        session.start_clock(float(ol["worker_seconds"]), float(ol.get("notes_reserve_seconds", 0)))  # the tools run here, on the same clock
         t0 = time.monotonic()
         outcomes = []
         for call in script.get("calls", []):

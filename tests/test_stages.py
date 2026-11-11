@@ -105,7 +105,7 @@ SCORED = {"checker": "Candidate.Col.D", "sound": "Candidate.Col.D_sound", "insta
 PROJECT = Path("/nowhere")  # the stand-in below needs no Lean project
 
 
-def stand_in_inspect(lean_project, submission, where=(), closure=()):
+def stand_in_inspect(lean_project, submission, where=(), closure=(), timeout_s=None):
     """In place of core.open_lane.inspect.inspect_submission: what Lean would say about the toy modules of
     this file, read from their source. Good for these sources only (one namespace per module, a `def` or
     `theorem` per line, one import per line): Lean's real account is tested in tests/test_lock_lean.py.
@@ -402,7 +402,7 @@ def test_a_run_proves_one_network_then_checks_a_second_seed_with_the_checker_loc
     Nothing after the proof rounds moves the run's score, and a resumed run adds nothing."""
     lines = []
     ctx = loop.start(pilot_run(tmp_path, monkeypatch, [ROUND_1, SEED_CHECK, SCALING]), log=lines.append)
-    assert ctx.cfg["open_lane"]["scaling"] is True and ctx.cfg["prompt_template"] == "open_lane_v5"
+    assert ctx.cfg["open_lane"]["scaling"] is True and ctx.cfg["prompt_template"] == "open_lane_v6"
     loop.drive(ctx)
     run = ctx.run
     assert run.done_rounds() == [0, 1, 2, 3]
@@ -542,7 +542,7 @@ def test_when_lean_cannot_be_asked_nothing_is_decided_and_a_resume_goes_on(tmp_p
     says why, the run halts before anything is locked, and a halted round asks again on a resume."""
     asked = {"fails": True}
 
-    def lean(lean_project, submission, where=(), closure=()):
+    def lean(lean_project, submission, where=(), closure=(), timeout_s=None):
         if asked["fails"]:
             raise inspect.InspectError("no lean binary found (install elan)")
         return stand_in_inspect(lean_project, submission, where, closure)
@@ -577,7 +577,7 @@ def test_when_lean_cannot_be_asked_nothing_is_decided_and_a_resume_goes_on(tmp_p
 
     same = lock_module.same_checker
 
-    def unanswered_once(lock, submission, lean_project, scored=True):
+    def unanswered_once(lock, submission, lean_project, scored=True, timeout_s=None):
         asked_again["n"] += 1
         if asked_again["n"] == 3:  # the round's first question, after the session's two
             return {"verified": None, "why": "Lean could not be asked what the submission declares: no lean binary found"}
@@ -645,7 +645,7 @@ def test_the_pilot_on_the_linear_max_of_2_network_is_one_network_a_second_seed_a
 
     cfg = merge(raw)
     ol = cfg["open_lane"]
-    assert (cfg["metric"], cfg["prompt_template"], cfg["networks"], ol["scaling"]) == ("cost_of_finishing", "open_lane_v5", ["max2-v64-s0"], True)
+    assert (cfg["metric"], cfg["prompt_template"], cfg["networks"], ol["scaling"]) == ("cost_of_finishing", "open_lane_v6", ["max2-v64-s0"], True)
     assert ol["seed_check"] == {"network": "max2-v64-s1"} and ol["example"].endswith("Max2TinyScored.lean") and "one theorem" in ol["notes"]
     from core.open_lane import surface
 

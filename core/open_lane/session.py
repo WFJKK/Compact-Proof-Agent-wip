@@ -10,9 +10,10 @@ A session lives in an attempt's folder:
 
 The tools:
 
-- lean_check(path, source, network, claimed_count, certificate): save a module in the workspace and compile
-  it against the protected module of that network and claim (`accept.py compile` of the Lean project, in its
-  box), returning the compiler's messages. Counts against the compile budget.
+- lean_check(path, source or edits, network, claimed_count, certificate): save a module in the workspace (its
+  full source, or edits to the module saved at that path, each of whose old texts must occur exactly once) and
+  compile it against the protected module of that network and claim (`accept.py compile` of the Lean project,
+  in its box), returning the compiler's messages. Counts against the compile budget.
 - run_python(code, network): run code in the recipe sandbox with that network's weights and info, returning
   what it printed. Same limits as a recipe.
 - search_library(query, max_results): search the files of the Lean project that the run shows the agent (its
@@ -31,8 +32,24 @@ begins, through the same `accept.py compile` as lean_check and without charge to
 imports them instead of pasting their code again; whatever it submits is compiled and checked afresh by the
 service, as every submission is. session.json's `carried` says what was carried and whether it compiled.
 
+Drafts: the agent's unfinished work goes on with it. A new session of a proof round also gets the modules
+that the workspace of the latest earlier round's session held when that session ended and that are not the
+version a carried module has (draft_modules): at their own path, or set apart in drafts/ (drafts/Candidate/...,
+which read_file reads) when a carried module holds the path. They are not accepted and are listed apart from
+the carried modules; they are never compiled before the agent begins, and a submission of them is checked as
+any other. session.json's `drafts` says what was put where, when each was last saved and whether it compiled
+then. A draft the agent leaves as it was goes on to the next round the same way.
+
 Budgets persist in session.json, so a session that is started again (a resumed run) continues them rather
 than starting afresh, and its earlier submissions and their receipts stay.
+
+The session's clock: the backend starts it before each run of the agent (start_clock), for as long as that run
+may last (open_lane.worker_seconds), and its last open_lane.notes_reserve_seconds are kept for the agent's
+answer, which holds its notes for the next round. Every tool's answer says how many seconds are left before
+them (`remaining.seconds`). No call starts when none are left, and none runs past them: a compile, a program
+or a submission still running then is stopped, with every process it started, and the agent is told so. What
+the agent wrote is saved before a call starts (a module before it is compiled, run_python's code before it
+runs, as python/<n>.py), so a call or a session that is stopped loses nothing of it.
 
 A session after the proof rounds (core.open_lane.stages) works under a lock (core.open_lane.lock): the
 locked proof's checker modules are in its workspace, cannot be saved over, and are written again from the
@@ -51,6 +68,7 @@ expression the surface forbids is marked in the log (`showed`), for whoever revi
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -58,6 +76,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+import psutil
 
 from ..runner import Limits, run_recipe
 from ..sandbox import Sandbox
@@ -109,6 +129,34 @@ MODULE_PATH = re.compile(r"^Candidate/([A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z
 SUBMIT_TIMEOUT_S = 4 * 3600
 COMPILE_TIMEOUT_S = 3600
 EARLY_WORD_TIMEOUT_S = 180  # for Lean's word, at a compile, on what a module uses of the library; asked again at a submission
+LATE_QUESTION_S = 20  # with fewer seconds left after a compile or a submission, Lean's further questions wait for the session's end
+TIME_UP = ("this session's time is up: its last {reserve:.0f} s are kept for your answer. Call no more tools; end now with "
+           "the answer the message asks for, in its format.")
+
+
+def _monotonic() -> float:  # the clocks of a session's deadline, apart so that a test can move them
+    return time.monotonic()
+
+
+def _wall() -> float:
+    return time.time()
+
+
+def kill_tree(pid: int) -> None:
+    """Kill a process and every process under it. subprocess kills only the process it started, and a compile
+    runs in a grandchild of the service's process (the box's runner, which becomes Lean): stopping the service
+    alone would leave Lean running beside whatever comes next."""
+    try:
+        root = psutil.Process(pid)
+        procs = root.children(recursive=True) + [root]
+    except psutil.Error:
+        return
+    for p in procs:
+        try:
+            p.kill()
+        except psutil.Error:
+            pass
+    psutil.wait_procs(procs, timeout=10)
 IMPORT_LINE = re.compile(r"^\s*import\s+([A-Za-z_][A-Za-z0-9_.]*)\s*$")  # as the service reads imports
 ROUND_DIR = re.compile(r"^round_(\d+)$")
 
@@ -198,6 +246,85 @@ def carried_modules(run_path: Path, k: int) -> list[dict]:
     return [latest[names[n]] for n in order]
 
 
+def last_compiles(session_path: Path) -> dict[str, dict]:
+    """Per module path, the outcome of the last lean_check of a session that saved it (tools.jsonl): a refused
+    call saves nothing, so this is the call that saved the text the workspace holds."""
+    out: dict[str, dict] = {}
+    log = Path(session_path) / "tools.jsonl"
+    if not log.is_file():
+        return out
+    for line in log.read_text().splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        outcome, path = e.get("outcome") or {}, (e.get("args") or {}).get("path")
+        if e.get("tool") == "lean_check" and "ok" in outcome and isinstance(path, str):
+            out[path] = outcome
+    return out
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()[:16]
+
+
+def draft_modules(run_path: Path, k: int, carried: list[dict]) -> list[dict]:
+    """The agent's unfinished modules for a new session of proof round k, from the session of the latest earlier
+    round (its last attempt) as it ended: each module of its workspace whose text is not the version a module
+    carried into round k has, and each draft it had set apart and left as it was (its workspace still holding,
+    at that path, what it held when the draft was set apart). A draft goes to its own path, or to drafts/ when a
+    carried module holds the path. Each entry: path, text, set_apart, lines, sha256, the round its text was last
+    saved in and whether it compiled then (None when no compile of it is on record)."""
+    src = kk = None
+    for kk in range(k - 1, 0, -1):
+        attempts = sorted((p for p in (Path(run_path) / f"round_{kk:03d}").glob("attempt_*")
+                           if p.name[len("attempt_"):].isdigit() and (p / "open_lane" / "workspace").is_dir()),
+                          key=lambda p: int(p.name[len("attempt_"):]))
+        if attempts:
+            src = attempts[-1] / "open_lane"
+            break
+    if src is None:
+        return []
+    held = {m["path"]: Path(m["source"]).read_bytes() for m in carried}
+    try:
+        before = {d["path"]: d for d in json.loads((src / "session.json").read_text()).get("drafts") or []
+                  if isinstance(d, dict) and isinstance(d.get("path"), str)}
+    except (OSError, ValueError, AttributeError):
+        before = {}
+    saved = last_compiles(src)
+    found: dict[str, tuple[bytes, dict]] = {}
+    ws = src / "workspace"
+    for f in sorted(ws.glob("Candidate/**/*.lean")):
+        rel = f.relative_to(ws).as_posix()
+        if f.is_symlink() or not f.is_file() or not MODULE_PATH.match(rel):
+            continue
+        data = f.read_bytes()
+        prior = before.get(rel) or {}
+        if rel in saved:  # saved in that session
+            meta = {"saved_round": kk, "compiled": saved[rel].get("ok"), "stopped": bool(saved[rel].get("timed_out"))}
+        elif not prior.get("set_apart") and prior.get("sha256") == _sha(data):  # a draft it was given and left as it was
+            meta = {k2: prior.get(k2) for k2 in ("saved_round", "compiled", "stopped")}
+        else:
+            meta = {"saved_round": None, "compiled": None, "stopped": False}
+        found[rel] = (data, meta)
+    for f in sorted((src / "drafts").glob("Candidate/**/*.lean")):
+        rel = f.relative_to(src / "drafts").as_posix()
+        prior = before.get(rel) or {}
+        if f.is_symlink() or not f.is_file() or not MODULE_PATH.match(rel) or not prior.get("set_apart"):
+            continue
+        here = ws / rel
+        if here.is_file() and _sha(here.read_bytes()) != prior.get("held_sha256"):
+            continue  # the agent saved something else at that path since: that is the newer work
+        found[rel] = (f.read_bytes(), {k2: prior.get(k2) for k2 in ("saved_round", "compiled", "stopped")})
+    out = []
+    for rel, (data, meta) in sorted(found.items()):
+        if held.get(rel) == data:
+            continue  # the accepted version, carried
+        out.append({"path": rel, "text": data, "set_apart": rel in held, "lines": len(data.decode("utf-8", "replace").splitlines()),
+                    "sha256": _sha(data), **meta, **({"held_sha256": _sha(held[rel])} if rel in held else {})})
+    return out
+
+
 def under_lock(stage: str | None, receipt: dict) -> bool:
     """Whether Lean is asked if an accepted submission has the locked checker (core.open_lane.lock.same_checker):
     a scored proof of the seed check, whose count is the locked checker's only then, and a lemma of the scaling
@@ -272,8 +399,11 @@ class Session:
         state_path = path / "session.json"
         if state_path.exists():
             session = cls(path)
+            k = round_of(path) or 0
+            if session.state.get("drafts") == "pending":  # interrupted while putting them in place: again
+                session._place_drafts(draft_modules(Path(run_path), k, carried_modules(Path(run_path), k)))
             if session.state.get("carried") == "pending":  # interrupted while compiling them: do it again
-                session._carry(carried_modules(Path(run_path), round_of(path) or 0))
+                session._carry(carried_modules(Path(run_path), k))
             return session
         ol = cfg["open_lane"]
         work = ol["work_dir"] or str(run_path / "open_lane_work")
@@ -296,7 +426,9 @@ class Session:
         }
         k = round_of(path)
         carried = carried_modules(Path(run_path), k) if k and not stage else []
+        drafts = draft_modules(Path(run_path), k, carried) if k and not stage else []
         state["carried"] = "pending" if carried else []
+        state["drafts"] = "pending" if drafts else []
         if stage:
             state["stage"] = stage
         tmp = path / "session.json.tmp"
@@ -305,8 +437,11 @@ class Session:
         session = cls(path)
         if stage:
             session._seed_stage()
-        elif carried:
-            session._carry(carried)
+        else:
+            if drafts:
+                session._place_drafts(drafts)
+            if carried:
+                session._carry(carried)
         return session
 
     def surface(self) -> dict:
@@ -315,7 +450,7 @@ class Session:
             return self.state["surface"]
         return surfaces.legacy(list(self.state.get("readable") or LEGACY_READABLE), self.state.get("knowledge", "minimal"))
 
-    def _offered(self, oleans: dict, protected: str | None = None) -> dict | None:
+    def _offered(self, oleans: dict, protected: str | None = None, timeout_s: float = EARLY_WORD_TIMEOUT_S) -> dict | None:
         """In a run that holds proofs to its surface: whether these compiled modules use only what the run
         offers of the Lean project's library, for the agent. None when the run has no such rule, or when Lean
         could not be asked (a module that was just compiled is asked about again when it is submitted)."""
@@ -323,7 +458,7 @@ class Session:
         if not offered.applies(surface):
             return None
         try:
-            verdict = offered.of_oleans(surface, self.lean_project, oleans, protected, timeout_s=EARLY_WORD_TIMEOUT_S)
+            verdict = offered.of_oleans(surface, self.lean_project, oleans, protected, timeout_s=timeout_s)
         except Exception:  # the compile's result must reach the agent whatever this question does
             return None
         return {"clean": verdict["clean"], "note": offered.note(verdict)}
@@ -369,6 +504,16 @@ class Session:
             dst.write_text(renamed(text, lock["protected"], new) if new else text)
         return {"digest": lock["digest"], "protected_from": lock["protected"], "protected_to": new, "modules": sorted(lock["modules"])}
 
+    def _place_drafts(self, drafts: list[dict]) -> None:
+        """Put the agent's unfinished modules in place (draft_modules): at their own path in the workspace, or in
+        drafts/ when a carried module holds the path. Nothing is compiled."""
+        for d in drafts:
+            dst = (self.path / "drafts" if d["set_apart"] else self.workspace) / d["path"]
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(d["text"])
+        self.state["drafts"] = [{k: v for k, v in d.items() if k != "text"} for d in drafts]
+        self._save()
+
     def _carry(self, carried: list[dict]) -> None:
         """Put the carried modules in the workspace and compile them there, in import order (not charged)."""
         for m in carried:
@@ -405,8 +550,15 @@ class Session:
         tmp.replace(self.state_path)
 
     def _log(self, tool: str, args: dict, outcome: dict, seconds: float) -> None:
-        short = {k: (v if not isinstance(v, str) or len(v) < 2000 else v[:2000] + f"... ({len(v)} chars)") for k, v in args.items()}
-        line = {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "tool": tool, "args": short, "outcome": outcome, "seconds": round(seconds, 2)}
+        def short(v):  # a long text cut, at any depth (an edit's old and new texts)
+            if isinstance(v, str):
+                return v if len(v) < 2000 else v[:2000] + f"... ({len(v)} chars)"
+            if isinstance(v, dict):
+                return {k: short(x) for k, x in v.items()}
+            return [short(x) for x in v] if isinstance(v, list) else v
+
+        line = {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "tool": tool, "args": short(args), "outcome": outcome,
+                "seconds": round(seconds, 2)}
         with open(self.path / "tools.jsonl", "a") as f:
             f.write(json.dumps(line) + "\n")
 
@@ -418,22 +570,74 @@ class Session:
         self._save()
 
     def remaining(self) -> dict:
-        return {t: self.state["budgets"][t] - self.state["used"][t] for t in self.state["budgets"]}
+        """What is left of the session's budgets, and, once the backend has started its clock, the seconds left
+        before the time kept for the agent's answer."""
+        out = {t: self.state["budgets"][t] - self.state["used"][t] for t in self.state["budgets"]}
+        left = self.seconds_left()
+        if left is not None:
+            out["seconds"] = max(0, int(left))
+        return out
+
+    # the session's clock ---------------------------------------------------------------------
+    def start_clock(self, seconds: float, reserve: float) -> None:
+        """Start the clock of one run of the agent (the backend does, before each run): the run may last
+        `seconds`, and its last `reserve` seconds are kept for the agent's answer. Kept in session.json, which the
+        tools' server reads when it starts. The deadline is kept on the monotonic clock, as the backend's own
+        limit on the run is, and on the wall clock, which seconds_left falls back to."""
+        self.reload()  # the tools' server of an earlier run saved its counters here
+        now_m, now_w = _monotonic(), _wall()
+        self.state["clock"] = {"seconds": float(seconds), "reserve_s": float(reserve), "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                               "monotonic_deadline": now_m + float(seconds), "wall_deadline": now_w + float(seconds)}
+        self._save()
+
+    def seconds_left(self) -> float | None:
+        """Seconds before the time kept for the agent's answer, or None when no clock was started (a session
+        made before there was one). The monotonic clock is the backend's (a machine asleep does not use up the
+        run), and is shared by its processes; should it not be (it says more than the run's length is left, or
+        less than the wall clock does), the wall clock decides."""
+        clock = self.state.get("clock")
+        if not clock:
+            return None
+        wall = clock["wall_deadline"] - _wall()
+        left = clock["monotonic_deadline"] - _monotonic()
+        if not wall - 5 <= left <= clock["seconds"] + 5:
+            left = wall
+        return left - clock["reserve_s"]
+
+    def _time_for_call(self) -> float | None:
+        """The seconds a tool call may take: None without a clock; refused when none are left, before anything
+        of the call is spent."""
+        left = self.seconds_left()
+        if left is not None and left <= 0:
+            raise ToolError(TIME_UP.format(reserve=self.state["clock"]["reserve_s"]))
+        return left
 
     # the service, called as a program: the pipeline is a client of it, never a second service ---------
     def _service(self, args: list[str], timeout_s: float) -> dict:
+        """One command of the service, stopped after timeout_s with every process it started."""
         cmd = [sys.executable, "-B", str(self.lean_project / "scripts" / "accept.py")] + args + \
               ["--repo", self.state["repo"], "--work", self.state["work_dir"], "--mode", "hardened",
                "--knowledge", self.state.get("knowledge", "minimal")]
         env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, env=env)
-        except subprocess.TimeoutExpired:
-            return {"status": "timeout", "ok": False, "error": f"the service did not answer within {timeout_s:g} s"}
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        except OSError as exc:
+            return {"status": "error", "ok": False, "error": f"the service could not be started: {exc}"}
+        with proc:
+            try:
+                out, err = proc.communicate(timeout=max(1.0, float(timeout_s)))
+            except subprocess.TimeoutExpired:
+                kill_tree(proc.pid)
+                proc.wait()
+                return {"status": "timeout", "ok": False, "timed_out": True,
+                        "error": f"the service did not answer within {timeout_s:.0f} s"}
+            except BaseException:  # the session itself is being stopped: the service goes with it
+                kill_tree(proc.pid)
+                raise
         try:
-            return json.loads(r.stdout)
+            return json.loads(out)
         except ValueError:
-            return {"status": "error", "ok": False, "error": f"the service failed: {(r.stderr or r.stdout)[-1500:]}"}
+            return {"status": "error", "ok": False, "error": f"the service failed: {(err or out)[-1500:]}"}
 
     def _network(self, network: str) -> dict:
         if network not in self.state["networks"]:
@@ -441,13 +645,44 @@ class Session:
         return self.state["networks"][network]
 
     # tools -------------------------------------------------------------------------------------
-    def lean_check(self, path: str, source: str, network: str, claimed_count: int, certificate: list | None = None) -> dict:
+    MAX_EDITS = 200
+
+    def _edited(self, path: str, edits) -> str:
+        """The module saved at path with the edits applied in order: each edit's `old` must occur exactly once in
+        the text as the edits before it left it, and is replaced by its `new`. No edits: the module as saved."""
+        if not isinstance(edits, list) or len(edits) > self.MAX_EDITS or not all(
+                isinstance(e, dict) and set(e) == {"old", "new"} and isinstance(e["old"], str) and isinstance(e["new"], str)
+                for e in edits):
+            raise ToolError(f"edits must be a list of at most {self.MAX_EDITS} objects {{\"old\": text, \"new\": text}}")
+        src = self.workspace / path
+        if src.is_symlink() or not src.is_file():
+            raise ToolError(f"no module {path} in your workspace to edit: give its full source")
+        text = src.read_text()
+        for i, e in enumerate(edits, 1):
+            first = text.find(e["old"]) if e["old"] else -1
+            again = text.find(e["old"], first + 1) if first >= 0 else -1
+            if first < 0 or again >= 0:
+                n = "does not occur" if first < 0 else "occurs more than once"
+                after = " as the edits before it left it" if i > 1 else ""
+                raise ToolError(f"edit {i} of {len(edits)}: its old text {n} in {path}{after}; it must occur exactly once "
+                                "(give more of the text around it). Nothing was saved or compiled.")
+            text = text[:first] + e["new"] + text[first + len(e["old"]):]
+        if len(text) > MAX_SOURCE:
+            raise ToolError(f"the edited module would be longer than {MAX_SOURCE} characters")
+        return text
+
+    def lean_check(self, path: str, source: str | None = None, network: str | None = None, claimed_count: int | None = None,
+                   certificate: list | None = None, edits: list | None = None) -> dict:
         t0 = time.monotonic()
-        args = {"path": path, "source": source, "network": network, "claimed_count": claimed_count, "certificate": certificate}
+        args = {"path": path, "network": network, "claimed_count": claimed_count, "certificate": certificate}
+        args.update({k: v for k, v in (("source", source), ("edits", edits)) if v is not None})
         try:
+            left = self._time_for_call()
             if not isinstance(path, str) or not MODULE_PATH.match(path):
                 raise ToolError("path must be Candidate/<Name>.lean (identifiers only)")
-            if not isinstance(source, str) or len(source) > MAX_SOURCE:
+            if (source is None) == (edits is None):
+                raise ToolError("give either the module's full source or edits to the module saved at path")
+            if source is not None and (not isinstance(source, str) or len(source) > MAX_SOURCE):
                 raise ToolError(f"source must be a string of at most {MAX_SOURCE} characters")
             self._network(network)
             if isinstance(claimed_count, bool) or not isinstance(claimed_count, int) or claimed_count < 0:
@@ -455,33 +690,46 @@ class Session:
             if path in ((self._lock() or {}).get("modules") or {}):
                 raise ToolError(f"{path} is locked: this session runs the accepted checker unchanged. Write in another "
                                 "module, which may import it.")
+            if edits is not None:
+                source = self._edited(path, edits)
             self._spend("lean_check")
             src = self.workspace / path
             src.parent.mkdir(parents=True, exist_ok=True)
-            src.write_text(source)
+            src.write_text(source)  # saved before anything runs: a compile that is stopped loses nothing
+            saved = {"lines": len(source.splitlines()), "sha256": hashlib.sha256(source.encode()).hexdigest()[:16]}
             self._apply_lock(network, claimed_count, certificate)
             cmd = ["compile", str(self.workspace), path, "--model", self.state["model"], "--network", network, "--claimed", str(claimed_count)]
             if certificate:
                 cpath = self.path / "certificate.json"
                 cpath.write_text(json.dumps(certificate))
                 cmd += ["--certificate", str(cpath)]
-            res = self._service(cmd, COMPILE_TIMEOUT_S)
+            limit = COMPILE_TIMEOUT_S if left is None else min(COMPILE_TIMEOUT_S, left)
+            res = self._service(cmd, limit)
+            if res.get("status") == "timeout" and not res.get("messages"):  # stopped here, at the limit of the call
+                why = (f"the {limit:.0f} s this session had left" if limit < COMPILE_TIMEOUT_S else f"the limit of a compile, {limit:.0f} s")
+                res = {"ok": False, "timed_out": True, "module": module_name(path),
+                       "messages": f"The compile was stopped: it did not finish within {why}. The module is saved.", "seconds": round(limit)}
             if "error" in res and not res.get("messages"):
                 raise ToolError(str(res["error"]))
             text = shorten_paths((res.get("messages") or "").strip(), self.run_dir())
             out = {"ok": bool(res.get("ok")), "timed_out": bool(res.get("timed_out")), "module": res.get("module"),
-                   "protected_module": res.get("protected_module"), "messages": excerpt(text) if text else "(no messages)",
-                   "seconds": res.get("seconds"), "remaining": self.remaining()}
-            logged = {"ok": out["ok"], "messages": out["messages"][:500], "errors": error_lines(out["messages"])}
+                   "protected_module": res.get("protected_module"), "lines": saved["lines"],
+                   "messages": excerpt(text) if text else "(no messages)", "seconds": res.get("seconds")}
+            logged = {"ok": out["ok"], "saved": saved, "messages": out["messages"][:500], "errors": error_lines(out["messages"])}
+            if out["timed_out"]:
+                logged["timed_out"] = True
             showed = surfaces.matches(text, self.surface().get("forbidden") or [])
             if showed:  # Lean printed what the run does not show the agent (a #print, a goal, a suggestion): kept for review
                 logged["showed"] = [line for _, _, line in showed[:5]]
             compiled = self.workspace / "out" / (path[: -len(".lean")] + ".olean")
-            if out["ok"] and compiled.is_file():
-                said = self._offered({module_name(path): compiled})
+            late = self.seconds_left()
+            if out["ok"] and compiled.is_file() and (late is None or late >= LATE_QUESTION_S):
+                said = self._offered({module_name(path): compiled},
+                                     timeout_s=EARLY_WORD_TIMEOUT_S if late is None else min(EARLY_WORD_TIMEOUT_S, late))
                 if said is not None and not said["clean"]:  # said now, while it costs a compile and not a submission
                     out["offered"] = said
                     logged["offered"] = False
+            out["remaining"] = self.remaining()
             self._log("lean_check", args, logged, time.monotonic() - t0)
             return out
         except ToolError as exc:
@@ -492,10 +740,14 @@ class Session:
         t0 = time.monotonic()
         args = {"code": code, "network": network}
         try:
+            left = self._time_for_call()
             if not isinstance(code, str) or len(code) > MAX_SOURCE:
                 raise ToolError("code must be a string")
             self._network(network)
             self._spend("run_python")
+            saved = Path("python") / f"{self.state['used']['run_python']:03d}.py"
+            (self.path / saved).parent.mkdir(exist_ok=True)
+            (self.path / saved).write_text(code)  # kept before it runs, whole (the log keeps the first 2,000 characters)
             from ..model_folder import load_model_folder
             from ..run_config import resolve
             from ..zoo import load_weights, network_entry
@@ -505,7 +757,8 @@ class Session:
             weights = load_weights(folder, network)
             info = {"sizes": folder.sizes(entry["setting"]), "input_space": folder.input_space(entry["setting"])}
             lim = self.state["limits"]
-            limits = Limits.from_config({"time_limit_s": lim["time_limit_s"], "memory_limit_mb": lim["memory_limit_mb"],
+            limit = float(lim["time_limit_s"]) if left is None else min(float(lim["time_limit_s"]), left)
+            limits = Limits.from_config({"time_limit_s": limit, "memory_limit_mb": lim["memory_limit_mb"],
                                          "max_proof_mb": lim["max_proof_mb"], "threads_per_recipe": lim["threads_per_recipe"]})
             recipe = WRAPPER.replace("@@CODE@@", repr(code))
             from ..sandbox import choose, protected_paths
@@ -518,8 +771,10 @@ class Session:
                 output = str(ex.proof.get("stdout", ""))
             else:
                 output = f"({ex.status}) {ex.error or ''}"
+                if ex.status == "timeout" and limit < float(lim["time_limit_s"]):
+                    output += f" (stopped at the {limit:.0f} s this session had left)"
             out = {"status": ex.status, "output": output[-MAX_TEXT:], "runtime_s": ex.runtime_s, "remaining": self.remaining()}
-            self._log("run_python", args, {"status": ex.status, "output": output[:500]}, time.monotonic() - t0)
+            self._log("run_python", args, {"status": ex.status, "saved": str(saved), "output": output[:500]}, time.monotonic() - t0)
             return out
         except ToolError as exc:
             self._log("run_python", args, {"error": str(exc)}, time.monotonic() - t0)
@@ -532,16 +787,22 @@ class Session:
         t0 = time.monotonic()
         args = {"path": path, "start": start, "lines": lines}
         try:
+            self._time_for_call()
             if isinstance(path, str) and MODULE_PATH.match(path):  # a module of the agent's own workspace
                 p = self.workspace / path
                 if p.is_symlink() or not p.is_file():
                     raise ToolError(f"no module {path} in your workspace")
+            elif isinstance(path, str) and path.startswith("drafts/") and MODULE_PATH.match(path[len("drafts/"):]):
+                p = self.path / path  # a draft set apart, its path held by a carried module
+                if p.is_symlink() or not p.is_file():
+                    raise ToolError(f"no draft {path}")
             else:
                 surface = self.surface()
                 p = surfaces.served(surface, self.lean_project, path)
                 if p is None:
-                    raise ToolError("path must be a module of your workspace (Candidate/<Name>.lean) or one of the files of "
-                                    "the Lean project that this run offers: " + ", ".join(surfaces.names(surface)))
+                    raise ToolError("path must be a module of your workspace (Candidate/<Name>.lean), a draft set apart "
+                                    "(drafts/Candidate/<Name>.lean) or one of the files of the Lean project that this run "
+                                    "offers: " + ", ".join(surfaces.names(surface)))
                 if p.is_symlink() or not p.is_file():
                     raise ToolError(f"no file {path} in the Lean project")
             all_lines = p.read_text().splitlines()
@@ -550,7 +811,8 @@ class Session:
             chunk = all_lines[start - 1:start - 1 + n]
             text = "\n".join(f"{start + i}: {ln}" for i, ln in enumerate(chunk))
             out = {"path": path, "total_lines": len(all_lines), "start": start, "end": start + len(chunk) - 1,
-                   "text": text[:MAX_TEXT], "truncated": len(chunk) < len(all_lines) - start + 1 or len(text) > MAX_TEXT}
+                   "text": text[:MAX_TEXT], "truncated": len(chunk) < len(all_lines) - start + 1 or len(text) > MAX_TEXT,
+                   "remaining": self.remaining()}
             self._log("read_file", args, {"lines": len(chunk)}, time.monotonic() - t0)
             return out
         except ToolError as exc:
@@ -562,6 +824,7 @@ class Session:
         t0 = time.monotonic()
         args = {"query": query, "max_results": max_results}
         try:
+            self._time_for_call()
             if not isinstance(query, str) or not query.strip():
                 raise ToolError("query must be a non-empty string (a regular expression)")
             try:
@@ -585,7 +848,7 @@ class Session:
                 if len(hits) >= n:
                     break
             text = "\n".join(hits) if hits else "(no match)"
-            out = {"matches": len(hits), "text": text[:MAX_TEXT], "truncated": len(hits) >= n}
+            out = {"matches": len(hits), "text": text[:MAX_TEXT], "truncated": len(hits) >= n, "remaining": self.remaining()}
             self._log("search_library", args, {"matches": len(hits)}, time.monotonic() - t0)
             return out
         except ToolError as exc:
@@ -597,6 +860,7 @@ class Session:
         t0 = time.monotonic()
         args = {"network": network, "claimed_count": claimed_count, "theorem": theorem, "modules": modules, "scored": scored, "kind": kind}
         try:
+            left = self._time_for_call()
             self._network(network)
             if kind not in ("performance", "auxiliary"):
                 raise ToolError("kind must be performance (a proof of Target) or auxiliary (a lemma)")
@@ -635,11 +899,13 @@ class Session:
                 manifest["scored"] = scored
             (cdir / "manifest.json").write_text(json.dumps(manifest, indent=1))
             # hardened: Landlock where it exists, else process mode, which the receipt records as weak
-            receipt = self._service(["submit", str(cdir)], SUBMIT_TIMEOUT_S)
+            limit = SUBMIT_TIMEOUT_S if left is None else min(SUBMIT_TIMEOUT_S, left)
+            receipt = self._service(["submit", str(cdir)], limit)
             if "status" not in receipt:
                 receipt = {"status": "error", "reason": receipt.get("error", "no receipt")}
             if receipt.get("status") == "timeout" and "reason" not in receipt:
-                receipt["reason"] = receipt.get("error")
+                receipt["reason"] = (f"the service did not answer within the {limit:.0f} s this session had left"
+                                     if limit < SUBMIT_TIMEOUT_S else receipt.get("error"))
             receipt["submission"] = n
             (cdir / "receipt.json").write_text(json.dumps(receipt, indent=1))
             if applied:
@@ -662,8 +928,13 @@ class Session:
                     # has just compiled: is it the locked one? Asked now, before the session does anything else.
                     from .lock import same_checker
 
+                    late = self.seconds_left()
                     try:
-                        check = same_checker(lock, cdir, self.lean_project, scored=stage["name"] == "seed_check")
+                        if late is not None and late < LATE_QUESTION_S:
+                            check = {"verified": None, "why": "this session's time ran out before it could be asked"}
+                        else:
+                            check = same_checker(lock, cdir, self.lean_project, scored=stage["name"] == "seed_check",
+                                                 timeout_s=offered.inspect.TIMEOUT_S if late is None else min(offered.inspect.TIMEOUT_S, late))
                     except Exception as exc:  # the receipt is saved and must reach the agent whatever this question does
                         check = {"verified": None, "why": f"the question failed: {exc!r}"}
                     if check["verified"] is None:  # Lean could not be asked: nothing is recorded, the round asks again
@@ -683,8 +954,12 @@ class Session:
             if offered.applies(surface) and receipt.get("status") == "accepted":
                 # does the accepted proof use only what this run offers of the Lean project's library? Asked of
                 # Lean now, of the modules the service has just compiled; the records ask again if this fails.
+                late = self.seconds_left()
                 try:
-                    verdict = offered.ask(surface, self.lean_project, cdir)
+                    if late is not None and late < LATE_QUESTION_S:
+                        raise RuntimeError("this session's time ran out")
+                    verdict = offered.ask(surface, self.lean_project, cdir,
+                                          timeout_s=offered.inspect.TIMEOUT_S if late is None else min(offered.inspect.TIMEOUT_S, late))
                     out["offered"] = {"clean": verdict["clean"], "note": offered.note(verdict)}
                 except Exception as exc:  # the receipt is saved and must reach the agent whatever this question does
                     out["offered"] = {"clean": None, "note": "This submission was accepted. Whether it uses only what this run "
@@ -779,15 +1054,20 @@ class Session:
         "lean_check": {
             "description": "Save a Lean module in your workspace and compile it against the protected module of a network "
                            "and a claimed count (Protected.N_<network>_c<claimed>, which the service builds; with a "
-                           "certificate the name carries its hash). Returns the compiler's messages (errors, goals, "
-                           "#eval output). Each call counts against the compile budget.",
+                           "certificate the name carries its hash). Give the module's full `source`, or `edits` to the "
+                           "module saved at `path`: each replaces its `old` text, which must occur exactly once, by its "
+                           "`new` text, in order (no edits: compile the module as saved). Returns the compiler's messages "
+                           "(errors, goals, #eval output). Each call counts against the compile budget.",
             "schema": {"type": "object", "properties": {
                 "path": {"type": "string", "description": "Candidate/<Name>.lean"},
-                "source": {"type": "string", "description": "the module's full source"},
+                "source": {"type": "string", "description": "the module's full source (or give edits instead)"},
+                "edits": {"type": "array", "description": "instead of source: changes to the module saved at path, in order",
+                          "items": {"type": "object", "properties": {"old": {"type": "string"}, "new": {"type": "string"}},
+                                    "required": ["old", "new"]}},
                 "network": {"type": "string"},
                 "claimed_count": {"type": "integer"},
                 "certificate": {"type": "array", "items": {}, "description": "optional: numbers (integers, floats or [p, q]) for a scored proof"}},
-                "required": ["path", "source", "network", "claimed_count"]},
+                "required": ["path", "network", "claimed_count"]},
         },
         "run_python": {
             "description": "Run Python code in the recipe sandbox with `weights` (a dict of numpy arrays, the network's "
@@ -806,9 +1086,10 @@ class Session:
         },
         "read_file": {
             "description": "Read lines of a module of your workspace (Candidate/<Name>.lean: those you saved with "
-                           "lean_check and those carried over from earlier rounds) or of one of the files of the Lean "
-                           "project that this run offers (your prompt lists them; no other file can be read). Returns up "
-                           "to 400 numbered lines from `start`.",
+                           "lean_check and those carried over from earlier rounds), of a draft set apart "
+                           "(drafts/Candidate/<Name>.lean) or of one of the files of the Lean project that this run offers "
+                           "(your prompt lists them; no other file can be read). Returns up to 400 numbered lines from "
+                           "`start`.",
             "schema": {"type": "object", "properties": {"path": {"type": "string"}, "start": {"type": "integer"},
                                                         "lines": {"type": "integer"}},
                        "required": ["path"]},
@@ -846,7 +1127,13 @@ class Session:
         extra = sorted(set(arguments) - allowed)
         if extra:
             raise ToolError(f"{tool} does not take {extra}")
-        return fn(**arguments)
+        try:
+            return fn(**arguments)
+        except ToolError as exc:  # a refusal says the time left too, as every answer does
+            left = self.seconds_left()
+            if left is None or left <= 0:
+                raise
+            raise ToolError(f"{exc} ({left:.0f} s of this session left)") from None
 
 
 # The fixed rules lane's helpers.py names that lane's rules, which this lane's agent is not told

@@ -756,7 +756,7 @@ def test_when_lean_cannot_be_asked_what_a_proof_uses_the_run_halts_and_a_resume_
     monkeypatch.setattr(offered, "self_check", lambda s, project: {"constants": 9, "shown": 5, "exposed": [], "modules": 1})
     asked = {"n": 0, "answers": False}
 
-    def lean(s, project, submission):
+    def lean(s, project, submission, timeout_s=None):
         asked["n"] += 1
         if not asked["answers"]:
             raise inspect.InspectError("no lean binary found (install elan)")

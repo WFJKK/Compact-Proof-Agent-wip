@@ -11,7 +11,9 @@ accepted sources pasted in; the instance as one `decide +kernel` with Lean's rec
 is what the kernel needs to compute a bill of thousands of charges), open_lane_v4.md (for runs over
 several networks scored on cost of finishing: the goal is the mechanism shared by seeds and sizes, the
 score comes before the rules, the rules of scoring are lists, and there is advice on how to work) and
-open_lane_v5.md (one network per run, with what follows its proof rounds). Under
+open_lane_v5.md (one network per run, with what follows its proof rounds) and open_lane_v6.md (v5 with
+the work in Python first: a checker is formalised when there is a reason to, and run with #eval for a
+provisional count and bill before it is proved; edits to a saved module, the clock, the drafts). Under
 the metric cost_of_finishing the scoreboard shows that one score and, per network, the cheapest way to
 finish; under the other metrics it is unchanged. Part 1 is the same every round; part 2
 is rebuilt from the archive. Building it opens the round's first session, which carries
@@ -171,7 +173,7 @@ SECOND_EXAMPLE_TEXT = (
 )
 
 
-# What template open_lane_v5 says about the sessions after the proof rounds (core.open_lane.stages), each only
+# What templates open_lane_v5 and v6 say about the sessions after the proof rounds (core.open_lane.stages), each only
 # when the run has it.
 AFTER_HEAD = {0: "This run is about one network.",
               1: "This run is about one network. One thing comes after its rounds, and\nit says what a good proof is:",
@@ -311,6 +313,10 @@ def static_values(cfg: dict, folder: ModelFolder, entries: list[dict]) -> dict:
     ol = cfg["open_lane"]
     budgets = (f"{ol['compile_calls']} lean_check calls, {ol['python_calls']} run_python calls, "
                f"{ol['submissions']} submissions, {ol['worker_seconds']:,} s of wall clock")
+    if ol.get("notes_reserve_seconds"):
+        budgets += (f", of which the last {ol['notes_reserve_seconds']:,} s are kept for your answer. Every tool's answer says "
+                    "how many seconds are left before them (`remaining.seconds`); no call runs past that (a compile, a "
+                    "program or a submission still running is stopped), and when none are left the tools refuse")
     return {
         "MODEL_SOURCE": "\n```python\n" + folder.source().rstrip() + "\n```",
         "TASK_DESCRIPTION": folder.task.DESCRIPTION,
@@ -483,26 +489,69 @@ WORKSPACE_HEAD = (
 )
 
 
-def workspace_text(carried) -> str:
-    """Part 2's account of the modules carried into this round's workspace (core.open_lane.session)."""
-    if not carried or not isinstance(carried, list):
-        return "none yet"
-    lines = [WORKSPACE_HEAD]
-    for m in carried:
-        if m.get("beyond_offered"):
-            what = "accepted, not counted: it uses what this run does not offer"
-        elif m.get("kind") == "auxiliary":
-            what = f"accepted lemma {m.get('theorem')}"
-        elif m.get("scored"):
-            what = f"scored proof ({m.get('certified')} inputs, length {m.get('length'):,})" if m.get("length") else "scored proof"
-        else:
-            what = f"verified proof ({m.get('certified')} inputs)"
-        state = "compiled" if m.get("compiled") else "did not compile here: " + " | ".join(m.get("errors") or [])[:MAX_REASON]
-        lines.append(f"- {m['path']} ({m.get('lines')} lines; round {m['round']}, submission {m['submission']}, {what}): {state}")
-    return "\n".join(lines)
+DRAFTS_HEAD = (
+    "Your unfinished work, as your last session left it: these modules were in your workspace when it ended, and no "
+    "submission the service accepted has them as they are. They are drafts, not accepted: nothing in them counts "
+    "until a submission of them is accepted. None was compiled before this session began: compile one with "
+    "lean_check (`edits: []` compiles it as saved) before another module imports it. A draft whose path an accepted "
+    "module holds is set apart in drafts/: read it there, and save it at a path with lean_check to go on with it."
+)
+MAX_DRAFTS_LISTED = 40
+
+
+def draft_line(d: dict) -> str:
+    """One draft, for part 2: where it is, its size, when it was last saved and whether it compiled then."""
+    where = f"drafts/{d['path']}" if d.get("set_apart") else d["path"]
+    facts = [f"{d.get('lines')} lines"]
+    if d.get("saved_round"):
+        facts.append(f"last saved in round {d['saved_round']}")
+    compiled = d.get("compiled")
+    if compiled is True:
+        facts.append("it compiled then")
+    elif compiled is False:
+        facts.append("its compile was stopped then" if d.get("stopped") else "it did not compile then")
+    if d.get("set_apart"):
+        facts.append(f"the accepted {d['path']} holds its path")
+    return f"- {where} ({'; '.join(facts)})"
+
+
+def workspace_text(carried, drafts=None) -> str:
+    """Part 2's account of the modules carried into this round's workspace, and of the agent's drafts
+    (core.open_lane.session): the accepted ones first, the drafts apart."""
+    parts = []
+    if carried and isinstance(carried, list):
+        lines = [WORKSPACE_HEAD]
+        for m in carried:
+            if m.get("beyond_offered"):
+                what = "accepted, not counted: it uses what this run does not offer"
+            elif m.get("kind") == "auxiliary":
+                what = f"accepted lemma {m.get('theorem')}"
+            elif m.get("scored"):
+                what = f"scored proof ({m.get('certified')} inputs, length {m.get('length'):,})" if m.get("length") else "scored proof"
+            else:
+                what = f"verified proof ({m.get('certified')} inputs)"
+            state = "compiled" if m.get("compiled") else "did not compile here: " + " | ".join(m.get("errors") or [])[:MAX_REASON]
+            lines.append(f"- {m['path']} ({m.get('lines')} lines; round {m['round']}, submission {m['submission']}, {what}): {state}")
+        parts.append("\n".join(lines))
+    if drafts and isinstance(drafts, list):
+        ds = sorted(drafts, key=lambda d: (-(d.get("saved_round") or 0), d["path"]))
+        lines = [DRAFTS_HEAD] + [draft_line(d) for d in ds[:MAX_DRAFTS_LISTED]]
+        if len(ds) > MAX_DRAFTS_LISTED:
+            rest = ds[MAX_DRAFTS_LISTED:]
+            lines.append(f"- and {len(rest)} more, saved earlier: " + ", ".join(
+                (f"drafts/{d['path']}" if d.get("set_apart") else d["path"]) for d in rest))
+        parts.append("\n".join(lines))
+    return "\n\n".join(parts) if parts else "none yet"
+
+
+# What a session's response is when it ended without the agent's answer (core.open_lane.backends): no notes.
+NO_ANSWER = re.compile(r"^\(the session (ran out of time|reached its turn limit)\)$")
 
 
 def latest_notes(run: RunDir, k: int, max_chars: int) -> str:
+    """The notes of the latest round whose sessions left any. A round whose sessions ended without the agent's
+    answer (out of time) is named, so the agent knows these notes are older than its last round."""
+    without = []
     for kk in range(k - 1, 0, -1):
         j = 0
         texts = []
@@ -510,12 +559,22 @@ def latest_notes(run: RunDir, k: int, max_chars: int) -> str:
             t = run.read(kk, f"attempt_{j}/response.md")
             if t:
                 m = re.search(r"NOTES:(.*)\Z", t, re.S)
-                texts.append((m.group(1) if m else t).strip())
+                if m or not NO_ANSWER.match(t.strip()):
+                    texts.append((m.group(1) if m else t).strip())
             j += 1
         if texts:
             out = "\n".join(texts)
-            return out[:max_chars] + ("\n(cut)" if len(out) > max_chars else "")
-    return "none yet"
+            out = out[:max_chars] + ("\n(cut)" if len(out) > max_chars else "")
+            return (_without_notes(without) + f" These are the notes of round {kk}.\n" if without else "") + out
+        if j:
+            without.append(kk)
+    return _without_notes(without) if without else "none yet"
+
+
+def _without_notes(rounds: list[int]) -> str:
+    named = ", ".join(map(str, sorted(rounds)))
+    return (f"Round{'s' if len(rounds) > 1 else ''} {named} ended without notes: the session ended before your answer. "
+            "Its unfinished modules are in your workspace.")
 
 
 def stalled(records: list[dict], k: int, n: int) -> bool:
@@ -566,7 +625,7 @@ def build_open_lane_prompt(cfg: dict, folder: ModelFolder, entries: list[dict], 
         "SCOREBOARD": scoreboard(records, entries, cfg.get("budget_ratio"), cfg["metric"]),
         "RECEIPTS": receipts_text(records, entries, cfg["metric"], ready),
         "AIM": aim(records, entries, cfg, k) + ("\n" + nudge if nudge else ""),
-        "WORKSPACE": workspace_text(session.state.get("carried")),
+        "WORKSPACE": workspace_text(session.state.get("carried"), session.state.get("drafts")),
     }
     while True:
         values["LEMMAS"] = accepted_sources(run, records, cfg["shown_top_recipes"], lemma_chars)

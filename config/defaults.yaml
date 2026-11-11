@@ -119,6 +119,7 @@ open_lane:
   submissions: 4            # submit_candidate calls per session
   max_turns: 200            # the CLI's agentic turns per session
   worker_seconds: 7200      # the session's wall clock
+  notes_reserve_seconds: 600  # its last seconds, kept for the agent's answer (its notes): no tool call runs into them
   stall_rounds: 3           # rounds without an accepted submission before the prompt asks for a change of approach
   fake_scripts: []          # the fake backend's scripted sessions, in order (files or folders of *.json)
   # The worked example in the prompt and any further Lean sources it shows, as paths in the Lean project.
@@ -150,7 +151,7 @@ open_lane:
   # architecture than the example's, and say so when comparing runs.
   second_example: null
   # Where the agent can see an instance put together from small decided facts, which a long run needs: a file of
-  # the Lean project that prompt template open_lane_v5 names and read_file may read (not pasted). Off by default;
+  # the Lean project that prompt templates open_lane_v5 and v6 name and read_file may read (not pasted). Off by default;
   # the pilot's base names brute force on a small attention network, proved one fact per input.
   split_example: null
   # The knowledge condition (the Lean project's docs/COUNTED.md, "Knowledge conditions"): minimal is the base

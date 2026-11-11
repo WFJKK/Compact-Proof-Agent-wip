@@ -258,7 +258,7 @@ def validate(cfg: dict, source: str = "run config") -> None:
 
 
 OPEN_LANE_KEYS = {"enabled", "lean_project", "work_dir", "python", "compile_calls", "python_calls", "submissions", "max_turns",
-                  "worker_seconds", "stall_rounds", "fake_scripts", "example", "extra_sources", "knowledge", "second_example", "notes",
+                  "worker_seconds", "notes_reserve_seconds", "stall_rounds", "fake_scripts", "example", "extra_sources", "knowledge", "second_example", "notes",
                   "seed_check", "scaling", "split_example"}
 KNOWLEDGE_CONDITIONS = ("minimal", "maximum")
 
@@ -276,6 +276,10 @@ def open_lane_errors(cfg: dict) -> list[str]:
     for key in ("compile_calls", "python_calls", "submissions", "max_turns", "stall_rounds"):
         _number(ol, key, errors, integer=True, minimum=1)
     _number(ol, "worker_seconds", errors, positive=True)
+    _number(ol, "notes_reserve_seconds", errors, minimum=0)
+    reserve, clock = ol.get("notes_reserve_seconds"), ol.get("worker_seconds")
+    if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (reserve, clock)) and reserve >= clock:
+        errors.append("open_lane.notes_reserve_seconds must be less than open_lane.worker_seconds")
     if not isinstance(ol.get("fake_scripts"), list) or not all(isinstance(p, str) for p in ol["fake_scripts"]):
         errors.append("open_lane.fake_scripts must be a list of paths")
     for key in ("lean_project", "work_dir", "python"):

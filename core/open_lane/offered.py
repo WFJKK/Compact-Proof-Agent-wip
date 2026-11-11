@@ -113,10 +113,10 @@ def of_oleans(surface: dict, lean_project: Path, oleans: dict, protected: str | 
     return {"clean": not s["uses"], "uses": s["uses"], "library": s["library"]}
 
 
-def of_submission(surface: dict, lean_project: Path, submission: Path) -> dict:
+def of_submission(surface: dict, lean_project: Path, submission: Path, timeout_s: float = inspect.TIMEOUT_S) -> dict:
     """The same of an accepted submission, from the modules the acceptance service compiled for it."""
     oleans, protected = inspect.submission_oleans(Path(submission))
-    return of_oleans(surface, lean_project, oleans, protected)
+    return of_oleans(surface, lean_project, oleans, protected, timeout_s=timeout_s)
 
 
 def note(verdict: dict) -> str:
@@ -162,13 +162,13 @@ def read(submission: Path) -> dict | None:
         return None
 
 
-def ask(surface: dict, lean_project: Path, submission: Path) -> dict:
+def ask(surface: dict, lean_project: Path, submission: Path, timeout_s: float = inspect.TIMEOUT_S) -> dict:
     """The verdict of a submission, asked of Lean once and kept in its folder. Raises InspectError when Lean
     could not be asked; nothing is written then."""
     kept = read(submission)
     if kept is not None and isinstance(kept.get("clean"), bool):
         return kept
-    verdict = of_submission(surface, lean_project, submission)
+    verdict = of_submission(surface, lean_project, submission, timeout_s=timeout_s)
     tmp = Path(submission) / (FILE + ".tmp")
     tmp.write_text(json.dumps(verdict, indent=1))
     tmp.replace(Path(submission) / FILE)
