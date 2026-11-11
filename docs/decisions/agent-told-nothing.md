@@ -109,6 +109,10 @@ configuration.
   printed nothing to check, or was answered by another model, the run stops and none of the session's proofs
   counts, after a resume too: they are recorded without a length. (The review of e6221f0 found that a session
   that ran out of time skipped the check, and a resumed one counted the proofs of the run that failed it.)
+  Since 6477d65 the init event is checked as soon as the CLI prints it, and a session that fails is stopped
+  there (in the cloud session's test, before any request to the model). In the cloud session the variables of the Claude Code session it ran
+  in gave the CLI a browser's MCP server: the check found it, first after a whole session, then at once. A run
+  started from a terminal inside a Claude Code session can meet the same, and is refused the same way.
 - Not testable with a stand-in: what a claude.ai login adds. This version of the CLI has code for an
   account's and a team's memory, behind the login and switches Anthropic sets on its servers. Such a memory
   would show as a memory folder in the init event; anything that leaves no trace there would show only in

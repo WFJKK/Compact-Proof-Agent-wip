@@ -38,6 +38,18 @@ written.
    without the agent's answer is named in the next prompt, which shows the latest notes there are.
 4. Edits. `lean_check` takes `edits` to the module saved at a path instead of its whole source: each
    replaces an old text that must occur exactly once. No edits compile the module as saved.
+5. The check of what Claude Code loaded is made on its init event when the CLI prints it, and a session that
+   fails is stopped at once (commit 6477d65). Before, it was made after the session, which a session that
+   cannot count would have used up whole.
+
+Tested in the cloud session through the real Claude Code CLI (2.1.322) and the real Lean service, with a
+stand-in model server (no model called), two rounds of the pilot's configuration with a clock of 1,260 s and
+a reserve of 1,080 s: the edits applied and compiled, a refused edit spent nothing, a program that slept 400 s
+was stopped at the 152 s the session had left, the next call was refused for want of time, the answer's
+notes reached round 2, and round 2's prompt listed the unfinished module as a draft (it compiled when last
+saved), which read_file read. Run first with the cloud session's own environment, the CLI loaded a browser's
+MCP server from the parent session's variables, and the check stopped the session at its init event with no
+request to the model.
 
 Not done:
 
