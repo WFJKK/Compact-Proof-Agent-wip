@@ -54,7 +54,6 @@ probes:
   shown:
     - CompactCheck.Interp.single
     - CompactCheck.Interp.weight
-    - CompactCheck.Interp.rec
     - CompactCheck.Interp.counting
     - CompactCheck.Interp.counting_single
     - CompactCheck.CostM.single
@@ -85,6 +84,11 @@ probes:
     - CompactCheck.CostM.interval_spec
     - CompactCheck.Task.constantLabel
     - CompactCheck.Task.labelSymmetric
+    # taking Interp or Task apart (a pattern match, `cases`) binds the fields the run does not show
+    - CompactCheck.Task.casesOn
+    - CompactCheck.Task.mk.injEq
+    - CompactCheck.Interp.casesOn
+    - CompactCheck.Interp.rec
     - CompactCheck.rootBox
     - CompactCheck.intervalCost
     - CompactCheck.matMul

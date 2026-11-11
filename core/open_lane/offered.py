@@ -129,8 +129,22 @@ def note(verdict: dict) -> str:
     parts = [f"{u['constant']} mentions {', '.join(u['closed'][:3])}" + (" and more" if len(u["closed"]) > 3 else "")
              for u in uses[:MAX_SHOWN]]
     more = f"; and {len(uses) - MAX_SHOWN} more of your constants" if len(uses) > MAX_SHOWN else ""
+    apart = any(takes_apart(c) for u in uses for c in u["closed"])
     return ("not counted in this run: it uses what the files this run offers do not show of the Lean project's library ("
-            + "; ".join(parts) + more + ")")
+            + "; ".join(parts) + more + ")" + (APART_HINT if apart else ""))
+
+
+# What takes a structure apart (inspect_oleans.lean, apartOfStructure and apartOfConstructor): a structure with
+# a field the run does not show may not be taken apart either, since that binds every field.
+APART = ("rec", "casesOn", "recOn", "brecOn", "below", "binductionOn", "noConfusion", "noConfusionType")
+APART_OF_CONSTRUCTOR = ("inj", "injEq", "noConfusion")
+APART_HINT = (". Taking apart a structure with fields this run does not show (a pattern match or `cases` on it) uses "
+              "them all: use its projections instead")
+
+
+def takes_apart(name: str) -> bool:
+    parts = name.split(".")
+    return parts[-1] in APART or (len(parts) >= 3 and parts[-1] in APART_OF_CONSTRUCTOR and parts[-2] == "mk")
 
 
 def summary(verdict: dict) -> dict:

@@ -311,7 +311,8 @@ def scaling_result(records: list[dict], k: int) -> dict:
     lemmas = [{"record_id": r["record_id"], "theorem": r.get("theorem"), "statement": r.get("statement"),
                "locked_checker": bool((r.get("lock") or {}).get("intact")) and (r.get("lock") or {}).get("verified") is True,
                "why": (r.get("lock") or {}).get("why"),
-               **({"beyond_offered": not r["offered"]["clean"]} if r.get("offered") else {})}
+               **({"beyond_offered": not r["offered"]["clean"]} if r.get("offered") else {}),
+               **({"context_unverified": True} if (r.get("context") or {}).get("verified") is False else {})}
               for r in mine if r.get("status") == "lemma"]
     return {"lemmas": lemmas, "submissions": len([r for r in mine if r.get("status") != "no_submission"])}
 
@@ -393,7 +394,8 @@ def report_lines(run: RunDir) -> list[str]:
                       "the locked checker's kernel terms in the modules the service compiled for the lemma.", ""]
             lines += [f"- `{l['theorem']}`: {l['statement']} (" + ("the locked checker" if l.get("locked_checker") else
                       "NOT shown to be about the locked checker" + (f": {l['why']}" if l.get("why") else "")) +
-                      ("; it uses what the run does not offer of the Lean project's library" if l.get("beyond_offered") else "") + ")"
+                      ("; it uses what the run does not offer of the Lean project's library" if l.get("beyond_offered") else "") +
+                      ("; its session's context was not verified, so it is not counted" if l.get("context_unverified") else "") + ")"
                       for l in res["lemmas"]]
             if res["lemmas"]:
                 lines.append("")

@@ -4,7 +4,11 @@
   tools attached as an MCP server (mcp_server.py) and nothing else: no built-in tools, no files, no
   project settings, no memory. The CLI runs under the user's own login; its environment has the API keys
   removed. What the CLI reports it loaded (its init event) must be exactly the five tools of the cpl
-  server, connected, with no skill, slash command or memory folder, or the run stops.
+  server, connected, with no skill, slash command or memory folder, and only the run's model may answer.
+  Every run of the CLI is checked (a session that ran out of time on what the CLI printed until then) and
+  its verdict kept next to the session's receipts (Session.log_context): a run that fails the check, or
+  whose context cannot be checked, stops the run, and none of the session's proofs is counted, a resumed
+  session's included (core.open_lane.records).
   The session's wall clock is open_lane.worker_seconds; the tools' budgets are the session's.
 - FakeToolBackend: replays scripted tool calls from JSON files, in order, against the same session code,
   so the whole loop (tools, submissions, receipts, records, resume) runs without a model. A script is
@@ -85,6 +89,25 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
         path.write_text(json.dumps(cfg, indent=1))
         return path
 
+    def _context(self, session: Session, out: str, timed_out: bool = False) -> dict | None:
+        """One run of the CLI for this session, checked on what it printed: only the run's model answered, and the
+        CLI loaded the five tools of the cpl server, connected, and nothing else. The verdict is kept next to the
+        session's receipts; a run that fails, or that printed nothing to check, stops the run (StopRun), and the
+        session's proofs are not counted. Returns the CLI's init event."""
+        data, _ = _parse_output(out)
+        events = model_events(out)
+        init = cli_init(out)
+        swap = swapped(events, data, self.cfg["agent_model"])
+        problems = ([swap] if swap else []) + isolation_problems(init, MCP_TOOLS, {SERVER}, required=SERVER)
+        session.log_context({"verified": not problems, "problems": problems, "timed_out": timed_out, "cli": init})
+        if swap:
+            raise StopRun(f"{swap}; the run stops rather than record another model's work as {self.cfg['agent_model']}'s, "
+                          "and none of this session's proofs is counted")
+        if problems:
+            raise StopRun("Claude Code ran this session with more or other than this run's five tools, or did not say what it "
+                          "ran it with (" + "; ".join(problems) + "); none of this session's proofs is counted, and the run stops")
+        return init
+
     def respond(self, prompt, index: int, where=None) -> Response:
         session = self.session(where)
         mcp = self.mcp_config(session, Path(where))
@@ -98,9 +121,11 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
             with tempfile.TemporaryDirectory(prefix="cpl-claude-code-") as cwd:
                 try:
                     r = self.run(cmd, prompt.text, self.env, cwd, timeout)
-                except subprocess.TimeoutExpired:
-                    # the session's wall clock ran out: what it submitted stands; the text is what we have
+                except subprocess.TimeoutExpired as exc:
+                    # the session's wall clock ran out: what it submitted stands once what the CLI printed until then
+                    # shows the context it ran in; the text is what we have
                     r = None
+                    init = self._context(session, _decoded(exc.stdout if exc.stdout is not None else exc.output), timed_out=True)
                     retry, what = False, f"the session did not finish within {timeout:g} s"
                 except OSError as exc:
                     raise StopRun(f"could not run the Claude Code CLI: {exc}") from exc
@@ -108,14 +133,12 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
                 out = (r.stdout or "").strip()
                 data, messages = _parse_output(out)
                 events = model_events(out)
-                swap = swapped(events, data, self.cfg["agent_model"])
-                if swap:
-                    raise StopRun(f"{swap}; the run stops rather than record another model's work as {self.cfg['agent_model']}'s")
-                init = cli_init(out)
-                problems = isolation_problems(init, MCP_TOOLS, {SERVER}, required=SERVER)
-                if problems:
-                    raise StopRun("Claude Code gave the session more or other than this run's five tools (" + "; ".join(problems)
-                                  + "); the run stops rather than record work done that way")
+                failed = r.returncode != 0 or not isinstance(data, dict) or bool(data.get("is_error"))
+                if failed and cli_init(out) is None and not messages:
+                    # the CLI ended before it started a session (no tool can have run): nothing to check, kept as such
+                    session.log_context({"verified": None, "note": "the CLI ended before it started a session"})
+                else:
+                    init = self._context(session, out)
                 text = _join(messages) if messages else (data or {}).get("result")
                 declined = refused(events)
                 if declined is not None:  # what the session submitted before it stands; the loop counts refusals
@@ -177,6 +200,13 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
             "seconds": round(time.monotonic() - t0, 1),
         }
         return Response(text=str(text), meta=meta)
+
+
+def _decoded(out) -> str:
+    """What a CLI that ran out of time printed until then (bytes from subprocess, or text)."""
+    if out is None:
+        return ""
+    return out.decode("utf-8", errors="replace") if isinstance(out, bytes) else str(out)
 
 
 class FakeToolBackend(_Bound):

@@ -770,3 +770,91 @@ def test_a_seed_check_that_did_not_finish_is_no_result_and_a_checked_zero_is_a_r
     assert "This is not a measurement of how the locked checker transfers" in texts["unverified"]
     assert f"No accepted result on {B}" in texts["no_result"] and "This is not a measurement of zero" in texts["no_result"]
     assert f"| {B} (second seed, checker locked) | 0 of 576 | 20,448 |" in texts["zero"] and "certifies none of the 576 inputs" in texts["zero"]
+
+
+def claude_code_on(runs: list[tuple[dict, str]], seen: list):
+    """A stand-in for the Claude Code CLI. Run i replays the tool calls of runs[i]'s script in the session (as the
+    MCP server would for the model) and ends as runs[i]'s outcome says: "clean" (the five tools, an answer),
+    "extra" (a tool and a memory folder beyond the run's, an answer), or "timeout-extra" / "timeout-clean" (out
+    of time, with only the init event printed so far). Runs beyond the list call nothing and end clean."""
+    import subprocess
+
+    from core.open_lane.backends import MCP_TOOLS
+
+    clean = {"type": "system", "subtype": "init", "session_id": "s", "tools": list(MCP_TOOLS),
+             "mcp_servers": [{"name": "cpl", "status": "connected"}], "slash_commands": [], "skills": []}
+    extra = {**clean, "tools": [*MCP_TOOLS, "Bash"], "memory_paths": {"auto": "/Users/x/.claude/projects/p/memory/"}}
+
+    def cli(cmd, prompt_text, env, cwd, timeout_s):
+        script, outcome = runs[len(seen)] if len(seen) < len(runs) else ({"calls": [], "response": "CLAIM: nothing."}, "clean")
+        seen.append(outcome)
+        session = Session(Path(cmd[cmd.index("--mcp-config") + 1]).parent / "open_lane")
+        for c in script["calls"]:
+            session.call(c["tool"], c["args"])
+        init = extra if "extra" in outcome else clean
+        if outcome.startswith("timeout"):
+            raise subprocess.TimeoutExpired(cmd, timeout_s, output=(json.dumps(init) + "\n").encode())
+        answer = [{"type": "assistant", "session_id": "s", "message": {"role": "assistant", "stop_reason": "end_turn",
+                                                                     "content": [{"type": "text", "text": script["response"]}]}},
+                  {"type": "result", "subtype": "success", "is_error": False, "result": script["response"], "session_id": "s",
+                   "num_turns": 3, "usage": {"input_tokens": 10, "output_tokens": 5}}]
+
+        class Done:
+            stdout, stderr, returncode = "\n".join(json.dumps(e) for e in [init, *answer]) + "\n", "", 0
+
+        return Done()
+    return cli
+
+
+def claude_code_backend(monkeypatch, runs, seen):
+    from core.open_lane.backends import ClaudeCodeToolBackend
+
+    monkeypatch.setattr(loop, "make_backend", lambda cfg, log=print: ClaudeCodeToolBackend(
+        cfg, log=log, runner=claude_code_on(runs, seen), sleep=lambda s: None, environ={"PATH": "/usr/bin"}))
+
+
+@pytest.mark.parametrize("first", ["timeout-extra", "extra"])
+def test_proofs_of_a_session_whose_claude_code_context_failed_its_check_are_not_counted_even_after_a_resume(tmp_path, monkeypatch, first):
+    """Every run of the Claude Code CLI in a session is checked on what it printed, a run that ran out of time
+    on what it printed until then, and the verdict is kept next to the session's receipts. Here the first run
+    submits two proofs with a tool and a memory folder beyond the run's: the run stops. Resumed, the same
+    session runs again, cleanly, and the round completes; its proofs, the first run's, are recorded without a
+    length and do not enter the score. (The review of e6221f0 found the timeout case: the partial output was
+    thrown away and the proofs counted.)"""
+    from core.agent.backends.api import StopRun
+
+    seen = []
+    path = pilot_run(tmp_path, monkeypatch, [ROUND_1])
+    claude_code_backend(monkeypatch, [(ROUND_1, first)], seen)
+    ctx = loop.start(path, log=lambda line: None)
+    with pytest.raises(StopRun, match="tools Bash; memory folders auto: .*none of this session's proofs is counted"):
+        loop.drive(ctx)
+    session = ctx.run.round_path(1) / "attempt_0" / "open_lane"
+    assert Session(session).context() == {"verified": False, "runs": 1, "problems": [
+        "tools Bash", "memory folders auto: /Users/x/.claude/projects/p/memory/"]}
+    assert len(Session(session).receipts()) == 2
+    again = loop.resume(ctx.run.path)
+    loop.drive(again)
+    assert seen == [first, "clean"]
+    records = [r for r in again.run.read_archive() if r["round"] == 1]
+    assert [r["status"] for r in records] == ["verified", "verified"]
+    assert all(r["error"].startswith("not counted in this run: Claude Code ran this session with more or other") and
+               "the service scored it at length" in r["error"] and r.get("length") is None for r in records)
+    assert all(r["context"] == {"verified": False, "problems": ["tools Bash", "memory folders auto: /Users/x/.claude/projects/p/memory/"]}
+               for r in records)
+    assert stages.read_state(again.run).get("locked") is None  # nothing to lock: no proof counts
+
+
+def test_a_session_that_ran_out_of_time_in_the_runs_context_keeps_its_proofs(tmp_path, monkeypatch):
+    """A session that ran out of time, with the init event it printed showing the run's five tools and nothing
+    else: its context is verified, what it submitted stands, and its proofs count."""
+    seen = []
+    path = pilot_run(tmp_path, monkeypatch, [ROUND_1])
+    claude_code_backend(monkeypatch, [(ROUND_1, "timeout-clean")], seen)
+    ctx = loop.start(path, log=lambda line: None)
+    loop.drive(ctx)
+    session = Session(ctx.run.round_path(1) / "attempt_0" / "open_lane")
+    assert session.context() == {"verified": True, "problems": [], "runs": 1}
+    records = [r for r in ctx.run.read_archive() if r["round"] == 1]
+    assert [r["status"] for r in records] == ["ok", "ok"] and "context" not in records[0]
+    assert ctx.run.read(1, "attempt_0/response.md") == "(the session ran out of time)"

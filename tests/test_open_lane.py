@@ -1105,14 +1105,30 @@ def test_the_context_check_asks_one_session_what_it_was_given_and_names_what_to_
     cmd = seen[0]["cmd"]
     assert "--mcp-config" not in cmd and cmd[cmd.index("--tools") + 1] == "" and cmd[cmd.index("--system-prompt") + 1] == SYSTEM_PROMPT
     assert seen[0]["prompt"] == context_check.ECHO and seen[0]["env"]["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
-    assert r["loaded_beyond"] == [] and r["forbidden_found"] == [] and r["lines_to_read"] == []
-    assert "nothing beyond what the run gives it" in context_check.report(r)
+    assert r["loaded_beyond"] == [] and r["forbidden_found"] == [] and r["lines_to_read"] == [] and r["inconclusive"] == []
+    assert "nothing beyond what the run gives it" in context_check.report(r) and context_check.exit_code(r) == 0
     r = context_check.check(cfg, log=lambda *a: None, runner=cli(leaky, cli_init_event(tools=[], mcp_servers=[], memory_paths={"auto": "/m"})))
     assert r["loaded_beyond"] == ["memory folders auto: /m"]
     assert r["forbidden_found"] == ["symmetr"]  # the minimal surface's list; the task's name is not on it
     assert any("CLAUDE.md" in l for l in r["lines_to_read"])
     text = context_check.report(r)
     assert "memory folders auto: /m" in text and "symmetr" in text and "The max-of-2 network is symmetric" in text
+    assert context_check.exit_code(r) == 1
+
+    # a CLI that crashed (no init event, no answer) is inconclusive, never clean (the review of e6221f0)
+    def crashed(cmd, prompt_text, env, cwd, timeout_s):
+        class Done:
+            stdout, stderr, returncode = "", "Error: something went wrong", 1
+        return Done()
+
+    r = context_check.check(cfg, log=lambda *a: None, runner=crashed)
+    assert r["inconclusive"] == ["the CLI exited with code 1", "the CLI printed no result",
+                                 "the CLI did not report what it loaded (no init event)", "the model gave no answer"]
+    text = context_check.report(r)
+    assert text.startswith("INCONCLUSIVE: the CLI exited with code 1") and "nothing beyond" not in text
+    assert context_check.exit_code(r) == 2
+    r = context_check.check(cfg, log=lambda *a: None, runner=cli(clean, None))  # an answer, but no init event
+    assert r["inconclusive"] == ["the CLI did not report what it loaded (no init event)"] and context_check.exit_code(r) == 2
 
 
 def test_lean_messages_reach_the_agent_with_short_paths_and_a_run_named_for_a_pilot_is_not_marked(tmp_path, monkeypatch):

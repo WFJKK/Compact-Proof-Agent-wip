@@ -130,7 +130,9 @@ KNOWLEDGE_TEXT = {
     "minimal": (
         "The interface above is the part of Interp that this run offers. The structure has further fields, kept "
         "for other experiments: a proof whose checker reaches one of them is not counted in this run (the section "
-        "on your tools says what the run offers and how you are told)."
+        "on your tools says what the run offers and how you are told). Nor is one that takes an Interp or a Task "
+        "apart (a pattern match or `cases` on one binds every field): use their projections, as `I.single` and "
+        "`task.label`."
     ),
     "maximum": (
         "This run is the maximum-knowledge condition: a checker may use every field of Interp, including two of "

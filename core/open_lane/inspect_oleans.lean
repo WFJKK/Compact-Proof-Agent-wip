@@ -40,6 +40,12 @@ also prints `surface`:
   proof mentions a closed constant of the library, with those constants. A projection written as a
   number counts as the field it projects to.
 
+A structure with a field whose projection is closed cannot be taken apart either: its recursor,
+`casesOn`, `recOn`, `noConfusion` and its constructor's injectivity lemmas bind or equate every field,
+the closed ones included, without naming a projection (a pattern match or `cases` on it does that). So
+they count as closed, whatever the line of the structure shows; its projections and its constructor do
+not.
+
 Which line declares a constant is Lean's own record (the declaration ranges it keeps for editors),
 read from the library's .olean files. A constant Lean made itself (a recursor, a matcher, an equation)
 has none and goes with the declaration its name extends, in whichever module Lean keeps it: an
@@ -226,6 +232,30 @@ def Library.fieldOf (lib : Library) (s : Name) (i : Nat) : Option Name := do
     | _, _ => none
   go ci.type (v.numParams + i)
 
+/-- What takes a value of a structure apart: these constants Lean made for the structure `S` (`S.casesOn` and
+    so on), and these made for its constructor (`S.mk.inj` and so on). -/
+def apartOfStructure : List String := ["rec", "casesOn", "recOn", "brecOn", "below", "binductionOn", "noConfusion",
+  "noConfusionType"]
+def apartOfConstructor : List String := ["inj", "injEq", "noConfusion"]
+
+/-- The library's structures with a field whose projection `closed` holds of. -/
+def Library.partlyHidden (lib : Library) (closed : Name → Bool) : Std.HashSet Name :=
+  lib.consts.fold (init := {}) fun acc n ci => Id.run do
+    let .inductInfo v := ci | return acc
+    let [c] := v.ctors | return acc
+    let some (.ctorInfo cv) := lib.consts[c]? | return acc
+    if (List.range cv.numFields).any fun i => (lib.fieldOf n i).any closed then acc.insert n else acc
+
+/-- Whether `n` takes apart a value of one of `structs` (Library.partlyHidden). -/
+def Library.takesApart (lib : Library) (structs : Std.HashSet Name) (n : Name) : Bool :=
+  match n with
+  | .str s k =>
+    (structs.contains s && apartOfStructure.contains k) ||
+    (apartOfConstructor.contains k && match lib.consts[s]? with
+      | some (.ctorInfo cv) => structs.contains cv.induct
+      | _ => false)
+  | _ => false
+
 /-- Every term of a constant: its type, the value of a definition, the proof of a theorem, the rules
     of a recursor. -/
 def allTerms (ci : ConstantInfo) : Array Expr :=
@@ -347,10 +377,15 @@ def run (args : List String) : IO UInt32 := do
       if let some ci := lib.consts[n]? then
         for d in deps ci do
           if lib.homes.contains d && !shownSet.contains d then exposed := exposed.insert d
-    let closed (n : Name) : Bool := lib.homes.contains n && !shownSet.contains n && !exposed.contains n
+    let closedByLine (n : Name) : Bool := lib.homes.contains n && !shownSet.contains n && !exposed.contains n
+    -- what takes apart a structure with a closed field is closed too, whatever the structure's line shows
+    let partly := lib.partlyHidden closedByLine
+    let apart (n : Name) : Bool := lib.homes.contains n && lib.takesApart partly n
+    let closed (n : Name) : Bool := closedByLine n || apart n
+    let shownCount : Nat := shownSet.fold (fun k n => if apart n then k else k + 1) 0
     let classes := classify.map fun n =>
-      (n.toString, Json.str (if !lib.homes.contains n then "absent" else if shownSet.contains n then "shown"
-        else if exposed.contains n then "exposed" else "closed"))
+      (n.toString, Json.str (if !lib.homes.contains n then "absent" else if apart n then "closed"
+        else if shownSet.contains n then "shown" else if exposed.contains n then "exposed" else "closed"))
     let mut uses : Array Json := #[]
     for (m, f) in oleans do
       if prot == some m.toName then continue
@@ -362,7 +397,9 @@ def run (args : List String) : IO UInt32 := do
             ("kind", Json.str (kind ci)), ("closed", strs (found.map (·.toString)))])
     surface := [("surface", Json.mkObj [
       ("library", Json.mkObj [("modules", Json.num library.size), ("constants", Json.num lib.homes.size),
-        ("shown", Json.num shownSet.size), ("exposed", strs ((exposed.toArray.qsort byName).map (·.toString)))]),
+        ("shown", Json.num shownCount),
+        ("exposed", strs ((exposed.toArray.qsort byName).map (·.toString))),
+        ("taken_apart_closed", strs ((partly.toArray.qsort byName).map (·.toString)))]),
       ("classes", Json.mkObj classes.toList), ("uses", Json.arr uses)])]
   IO.println (Json.mkObj ([
     ("modules", Json.mkObj modules.toList), ("duplicates", Json.arr duplicates),

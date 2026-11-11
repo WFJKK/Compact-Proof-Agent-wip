@@ -78,6 +78,13 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
         base["stage"] = stage["name"]
     by_id = {e["id"]: e for e in ctx.entries}
     surface = session.surface()
+    # whether every run of Claude Code in this session ran with the run's five tools and nothing else, and with
+    # the run's model (core.open_lane.backends); None for a session without such runs (the fake backend)
+    context = session.context()
+    unverified = None
+    if context is not None and not context["verified"]:
+        unverified = ("not counted in this run: Claude Code ran this session with more or other than the run's five "
+                      "tools, or did not say what it ran it with (" + "; ".join(context["problems"][:3]) + ")")
     out = []
     for receipt in session.receipts():
         n = receipt.get("submission", len(out))
@@ -149,8 +156,11 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
                                    "be resumed")
             rec["offered"] = offered.summary(verdict)
         unclean = verdict is not None and not verdict["clean"]
+        if unverified:
+            rec["context"] = {"verified": False, "problems": context["problems"]}
         if receipt.get("claim_kind") == "auxiliary":
-            rec.update(status="lemma", statement=receipt.get("statement"), error=offered.note(verdict) if unclean else None)
+            note = "; ".join(n for n in (unverified, offered.note(verdict) if unclean else None) if n) or None
+            rec.update(status="lemma", statement=receipt.get("statement"), error=note)
             out.append(rec)
             continue
         certified = int(receipt["certified_count"])
@@ -171,7 +181,11 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
         rec.update(certified=certified, certified_accuracy=f"{certified}/{entry['n_inputs']}",
                    certified_accuracy_float=certified / entry["n_inputs"], checked_by="lean", check_s=receipt.get("seconds"))
         scoring = receipt.get("scoring") or {}
-        if unclean:
+        if unverified:
+            # the service's verdict stands (rec["receipt"]); the run does not count work done in a context it cannot vouch for
+            was = f"; the service scored it at length {int(scoring['length']):,}" if scoring.get("status") == "scored" else ""
+            rec.update(status="verified", error=unverified + was)
+        elif unclean:
             # the service's verdict stands (rec["receipt"]); the run does not count a proof built on what it does not offer
             was = f"; the service scored it at length {int(scoring['length']):,}" if scoring.get("status") == "scored" else ""
             rec.update(status="verified", error=offered.note(verdict) + was)

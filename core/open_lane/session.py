@@ -719,6 +719,29 @@ class Session:
             self._log("submit_candidate", args, {"error": str(exc)}, time.monotonic() - t0)
             raise
 
+    CONTEXT_FILE = "context.jsonl"
+
+    def log_context(self, entry: dict) -> None:
+        """Append the verdict on one run of Claude Code for this session (core.open_lane.backends): `verified`
+        True, False (a model swap, a tool, server, skill, slash command or memory folder beyond the run's, or no
+        report of what the CLI loaded), or None (the CLI ended before it started a session). Append-only."""
+        with open(self.path / self.CONTEXT_FILE, "a") as f:
+            f.write(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **entry}) + "\n")
+
+    def context(self) -> dict | None:
+        """The session's context over every run of Claude Code: {"verified": False, "problems": [...]} if any run
+        failed its check, {"verified": True, ...} if every run that started a session passed, None for a session
+        no run of Claude Code started (the fake backend, a session from before the check)."""
+        p = self.path / self.CONTEXT_FILE
+        if not p.is_file():
+            return None
+        runs = [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+        judged = [e for e in runs if e.get("verified") is not None]
+        if not judged:
+            return None
+        problems = [q for e in judged if e["verified"] is not True for q in (e.get("problems") or ["not verified"])]
+        return {"verified": not problems, "problems": problems, "runs": len(judged)}
+
     def run_dir(self) -> Path:
         """The run's folder, for a session at <run>/round_<k>/attempt_<j>/open_lane (else the session's folder)."""
         return self.path.parent.parent.parent if round_of(self.path) is not None else self.path

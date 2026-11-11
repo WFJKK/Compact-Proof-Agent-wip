@@ -55,18 +55,20 @@ works on a network: no rule, no earlier proof or its length, no doc. Four things
    a definition, a matcher, a recursor) goes with the declaration its name extends, in whichever module
    Lean keeps it. Lean keeps such a constant with the first module that asks for it, which need not be the
    module of its declaration (on the whole library that holds for a fifth of the constants). Going by the
-   keeping module had two faults: the equation of a rule that the soundness file keeps was taken for
-   shown, and the rule with it; and a proof that unfolds a definition the run shows was taken for a use of
-   what it does not show, where a module of the rules keeps that definition's equation. A constant with no
+   keeping module had two faults: the equation of a rule that the soundness file keeps was taken for shown,
+   and the rule with it; and a proof that unfolds a definition the run shows was taken for a use of what it
+   does not show, where a module of the rules keeps that definition's equation. A constant with no
    declaration of the library behind it counts as shown if it is named outside the library's namespace (it
    belongs to Lean's own library or to Mathlib), and goes by the modules that keep it otherwise. What a
-   shown definition unfolds to is not held against a proof. The agent is told at the compile and again
-   with the receipt: which of its constants, and what they mention. A proof that is not clean stays
-   accepted and is recorded without a length; the receipt is kept as the service wrote it. Before a run
-   starts, Lean's reading is checked against constants the surface names as shown and as closed, on the
-   library the project built. The base allowlist of the Lean service still admits the linear interval rule
-   (`Interp.interval`), so without this rule a minimal-knowledge run would have scored a checker built on
-   it.
+   shown definition unfolds to is not held against a proof. A structure with a field the run does not show
+   may not be taken apart either (a pattern match, `cases`, its recursor or its constructor's injectivity
+   lemmas bind every field, the hidden ones included): in the minimal condition, Interp and Task. The agent
+   is told to use their projections. The agent is told at the compile and again with the receipt: which of
+   its constants, and what they mention. A proof that is not clean stays accepted and is recorded without a
+   length; the receipt is kept as the service wrote it. Before a run starts, Lean's reading is checked
+   against constants the surface names as shown and as closed, on the library the project built. The base
+   allowlist of the Lean service still admits the linear interval rule (`Interp.interval`), so without this
+   rule a minimal-knowledge run would have scored a checker built on it.
 
 The maximum-knowledge condition supplies the rules on purpose and keeps what it showed, without the README.
 
@@ -102,12 +104,18 @@ configuration.
   compile with a message had been marked.
 - Every session keeps the CLI's init event (what it loaded). Anything beyond the five tools of the `cpl`
   server, connected, stops the run: another tool or MCP server, a skill, a slash command, a memory folder.
+  Every run of the CLI in a session is checked, one that ran out of time on what the CLI printed until then,
+  and the verdicts are kept next to the session's receipts (`context.jsonl`). If one run failed its check,
+  printed nothing to check, or was answered by another model, the run stops and none of the session's proofs
+  counts, after a resume too: they are recorded without a length. (The review of e6221f0 found that a session
+  that ran out of time skipped the check, and a resumed one counted the proofs of the run that failed it.)
 - Not testable with a stand-in: what a claude.ai login adds. This version of the CLI has code for an
   account's and a team's memory, behind the login and switches Anthropic sets on its servers. Such a memory
   would show as a memory folder in the init event; anything that leaves no trace there would show only in
   what a real session receives. `python -m core.open_lane.context_check --config <run config>` runs one
   session as the backend does and asks the model to copy out everything it was given (one short session on
-  the machine's login).
+  the machine's login). It is a diagnostic, not a proof: the model's account can leave things out. A CLI
+  that fails, reports nothing of what it loaded, or gets no answer is reported as inconclusive (exit 2).
 
 The open lane has no API backend. One would send the run's own text and nothing else.
 

@@ -1,4 +1,4 @@
-"""What a session's model receives from Claude Code on this machine, asked of the model itself.
+"""A diagnostic: what a session's model receives from Claude Code on this machine, asked of the model itself.
 
 The capture of 11 November 2026 (docs/decisions/agent-told-nothing.md, "What reaches the model besides the
 run's own text") measured what Claude Code adds to the run's own text, with a stand-in model server and so
@@ -14,6 +14,11 @@ and any expression of the run's surface's forbidden list found in the answer.
 One short session on the Claude Code login of this machine; nothing is written. Its answer should hold the
 system prompt (one line of Claude Code's and the run's own) and Claude Code's note on the environment, and
 nothing about a network.
+
+It is a diagnostic, not a proof: the answer is the model's own account of its context, which can leave things
+out. A run does not depend on it (the backend checks every session's init event itself). When the CLI fails,
+reports nothing of what it loaded, or the model gives no answer, the result is inconclusive, never clean.
+Exit codes: 0 nothing found, 1 something found (read the report), 2 inconclusive or could not run.
 """
 
 from __future__ import annotations
@@ -51,18 +56,39 @@ def check(cfg: dict, log=print, runner=None) -> dict:
     terms += [re.escape(t) for t in forbidden(load_model_folder(resolve(cfg["model"])))]
     found = sorted({m.group(0) for t in terms for m in re.finditer(t, answer, re.I)})
     lines = [l for l in answer.splitlines() if re.search(MARKERS, l, re.I)]
+    is_error = bool((data or {}).get("is_error"))
+    inconclusive = []
+    if r.returncode != 0:
+        inconclusive.append(f"the CLI exited with code {r.returncode}")
+    if is_error or not isinstance(data, dict):
+        inconclusive.append("the CLI reported an error" if is_error else "the CLI printed no result")
+    if init is None:
+        inconclusive.append("the CLI did not report what it loaded (no init event)")
+    if not answer.strip():
+        inconclusive.append("the model gave no answer")
     return {"cli": init, "loaded_beyond": isolation_problems(init), "answer": answer, "forbidden_found": found,
-            "lines_to_read": lines, "returncode": r.returncode, "is_error": bool((data or {}).get("is_error")),
+            "lines_to_read": lines, "inconclusive": inconclusive, "returncode": r.returncode, "is_error": is_error,
             "stderr": (r.stderr or "")[-2000:]}
+
+
+def exit_code(result: dict) -> int:
+    """2 inconclusive, 1 something found to read, 0 nothing found (which is still the model's own account)."""
+    if result["inconclusive"]:
+        return 2
+    return 1 if result["loaded_beyond"] or result["forbidden_found"] or result["lines_to_read"] else 0
 
 
 def report(result: dict) -> str:
     init = result["cli"] or {}
-    out = [f"Claude Code {init.get('claude_code_version', '(version not reported)')} loaded, for this session: "
-           + ("nothing beyond what the run gives it" if not result["loaded_beyond"] else "; ".join(result["loaded_beyond"]))]
-    if result["returncode"] or result["is_error"]:
-        out.append(f"The CLI did not answer cleanly (exit {result['returncode']}): {result['stderr'] or result['answer']}")
-    out += ["", "The model says it was given:", "-" * 72, result["answer"].strip() or "(no answer)", "-" * 72, ""]
+    out = []
+    if result["inconclusive"]:
+        out += ["INCONCLUSIVE: " + "; ".join(result["inconclusive"]) + ". This says nothing about what the login adds.",
+                f"The CLI's error output: {result['stderr'].strip() or '(none)'}", ""]
+    else:
+        out.append(f"Claude Code {init.get('claude_code_version', '(version not reported)')} loaded, for this session: "
+                   + ("nothing beyond what the run gives it" if not result["loaded_beyond"] else "; ".join(result["loaded_beyond"])))
+    out += ["", "The model's own account of what it was given (a diagnostic: it can leave things out):", "-" * 72,
+            result["answer"].strip() or "(no answer)", "-" * 72, ""]
     out.append("Lines of that answer about memory, instruction files, hooks or skills (read them):")
     out += [f"  {l}" for l in result["lines_to_read"]] or ["  none"]
     out.append("Expressions of the run's forbidden list in that answer: " + (", ".join(result["forbidden_found"]) or "none"))
@@ -90,7 +116,7 @@ def main(argv=None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     print(report(result))
-    return 0 if not result["loaded_beyond"] and not result["forbidden_found"] else 1
+    return exit_code(result)
 
 
 if __name__ == "__main__":

@@ -209,7 +209,9 @@ approximation.
   open_lane.max_turns`, the session's wall clock `open_lane.worker_seconds`. The CLI's environment has the
   API keys removed and its auto-memory and an organisation's memory switched off. Its init event, where it
   says what it loaded, is kept with every session (`cli` in the response's metadata) and must show the five
-  tools of the `cpl` server, connected, and nothing else, or the run stops; a machine with an organisation's
+  tools of the `cpl` server, connected, and nothing else, or the run stops, and none of the session's proofs
+  counts (each run of the CLI is checked, one that ran out of time on what it printed until then, and the
+  verdicts are kept in the session's `context.jsonl`); a machine with an organisation's
   managed Claude Code configuration is refused. The session's final text is the response; what it
   submitted stands even if the session runs out of time. What the CLI still adds to what the model receives,
   as measured with Claude Code 2.1.322: docs/decisions/agent-told-nothing.md. What a claude.ai login adds on

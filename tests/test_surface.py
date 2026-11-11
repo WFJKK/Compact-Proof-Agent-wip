@@ -458,9 +458,11 @@ theorem count_counting (n : Nat) : count counting n = n := by
 
 end Toy
 """
-TOY_SHOWN = ["Toy.Interp", "Toy.Interp.step", "Toy.Interp.mk", "Toy.Interp.rec", "Toy.count", "Toy.counting", "Toy.count_counting",
+TOY_SHOWN = ["Toy.Interp", "Toy.Interp.step", "Toy.Interp.mk", "Toy.count", "Toy.counting", "Toy.count_counting",
              "Toy.count_two"]
-TOY_CLOSED = ["Toy.Interp.leap", "Toy.leap_counting", "Toy.shortcut", "Toy.shortcut_eq", "Toy.count_one", "Toy.shortcut_two"]
+# the recursor and casesOn take the interpreter apart, which binds its hidden field `leap` too
+TOY_CLOSED = ["Toy.Interp.leap", "Toy.leap_counting", "Toy.shortcut", "Toy.shortcut_eq", "Toy.count_one", "Toy.shortcut_two",
+              "Toy.Interp.rec", "Toy.Interp.casesOn"]
 TOY_SURFACE = {"excerpts": ["Toy/Base.lean", "Toy/Sound.lean"], "library": "Toy", "forbidden": [r"\bleap", "shortcut", "rule for groups"],
                "probes": {"shown": TOY_SHOWN, "closed": TOY_CLOSED}}
 
@@ -504,7 +506,8 @@ def test_lean_says_which_constants_of_the_library_a_run_shows(toy, toy_surface):
     """A constant is shown when the line that declares it is a line of its module's excerpt; one Lean made
     itself goes with the declaration its name extends. A constant that is not shown but that a shown
     definition's value mentions is exposed. Everything else of the library is closed, a hidden field of a
-    shown structure and a whole module that is not shown among it."""
+    shown structure and a whole module that is not shown among it, and so is what takes apart a shown
+    structure that has a hidden field (its recursor, casesOn, its constructor's injectivity lemmas)."""
     surface.check(toy_surface, toy, {})
     assert surface.shown_lines(toy_surface, toy) == {"Toy.Base": [1, 3, 4, 5, 6, 10, 11, 12, 13, 18, 19, 20, 23, 24, 25, 26, 30],
                                                      "Toy.Sound": [3, 5, 6, 11]}
@@ -523,7 +526,8 @@ def test_lean_says_which_constants_of_the_library_a_run_shows(toy, toy_surface):
     unwritten = offered.classify(toy_surface, toy, ["Toy.unwritten", "Elsewhere.unwritten"])["classes"]
     assert unwritten == {"Toy.unwritten": "closed", "Elsewhere.unwritten": "shown"}
     assert got["classes"]["Toy.leapBy"] == "exposed" and got["library"]["exposed"] == ["Toy.leapBy"]
-    assert got["classes"]["Toy.Interp.casesOn"] == "shown" and got["classes"]["Nat.succ"] == "absent" == got["classes"]["Toy.nothing"]
+    assert got["classes"]["Toy.Interp.casesOn"] == "closed" and got["classes"]["Nat.succ"] == "absent" == got["classes"]["Toy.nothing"]
+    assert got["library"]["taken_apart_closed"] == ["Toy.Interp"]
     assert got["library"]["modules"] == 3 and got["library"]["shown"] < got["library"]["constants"]
     assert offered.self_check(toy_surface, toy) == got["library"]
 
@@ -556,7 +560,7 @@ def D (n : Nat) : Nat := Toy.count Toy.counting n
 theorem D_sound (n : Nat) : D n = n := Toy.count_counting n
 /-- Unfolding what is shown puts what it is made of into the term: no use of what is not shown. -/
 theorem unfolded : Toy.counting.step 0 = 1 := by unfold Toy.counting; rfl
-theorem by_cases (I : Toy.Interp) : I.step 0 = I.step 0 := by cases I; rfl
+theorem by_projection (I : Toy.Interp) : I.step 0 = I.step 0 := rfl
 end Candidate.Clean
 """
 # a proof as every real one is: it imports the library's proofs, the rules' among them, and rewrites with a
@@ -583,6 +587,8 @@ def byNumber (I : Toy.Interp) : Nat → Nat → Nat := second_field% I
 theorem stated (n : Nat) : Toy.shortcut n = n := rfl
 theorem proved (n : Nat) : n = n := (Toy.shortcut_eq n).symm.trans (Toy.shortcut_eq n)
 def fine (n : Nat) : Nat := Toy.count Toy.counting n
+/-- Taking the interpreter apart binds its hidden field, whether a field is used or not. -/
+theorem by_cases (I : Toy.Interp) : I.step 0 = I.step 0 := by cases I; rfl
 end Candidate.Beyond
 """
 
@@ -606,10 +612,12 @@ def test_a_module_that_mentions_what_the_run_does_not_show_is_found_constant_by_
     assert verdict["clean"] is False and uses == {
         "Candidate.Beyond.D": ["Toy.Interp.leap"], "Candidate.Beyond.D_sound": ["Toy.leap_counting"],
         "Candidate.Beyond.byNumber": ["Toy.Interp.leap"], "Candidate.Beyond.stated": ["Toy.shortcut"],
-        "Candidate.Beyond.proved": ["Toy.shortcut", "Toy.shortcut_eq"]}  # the lemma, and what its statement is about
+        "Candidate.Beyond.proved": ["Toy.shortcut", "Toy.shortcut_eq"],  # the lemma, and what its statement is about
+        "Candidate.Beyond.by_cases": ["Toy.Interp.casesOn"]}  # the interpreter taken apart, its hidden field bound
     said = offered.note(verdict)
     assert said.startswith("not counted in this run") and "Candidate.Beyond.D mentions Toy.Interp.leap" in said
-    assert offered.summary(verdict) == {"clean": False, "uses": verdict["uses"], "count": 5}
+    assert said.endswith("use its projections instead")
+    assert offered.summary(verdict) == {"clean": False, "uses": verdict["uses"], "count": 6}
 
 
 def toy_run(tmp_path: Path, monkeypatch, toy: Path, scripts: list[dict], rounds_max: int) -> tuple[Path, Path]:
@@ -818,14 +826,16 @@ def test_the_library_the_lean_project_built_is_read_as_the_minimal_surface_says(
     own check (the surface's probes) passes."""
     monkeypatch.setattr(inspect, "lean_binary", lambda project: LEAN)
     s = real_surface(tmp_path)
-    shown = ["CompactCheck.Interp.single", "CompactCheck.Interp.weight", "CompactCheck.Interp.rec", "CompactCheck.Interp.counting",
+    shown = ["CompactCheck.Interp.single", "CompactCheck.Interp.weight", "CompactCheck.Interp.counting",
              "CompactCheck.Interp.counting_single", "CompactCheck.CostM.single", "CompactCheck.CostM.single_spec", "CompactCheck.CostM.run_bind",
              "CompactCheck.Task.label", "CompactCheck.maxTask", "CompactCheck.allInputs", "CompactCheck.strictMaxAt", "CompactCheck.singleOk",
              "CompactCheck.singleCost", "CompactCheck.reachable.go", "CompactCheck.evalGraph"]
     closed = ["CompactCheck.Interp.interval", "CompactCheck.Interp.ginterval", "CompactCheck.Interp.gtokenIntervals",
               "CompactCheck.Interp.counting_interval", "CompactCheck.CostM.interval_spec", "CompactCheck.Task.constantLabel",
               "CompactCheck.Task.labelSymmetric", "CompactCheck.rootBox", "CompactCheck.Range", "CompactCheck.intervalCost", "CompactCheck.matMul",
-              "CompactCheck.checkProof", "CompactCheck.symmetricNet"]
+              "CompactCheck.checkProof", "CompactCheck.symmetricNet",
+              # the recursor takes Interp apart, which binds its hidden fields too, though Interp's line is shown
+              "CompactCheck.Interp.rec"]
     exposed = ["CompactCheck.CostM.interval", "CompactCheck.Box", "CompactCheck.cornerLabel"]
     # equations Lean made on demand, both kept by the module of the general single rule, which is shown in
     # part: one of a definition the run shows, one of a definition of the general checker, which it does not
@@ -945,3 +955,43 @@ def test_on_the_whole_library_an_equation_goes_with_its_definition_not_with_the_
     uses = {u["constant"]: u["closed"] for u in offered.of_oleans(s, PROJECT, {"Candidate.Names": oleans["Candidate.Names"]})["uses"]}
     assert list(uses) == ["Candidate.Names.theEquation"]
     assert {"CompactCheck.rootBox", "CompactCheck.rootBox.eq_1"} <= set(uses["Candidate.Names.theEquation"])
+
+
+# Taking the task apart with a pattern match or `cases`, never naming a hidden projection (the review of e6221f0
+# found that this passed the audit), and reading the label by its projection.
+REAL_APART = """import CompactCheck.Soundness
+namespace Candidate.Apart
+open CompactCheck
+def symOf (t : Task) : Bool := match t with
+  | { labelSymmetric := s, .. } => s
+def labelOf (t : Task) : Input → Nat := t.label
+theorem byCases (t : Task) : t.label = t.label := by cases t; rfl
+end Candidate.Apart
+"""
+
+
+@needs_whole
+def test_on_the_whole_library_taking_the_task_apart_is_a_use_of_its_hidden_fields(tmp_path, monkeypatch):
+    """A pattern match or `cases` on a Task binds every field, the hidden ones included, without naming their
+    projections. Lean's eliminators of a structure with a hidden field therefore count as closed, whatever the
+    structure's own line shows; its projections and its constructor do not. Reading the label by its
+    projection stays clean; the surface's probes say so before every run."""
+    monkeypatch.setattr(inspect, "lean_binary", lambda project: LEAN)
+    path = sorted((PROJECT / ".lake" / "packages").glob("*/.lake/build/lib/lean")) + [BUILT["CompactCheck.CountedOps"].parent.parent]
+    (tmp_path / "Candidate").mkdir()
+    (tmp_path / "Candidate" / "Apart.lean").write_text(REAL_APART)
+    compile_lean(tmp_path, "Candidate/Apart.lean", tmp_path / "out", path)
+    s = real_surface(tmp_path)
+    got = offered.classify(s, PROJECT, ["CompactCheck.Task.casesOn", "CompactCheck.Task.rec", "CompactCheck.Task.mk.injEq",
+                                         "CompactCheck.Interp.casesOn", "CompactCheck.Task.mk", "CompactCheck.Task.label",
+                                         "CompactCheck.Task._sizeOf_1"])
+    assert got["classes"] == {"CompactCheck.Task.casesOn": "closed", "CompactCheck.Task.rec": "closed",
+                              "CompactCheck.Task.mk.injEq": "closed", "CompactCheck.Interp.casesOn": "closed",
+                              "CompactCheck.Task.mk": "shown", "CompactCheck.Task.label": "shown",
+                              "CompactCheck.Task._sizeOf_1": "shown"}
+    verdict = offered.of_oleans(s, PROJECT, {"Candidate.Apart": tmp_path / "out" / "Candidate" / "Apart.olean"})
+    uses = {u["constant"]: u["closed"] for u in verdict["uses"]}
+    assert set(uses) == {"Candidate.Apart.symOf.match_1", "Candidate.Apart.byCases"}, uses
+    assert all(offered.takes_apart(c) for cs in uses.values() for c in cs)
+    assert "Candidate.Apart.labelOf" not in uses
+    assert offered.note(verdict).endswith("use its projections instead")
