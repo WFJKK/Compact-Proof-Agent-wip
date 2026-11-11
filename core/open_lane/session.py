@@ -80,6 +80,23 @@ def error_lines(text: str, limit: int = 20) -> list[str]:
     return out
 
 
+def shorten_paths(text: str, run_dir) -> str:
+    """A text for the agent with this machine's paths made short: a module the service compiled (in a session's
+    workspace or a submission's folder) by its path in Candidate/, anything else in the run's folder as <run>/,
+    the home folder as ~. Lean names a file by its absolute path, which names the run and the machine's user:
+    nothing the agent needs, and a run named for a pilot would match the surface's forbidden list in every
+    message Lean prints."""
+    if not text:
+        return text
+    run = str(Path(run_dir))
+    text = re.sub(re.escape(run) + r"/round_\d+/attempt_\d+/open_lane/(?:workspace|submissions/\d+)/", "", text)
+    text = text.replace(run + "/", "<run>/")
+    home = str(Path.home())
+    if home not in ("", "/"):
+        text = text.replace(home + "/", "~/")
+    return text
+
+
 def excerpt(text: str, limit: int = MAX_TEXT) -> str:
     """Compiler output cut to the limit: the first errors and the last lines (one later error, a `decide`
     that cannot reduce, can be thousands of lines, and the first error is the one to fix)."""
@@ -206,6 +223,17 @@ def compiler_showed(path: Path) -> int:
         except ValueError:
             pass
     return n
+
+
+def _shortened(value, run_dir):
+    """Every string in a receipt's fields as the agent sees them, its paths made short (shorten_paths)."""
+    if isinstance(value, str):
+        return shorten_paths(value, run_dir)
+    if isinstance(value, dict):
+        return {k: _shortened(v, run_dir) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_shortened(v, run_dir) for v in value]
+    return value
 
 
 def round_of(path: Path) -> int | None:
@@ -440,7 +468,7 @@ class Session:
             res = self._service(cmd, COMPILE_TIMEOUT_S)
             if "error" in res and not res.get("messages"):
                 raise ToolError(str(res["error"]))
-            text = (res.get("messages") or "").strip()
+            text = shorten_paths((res.get("messages") or "").strip(), self.run_dir())
             out = {"ok": bool(res.get("ok")), "timed_out": bool(res.get("timed_out")), "module": res.get("module"),
                    "protected_module": res.get("protected_module"), "messages": excerpt(text) if text else "(no messages)",
                    "seconds": res.get("seconds"), "remaining": self.remaining()}
@@ -648,6 +676,7 @@ class Session:
                         tmp.replace(cdir / "lock.json")
             out = {k: receipt.get(k) for k in ("status", "reason", "claim_kind", "certified_count", "domain_size", "claimed_count",
                                                 "network", "statement", "axioms", "score_eligible", "execution_assurance", "scoring", "seconds")}
+            out = _shortened(out, self.run_dir())  # the receipt itself stays as the service wrote it
             out["submission"] = n
             out["modules"] = modules
             surface = self.surface()
@@ -689,6 +718,10 @@ class Session:
         except ToolError as exc:
             self._log("submit_candidate", args, {"error": str(exc)}, time.monotonic() - t0)
             raise
+
+    def run_dir(self) -> Path:
+        """The run's folder, for a session at <run>/round_<k>/attempt_<j>/open_lane (else the session's folder)."""
+        return self.path.parent.parent.parent if round_of(self.path) is not None else self.path
 
     def with_imports(self, modules: list[str]) -> list[str]:
         """The modules, and after them every module of the workspace they import, directly or not: the service

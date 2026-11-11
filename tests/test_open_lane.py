@@ -1113,3 +1113,34 @@ def test_the_context_check_asks_one_session_what_it_was_given_and_names_what_to_
     assert any("CLAUDE.md" in l for l in r["lines_to_read"])
     text = context_check.report(r)
     assert "memory folders auto: /m" in text and "symmetr" in text and "The max-of-2 network is symmetric" in text
+
+
+def test_lean_messages_reach_the_agent_with_short_paths_and_a_run_named_for_a_pilot_is_not_marked(tmp_path, monkeypatch):
+    """Lean names a file by its absolute path, which names the run and the machine's user. The agent is shown a
+    module's path in Candidate/ (a submission's too), and the mark for forbidden text in Lean's output is taken
+    on that: a run whose id starts with "pilot" no longer marks every compile, as it did in the first test run
+    on the Mac (11 November 2026). What Lean prints about the library is still marked. No Lean, no model."""
+    from core.open_lane import session as sess
+
+    cfg = merge(base_config(tmp_path, [], open_lane={"enabled": False}))
+    cfg["open_lane"].update(lean_project=str(tmp_path), work_dir=str(tmp_path / "work"))
+    entries = [{"id": "max2_tiny-v8-s0", "setting": "v8", "n_inputs": 64}]
+    run = tmp_path / "runs" / "pilot-linear-max2-test"
+    s = Session.create(run / "round_001" / "attempt_0" / "open_lane", cfg, "tests/max2_tiny", entries, run)
+    assert s.run_dir() == run
+    ws = s.workspace
+    said = {"messages": f"{ws}/Candidate/A.lean:3:7: error: unknown identifier 'x'\n{ws}/Candidate/A.lean:9:1: warning: unused"}
+    monkeypatch.setattr(Session, "_service", lambda self, cmd, timeout_s: {"ok": False, "module": "Candidate.A", **said})
+    monkeypatch.setattr(Session, "surface", lambda self: {"forbidden": [r"\bpilot", r"\binterval"]})
+    out = s.lean_check(path="Candidate/A.lean", source="def a := 1\n", network="max2_tiny-v8-s0", claimed_count=64)
+    assert out["messages"].splitlines() == ["Candidate/A.lean:3:7: error: unknown identifier 'x'", "Candidate/A.lean:9:1: warning: unused"]
+    log = [json.loads(l) for l in (s.path / "tools.jsonl").read_text().splitlines()]
+    assert "showed" not in log[-1]["outcome"] and log[-1]["outcome"]["errors"] == ["Candidate/A.lean:3:7: error: unknown identifier 'x'"]
+    said["messages"] = f"{ws}/Candidate/A.lean:1:0: def CompactCheck.Interp.interval : Graph → Task → Box → M B"
+    s.lean_check(path="Candidate/A.lean", source="#print X\n", network="max2_tiny-v8-s0", claimed_count=64)
+    log = [json.loads(l) for l in (s.path / "tools.jsonl").read_text().splitlines()]
+    assert log[-1]["outcome"]["showed"] == ["Candidate/A.lean:1:0: def CompactCheck.Interp.interval : Graph → Task → Box → M B"]
+    home = str(Path.home())
+    assert sess.shorten_paths(f"{run}/round_002/attempt_0/open_lane/submissions/003/Candidate/B.lean:1:1: error; "
+                              f"{run}/open_lane_work/x; {home}/.elan/toolchains/t", run) == \
+        "Candidate/B.lean:1:1: error; <run>/open_lane_work/x; ~/.elan/toolchains/t"

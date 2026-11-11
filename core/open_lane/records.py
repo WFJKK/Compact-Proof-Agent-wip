@@ -31,7 +31,7 @@ import json
 
 from ..archive import record_id
 from . import offered
-from .session import Session, under_lock
+from .session import Session, shorten_paths, under_lock
 
 
 def _fields() -> dict:
@@ -133,7 +133,8 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
         status = receipt.get("status")
         if status != "accepted" or not entry:
             rec.update(status=status if status in ("rejected", "unsupported", "timeout", "error") else "error",
-                       error=receipt.get("reason") or ("the receipt names no network of this run" if not entry else "no reason given"))
+                       error=shorten_paths(receipt.get("reason"), ctx.run.path)
+                       or ("the receipt names no network of this run" if not entry else "no reason given"))
             out.append(rec)
             continue
         verdict = None
@@ -179,7 +180,8 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
                        length_by_rule={"bill": scoring.get("bill"), "extract": scoring.get("extract"), "read": scoring.get("read")},
                        description_size=scoring.get("description_size"))
         else:
-            rec.update(status="verified", error=("not scored: " + (scoring.get("reason") or "no scored block in the manifest")))
+            rec.update(status="verified", error=("not scored: " + (shorten_paths(scoring.get("reason"), ctx.run.path)
+                                                                   or "no scored block in the manifest")))
         out.append(rec)
     if not out:
         out.append({**base, "record_id": record_id(ctx.run.run_id, k, j), "network": None, "setting": None, "knob": None,

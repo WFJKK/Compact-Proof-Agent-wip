@@ -96,6 +96,10 @@ configuration.
   were the only forbidden expressions that reached the model. The folder now holds the wrapper around the
   agent's code, `model.py`, the harness, the weights and input.json, and the check before a run scans its
   text files.
+- Lean names a file by its absolute path, which names the run and the machine's user. The agent is shown a
+  module's path in Candidate/ instead (in Lean's messages and in receipts), and the mark for forbidden text in
+  Lean's output is taken on that: in the first test run on the Mac, whose id begins with "pilot", every
+  compile with a message had been marked.
 - Every session keeps the CLI's init event (what it loaded). Anything beyond the five tools of the `cpl`
   server, connected, stops the run: another tool or MCP server, a skill, a slash command, a memory folder.
 - Not testable with a stand-in: what a claude.ai login adds. This version of the CLI has code for an
