@@ -769,10 +769,10 @@ class Session:
                             helpers=RUN_PYTHON_HELPERS)
             if ex.status == "ok" and isinstance(ex.proof, dict):
                 output = str(ex.proof.get("stdout", ""))
+            elif ex.status == "timeout" and limit < float(lim["time_limit_s"]):
+                output = f"(timeout) stopped: it ran past the {limit:.0f} s this session had left"
             else:
                 output = f"({ex.status}) {ex.error or ''}"
-                if ex.status == "timeout" and limit < float(lim["time_limit_s"]):
-                    output += f" (stopped at the {limit:.0f} s this session had left)"
             out = {"status": ex.status, "output": output[-MAX_TEXT:], "runtime_s": ex.runtime_s, "remaining": self.remaining()}
             self._log("run_python", args, {"status": ex.status, "saved": str(saved), "output": output[:500]}, time.monotonic() - t0)
             return out

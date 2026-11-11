@@ -1422,3 +1422,42 @@ def test_unfinished_modules_go_on_to_the_next_round_as_drafts_and_never_as_accep
     assert notes == ("Round 2 ended without notes: the session ended before your answer. Its unfinished modules are in your "
                      "workspace. These are the notes of round 1.\ntry the symmetric checker next.")
     assert latest_notes(RunDir(run.parent, run.name), 2, 6000) == "try the symmetric checker next."
+
+
+def test_a_session_whose_cli_loads_more_than_the_runs_tools_is_stopped_at_its_init_event(tmp_path):
+    """The check of what the CLI loaded is made on its init event as soon as the CLI prints it: a session that
+    cannot count is stopped before the agent works in it for hours (in the cloud session of 11 November, a
+    parent session's variables gave the CLI a browser's tools). The run stops; the verdict is kept."""
+    import sys
+    import time
+
+    from core.agent.backends.api import StopRun
+    from core.agent.build_prompt import Prompt
+    from core.open_lane.backends import EarlyStop, _init_problem, _run_cli
+
+    pids = tmp_path / "pids"
+    bad = cli_init_event(tools=["mcp__cpl__lean_check", "mcp__claude-in-chrome__navigate"])
+    code = ("import json, subprocess, sys, time\n"
+            "print(json.dumps({'type': 'autocompact_state'}), flush=True)\n"
+            f"print({json.dumps(json.dumps(bad))}, flush=True)\n"
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
+            f"open({str(pids)!r}, 'w').write(str(child.pid))\n"
+            "time.sleep(300)\n")
+    t0 = time.monotonic()
+    with pytest.raises(EarlyStop, match="tools mcp__claude-in-chrome__navigate") as exc:
+        _run_cli([sys.executable, "-c", code], "the prompt", dict(os.environ), str(tmp_path), 120, early=_init_problem)
+    assert time.monotonic() - t0 < 60 and '"subtype": "init"' in exc.value.output
+    if pids.exists():
+        assert not psutil_alive(int(pids.read_text()))
+    assert _init_problem(json.dumps(cli_init_event())) is None and _init_problem('{"type": "autocompact_state"}') is None
+    # the backend keeps the verdict and stops the run
+    b, where, _ = tool_backend_session(tmp_path / "b", "")
+
+    def stopped(cmd, prompt_text, env, cwd, timeout_s):
+        raise EarlyStop("tools mcp__claude-in-chrome__navigate", json.dumps(bad) + "\n")
+
+    b.run = stopped
+    with pytest.raises(StopRun, match="tools mcp__claude-in-chrome__navigate"):
+        b.respond(Prompt("one", "two", {}), 0, where=where)
+    verdicts = [json.loads(l) for l in (where / "open_lane" / "context.jsonl").read_text().splitlines()]
+    assert verdicts[-1]["verified"] is False and Session(where / "open_lane").context()["verified"] is False

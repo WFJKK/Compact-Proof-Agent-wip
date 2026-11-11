@@ -12,7 +12,8 @@
   The session's wall clock is open_lane.worker_seconds, started in the session (Session.start_clock) before
   each run of the CLI, with its last open_lane.notes_reserve_seconds kept for the agent's answer: no tool call
   runs into them. A run of the CLI that reaches the limit is stopped with every process under it (the tools'
-  server, and a compile it was waiting for). The tools' budgets are the session's.
+  server, and a compile it was waiting for). The init event is checked as soon as the CLI prints it, and a
+  session that fails is stopped there, before the agent works in it. The tools' budgets are the session's.
 - FakeToolBackend: replays scripted tool calls from JSON files, in order, against the same session code,
   so the whole loop (tools, submissions, receipts, records, resume) runs without a model. A script is
 
@@ -31,6 +32,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -65,22 +67,76 @@ class _Bound:
         return Session.create(Path(where) / "open_lane", self.cfg, self.model, self.entries, self.run_path)
 
 
-def _run_cli(cmd, prompt_text, env, cwd, timeout_s):
-    """subprocess.run for one session of the CLI, except that a session stopped at its limit, or interrupted, is
-    stopped with every process under it: subprocess.run kills the CLI alone, and the tools' server would finish
-    the call it was serving (a compile can take an hour) beside whatever comes next."""
-    with subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                          env=env, cwd=cwd) as proc:
+class EarlyStop(Exception):
+    """A session of the CLI stopped at its init event, which fails the check; `output` is what it printed."""
+
+    def __init__(self, reason: str, output: str):
+        super().__init__(reason)
+        self.output = output
+
+
+def _init_problem(line: str) -> str | None:
+    """Why a session cannot count, read off one line of the CLI's output if it is the init event, else None."""
+    init = cli_init(line)
+    if init is None:
+        return None
+    return "; ".join(isolation_problems(init, MCP_TOOLS, {SERVER}, required=SERVER)) or None
+
+
+def _run_cli(cmd, prompt_text, env, cwd, timeout_s, early=None):
+    """subprocess.run for one session of the CLI, with two differences. A session stopped at its limit, or
+    interrupted, is stopped with every process under it: subprocess.run kills the CLI alone, and the tools'
+    server would finish the call it was serving (a compile can take an hour) beside whatever comes next. And
+    `early`, given each line the CLI prints, may return a reason to stop the session at once (the init event,
+    where the CLI says what it loaded, comes before any work): EarlyStop, so that a session that cannot count
+    is not worked in for hours. TimeoutExpired and EarlyStop carry what the CLI printed until then."""
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            env=env, cwd=cwd)
+    out, err, why = [], [], []
+    expired = threading.Event()
+
+    def feed():
         try:
-            out, err = proc.communicate(prompt_text, timeout=timeout_s)
-        except subprocess.TimeoutExpired:  # it carries what the CLI printed until then
-            kill_tree(proc.pid)
-            proc.wait()
-            raise
-        except BaseException:
-            kill_tree(proc.pid)
-            raise
-    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+            proc.stdin.write(prompt_text)
+            proc.stdin.close()
+        except OSError:  # the CLI ended before it read the prompt
+            pass
+
+    def expire():
+        expired.set()
+        kill_tree(proc.pid)
+
+    helpers = [threading.Thread(target=feed, daemon=True), threading.Thread(target=lambda: err.append(proc.stderr.read()), daemon=True)]
+    for h in helpers:
+        h.start()
+    timer = threading.Timer(timeout_s, expire)
+    timer.daemon = True
+    timer.start()
+    try:
+        for line in proc.stdout:
+            out.append(line)
+            if early is not None and not why:
+                reason = early(line)
+                if reason:
+                    why.append(reason)
+                    kill_tree(proc.pid)
+        proc.wait()
+    except BaseException:
+        kill_tree(proc.pid)
+        raise
+    finally:
+        timer.cancel()
+        for h in helpers:
+            h.join(timeout=10)
+        proc.stdout.close()
+        if not helpers[1].is_alive():  # a pipe still being read stays open: closing it would wait for the read
+            proc.stderr.close()
+    text, errors = "".join(out), "".join(err)
+    if expired.is_set():
+        raise subprocess.TimeoutExpired(cmd, timeout_s, output=text, stderr=errors)
+    if why:
+        raise EarlyStop(why[0], text)
+    return subprocess.CompletedProcess(cmd, proc.returncode, text, errors)
 
 
 class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
@@ -88,6 +144,7 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
 
     def __init__(self, cfg: dict, log=print, runner=None, **kwargs):
         super().__init__(cfg, log=log, runner=runner, **kwargs)
+        self.early = runner is None
         if runner is None:  # the real CLI (checked by ClaudeCodeBackend), run so that its whole tree stops with it
             self.run = _run_cli
 
@@ -148,7 +205,11 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
             with tempfile.TemporaryDirectory(prefix="cpl-claude-code-") as cwd:
                 session.start_clock(timeout, reserve)  # read by the tools' server when the CLI starts it
                 try:
-                    r = self.run(cmd, prompt.text, self.env, cwd, timeout)
+                    r = self.run(cmd, prompt.text, self.env, cwd, timeout, **({"early": _init_problem} if self.early else {}))
+                except EarlyStop as exc:
+                    # what the CLI said it loaded fails the check: stopped before the agent worked in the session
+                    self._context(session, exc.output)  # keeps the verdict and stops the run
+                    raise StopRun(f"Claude Code was stopped at the start of the session: {exc}") from exc
                 except subprocess.TimeoutExpired as exc:
                     # the session's wall clock ran out: what it submitted stands once what the CLI printed until then
                     # shows the context it ran in; the text is what we have
