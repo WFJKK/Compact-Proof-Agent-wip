@@ -70,6 +70,41 @@ works on a network: no rule, no earlier proof or its length, no doc. Four things
 
 The maximum-knowledge condition supplies the rules on purpose and keeps what it showed, without the README.
 
+## What reaches the model besides the run's own text (11 November 2026)
+
+The pilot's configuration (`config/pilot/linear-max2.yaml`, two rounds) was run through the real Claude Code
+CLI (2.1.322) and the real Lean service, with the CLI's requests sent to a stand-in model server on the same
+machine. The server recorded every request and answered with scripted tool calls; no model was called. Decoys
+were put where Claude Code looks for instructions: the user's CLAUDE.md, rules, skills, sub-agents, hooks
+and MCP servers; a CLAUDE.md, CLAUDE.local.md, AGENTS.md, rules and MCP servers in the folders above the
+session's working folder, and a git history there; the auto-memory folder; an organisation's managed
+configuration.
+
+- The run's own text: the prompt, the five tools' descriptions, the tools' answers.
+- What Claude Code adds: one line of system prompt ("You are a Claude agent, built on Anthropic's Claude
+  Agent SDK."), a note on the environment (working folder, platform, model name, date, a token count), the
+  token count after each tool call, two generic nudges (to keep the user informed; to ask for independent
+  things together), and a placeholder tool it says never to call. None of it is about a network.
+- With the backend's flags no decoy reached the model but two. The auto-memory folder's MEMORY.md is pasted
+  as instructions; on a Mac it is empty, since the folder is keyed by the session's fresh working folder,
+  and it is now switched off (`CLAUDE_CODE_DISABLE_AUTO_MEMORY`, with `CLAUDE_CODE_DISABLE_ORG_MEMORY`). An
+  organisation's managed configuration (`/Library/Application Support/ClaudeCode` on a Mac) reaches the
+  model whatever the flags say, its CLAUDE.md and what its hooks print: a machine that has one is refused.
+  Without the flags every decoy reached the model.
+- `run_python`'s folder held the fixed rules lane's `helpers.py`, whose proof function has the options
+  symmetry, contract and approximate, next to split trees and "the contract rule". In the capture these
+  were the only forbidden expressions that reached the model. The folder now holds the wrapper around the
+  agent's code, `model.py`, the harness, the weights and input.json, and the check before a run scans its
+  text files.
+- Every session keeps the CLI's init event (what it loaded). Anything beyond the five tools of the `cpl`
+  server, connected, stops the run: another tool or MCP server, a skill, a slash command, a memory folder.
+- Not testable with a stand-in: what a claude.ai login adds. This version of the CLI has code for an
+  account's and a team's memory, behind the login and switches Anthropic sets on its servers. Such a memory
+  would show as a memory folder in the init event; anything that leaves no trace there would show only in
+  what a real session receives.
+
+The open lane has no API backend. One would send the run's own text and nothing else.
+
 ## What this does not close
 
 - Lean itself. The agent can ask Lean about any constant of the library (`#print`), a search tactic can
@@ -80,7 +115,9 @@ The maximum-knowledge condition supplies the rules on purpose and keeps what it 
   reviewer reads what Lean printed before taking a round as unaided. Only the Lean project can close this:
   a base package that the rules are not part of, an interface and a task without the rules' fields
   (the ticket of 10 November).
-- The machine. With the sandbox in process mode (a Mac), the agent's `run_python` code can read files, and
+- The machine. With Landlock (Linux) the agent's `run_python` code is confined to its folder: in the capture
+  of 11 November its attempts to list the folders above were refused. With the sandbox in process mode (a
+  Mac), the agent's `run_python` code can read files, and
   on a machine without Landlock the Lean service compiles the agent's modules unconfined, where Lean can
   read files too. A run that is to count as unaided needs a confined machine (docs/SERVER.md). A run on an
   unconfined machine says so when it starts.

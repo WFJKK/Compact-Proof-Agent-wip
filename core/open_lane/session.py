@@ -1,4 +1,4 @@
-"""One open-lane session: the agent's workspace, its four tools, their budgets and their log.
+"""One open-lane session: the agent's workspace, its five tools, their budgets and their log.
 
 A session lives in an attempt's folder:
 
@@ -484,7 +484,8 @@ class Session:
 
             sb = choose({"sandbox": self.state["sandbox"], "sandbox_image": "auto-research-compact-proof-sandbox:1"},
                         protected_paths(None, folder, self.path.parent))
-            ex = run_recipe(recipe, folder.source(), weights, info, 0.0, limits, self.state["sandbox_dir"], sandbox=sb)
+            ex = run_recipe(recipe, folder.source(), weights, info, 0.0, limits, self.state["sandbox_dir"], sandbox=sb,
+                            helpers=RUN_PYTHON_HELPERS)
             if ex.status == "ok" and isinstance(ex.proof, dict):
                 output = str(ex.proof.get("stdout", ""))
             else:
@@ -790,6 +791,20 @@ class Session:
         if extra:
             raise ToolError(f"{tool} does not take {extra}")
         return fn(**arguments)
+
+
+# The fixed rules lane's helpers.py names that lane's rules, which this lane's agent is not told
+# (docs/decisions/agent-told-nothing.md), so the folder run_python's code runs in does not hold it.
+RUN_PYTHON_HELPERS = False
+
+
+def run_python_folder(model_source: str) -> dict[str, str]:
+    """The text files in the folder run_python's code runs in, which it can read, by name: the wrapper around
+    the agent's code (recipe.py), the model's code and the harness. (The rest is the weights and input.json.)
+    The check before a run scans them as it scans the prompt."""
+    from ..runner import sandbox_texts
+
+    return {"recipe.py": WRAPPER, **sandbox_texts(model_source, helpers=RUN_PYTHON_HELPERS)}
 
 
 WRAPPER = '''"""The open lane's run_python: the agent's code as a recipe, its output as the proof."""

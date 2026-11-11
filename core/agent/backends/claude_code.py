@@ -9,7 +9,15 @@ own Claude Code login instead of billing an API key. Each attempt runs
 
 with the prompt on stdin and an empty temporary folder as the working
 directory, so the CLI behaves as a plain model call: no tools, no files, no
-project settings, no MCP servers. The streamed output holds every assistant
+project settings, no MCP servers. Two things the flags do not reach are dealt
+with apart (docs/decisions/agent-told-nothing.md, "What Claude Code adds"): the
+CLI's auto-memory and an organisation's memory are switched off by the CLI's
+own switches (ISOLATION_ENV), and a machine with an organisation's managed
+Claude Code configuration is refused, since its CLAUDE.md and what its hooks
+print reach the model whatever the flags say. Every session's init event, where
+the CLI says what it loaded, is kept and checked: a tool, an MCP server, a
+skill, a slash command or a memory folder that the run did not give stops the
+run. The streamed output holds every assistant
 message and a final result event. A long answer arrives as several assistant
 messages, because the CLI continues when one hits its output limit or when its
 stream is cut off, and the result's own text field holds only the last of
@@ -41,6 +49,7 @@ import os
 import random
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -57,6 +66,16 @@ KEY_VARIABLES = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 # fallback") or is unavailable, and says so only in its events and the result's modelUsage: the records
 # would credit the run's model with another model's work. A run checks every answer for a swap anyway.
 NO_MODEL_FALLBACK = {"CLAUDE_CODE_NO_MODEL_FALLBACK": "1"}
+# The CLI's auto-memory folder and an organisation's memory would put text in front of the model that the run
+# did not write, and --setting-sources does not reach them (tested with 2.1.322).
+ISOLATION_ENV = {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "CLAUDE_CODE_DISABLE_ORG_MEMORY": "1"}
+# Where the CLI reads an organisation's managed configuration. A CLAUDE.md there and what a managed hook prints
+# reach the model whatever the flags say; a managed MCP configuration makes --strict-mcp-config refuse to start.
+MANAGED_DIRS = {"darwin": "/Library/Application Support/ClaudeCode", "win32": "C:\\Program Files\\ClaudeCode"}
+MANAGED_DEFAULT_DIR = "/etc/claude-code"
+MANAGED_ENTRIES = ("CLAUDE.md", "managed-settings.json", "managed-settings.d", "managed-mcp.json")
+INIT_KEYS = ("claude_code_version", "model", "tools", "mcp_servers", "slash_commands", "skills", "plugins", "agents",
+             "memory_paths", "output_style")
 SWAP_EVENTS = ("model_fallback", "model_refusal_fallback", "model_consent_fallback")
 REFUSAL_EVENT = "model_refusal_no_fallback"
 LIMIT_WORDS = ("usage limit", "rate limit", "rate_limit", "overloaded", "too many requests", "capacity", "529", "429")
@@ -96,6 +115,64 @@ def _parse_output(out: str) -> tuple[dict | None, list[dict]]:
         elif ev.get("type") == "result":
             result = ev
     return result, messages
+
+
+def managed_configuration(root=None) -> list[Path]:
+    """The organisation-managed Claude Code files on this machine (none on a machine nobody manages)."""
+    base = Path(root) if root is not None else Path(MANAGED_DIRS.get(sys.platform, MANAGED_DEFAULT_DIR))
+    found = []
+    for name in MANAGED_ENTRIES:
+        p = base / name
+        if p.is_dir():
+            found += sorted(p.iterdir())
+        elif p.exists():
+            found.append(p)
+    return found
+
+
+def cli_init(out: str) -> dict | None:
+    """What the CLI reported it loaded for the session (its init event), or None if it reported nothing."""
+    for line in out.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(ev, dict) and ev.get("type") == "system" and ev.get("subtype") == "init":
+            return {k: ev[k] for k in INIT_KEYS if k in ev}
+    return None
+
+
+def isolation_problems(init: dict | None, tools=(), servers=(), required: str | None = None) -> list[str]:
+    """What the CLI loaded beyond what the run gives the model: a tool or an MCP server not named, any skill,
+    slash command or memory folder; and, when `required` names the run's own MCP server, that server missing
+    or not connected. No init event at all is a problem only when a server is required."""
+    if init is None:
+        return ["the CLI did not report what it loaded (no init event)"] if required else []
+    problems = []
+    extra = [str(t) for t in init.get("tools") or [] if t not in tools]
+    if extra:
+        problems.append("tools " + ", ".join(extra))
+    status = {}
+    for srv in init.get("mcp_servers") or []:
+        name = srv.get("name") if isinstance(srv, dict) else srv
+        status[str(name)] = srv.get("status") if isinstance(srv, dict) else None
+    extra = sorted(n for n in status if n not in servers)
+    if extra:
+        problems.append("MCP servers " + ", ".join(extra))
+    if required and required not in status:
+        problems.append(f"no {required} MCP server (the run's tools)")
+    elif required and status[required] in ("failed", "needs-auth", "disabled"):
+        problems.append(f"the {required} MCP server (the run's tools) is {status[required]}")
+    for key, what in (("skills", "skills"), ("slash_commands", "slash commands")):
+        if init.get(key):
+            problems.append(what + " " + ", ".join(str(x.get("name", x) if isinstance(x, dict) else x) for x in init[key]))
+    if init.get("memory_paths"):
+        paths = init["memory_paths"]
+        problems.append("memory folders " + (", ".join(f"{k}: {v}" for k, v in paths.items()) if isinstance(paths, dict) else str(paths)))
+    return problems
 
 
 def model_events(out: str) -> list[dict]:
@@ -223,10 +300,16 @@ class ClaudeCodeBackend:
         for var in KEY_VARIABLES + (cfg["api_key_env"],):
             env.pop(var, None)  # the CLI's own login, never a key from the environment
         env.update(NO_MODEL_FALLBACK)
+        env.update(ISOLATION_ENV)
         self.env = env
         if runner is None:
             if shutil.which(self.command) is None:
                 raise BackendError(f"the Claude Code CLI ({self.command!r}) is not installed or not on PATH")
+            managed = managed_configuration()
+            if managed:
+                raise BackendError("this machine has an organisation's managed Claude Code configuration ("
+                                   + ", ".join(map(str, managed)) + "), which reaches the model whatever the run's flags "
+                                   "say: Claude Code cannot run a session here as a plain model call")
             if check_login:
                 self._check_login()
 
@@ -271,7 +354,7 @@ class ClaudeCodeBackend:
         t0 = time.monotonic()
         failures = []
         tries = int(self.retries["tries"])
-        events, declined = [], None
+        events, declined, init = [], None, None
         for attempt in range(tries):
             with tempfile.TemporaryDirectory(prefix="cpl-claude-code-") as cwd:
                 try:
@@ -288,6 +371,11 @@ class ClaudeCodeBackend:
                 swap = swapped(events, data, self.cfg["agent_model"])
                 if swap:
                     raise StopRun(f"{swap}; the run stops rather than record another model's answer as {self.cfg['agent_model']}'s")
+                init = cli_init(out)
+                problems = isolation_problems(init)
+                if problems:
+                    raise StopRun("Claude Code gave the model more than this run does (" + "; ".join(problems)
+                                  + "); the run stops rather than record that answer")
                 text = _join(messages) if messages else (data or {}).get("result")
                 declined = refused(events)
                 if declined is not None:  # the loop counts refusals (max_consecutive_refusals); asking again is its call
@@ -313,7 +401,7 @@ class ClaudeCodeBackend:
         if where is not None:
             Path(where).mkdir(parents=True, exist_ok=True)
             tmp = Path(where) / "response_raw.json.tmp"
-            tmp.write_text(json.dumps({**data, "assistant_messages": messages}))
+            tmp.write_text(json.dumps({**data, "assistant_messages": messages, "cli_init": init}))
             tmp.replace(Path(where) / "response_raw.json")
         usage = data.get("usage") or {}
         last_stop = messages[-1].get("stop_reason") if messages else None
@@ -327,6 +415,7 @@ class ClaudeCodeBackend:
             "models_used": models_used(data),  # output tokens per model that answered, from the CLI's modelUsage
             "safety_stops": data.get("safety_stops"),
             "model_events": events,
+            "cli": init,  # what the CLI reported it loaded (checked above)
             "input_tokens": int(usage.get("input_tokens") or 0),
             "output_tokens": int(usage.get("output_tokens") or 0),
             "cache_creation_input_tokens": int(usage.get("cache_creation_input_tokens") or 0),

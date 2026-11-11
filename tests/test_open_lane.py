@@ -140,6 +140,27 @@ def test_budgets_persist_across_sessions(tmp_path):
         again._spend("lean_check")
 
 
+def test_run_pythons_folder_holds_the_models_code_and_the_weights_and_nothing_of_the_fixed_rules(tmp_path):
+    """The agent's run_python code runs in a folder it can read. It holds the wrapper around the code, the
+    model's code, the harness, the weights and input.json, and not the fixed rules lane's helpers.py, which
+    names that lane's rules (docs/decisions/agent-told-nothing.md). No Lean, no model."""
+    from core.open_lane.session import run_python_folder
+
+    cfg = merge(base_config(tmp_path, [], open_lane={"enabled": False}))
+    cfg["open_lane"].update(lean_project=str(tmp_path), work_dir=str(tmp_path / "work"))
+    entries = [{"id": "max2_tiny-v8-s0", "setting": "v8", "n_inputs": 64}]
+    s = Session.create(tmp_path / "a" / "open_lane", cfg, "tests/max2_tiny", entries, tmp_path / "run")
+    code = ("import os\nprint(sorted(os.listdir('.')))\ntry:\n    import helpers\n    print('helpers imported')\n"
+            "except ImportError:\n    print('no helpers')\nprint(open('model.py').read() == MODEL)\n")
+    model = (REPO_ROOT / "tests" / "max2_tiny" / "model.py").read_text()
+    out = s.run_python(f"MODEL = {model!r}\n" + code, "max2_tiny-v8-s0")
+    assert out["status"] == "ok", out
+    lines = out["output"].splitlines()
+    assert lines[0] == str(["harness.py", "input.json", "model.py", "out", "recipe.py", "tmp", "weights.npz"])
+    assert lines[1:] == ["no helpers", "True"]
+    assert sorted(run_python_folder(model)) == ["harness.py", "model.py", "recipe.py"]
+
+
 @pytest.mark.real_surface
 @pytest.mark.skipif(not HAVE_LEAN, reason="the Lean project with a built acceptcheck is not next to this repository")
 def test_a_fake_session_submits_the_scored_example_and_the_receipt_becomes_a_record(tmp_path):
@@ -328,6 +349,84 @@ def test_patience_under_q_above_needs_a_gain_or_a_new_lemma(tmp_path, metric, B,
     assert loop.rounds_without_new_artifact(run) == 0
 
 
+def cli_init_event(**over) -> dict:
+    """The init event Claude Code 2.1.322 printed for a session of this backend (captured against a stand-in
+    model server), with `over` replacing its fields."""
+    from core.open_lane.backends import MCP_TOOLS
+
+    ev = {"type": "system", "subtype": "init", "session_id": "sess_1", "claude_code_version": "2.1.322", "model": "m",
+          "tools": list(MCP_TOOLS), "mcp_servers": [{"name": "cpl", "status": "connected", "source": "dynamic"}],
+          "slash_commands": [], "skills": [], "output_style": "default",
+          "plugins": [{"name": "cc-plugin-agents-md", "path": "builtin", "source": "cc-plugin-agents-md@builtin"}],
+          "agents": ["claude", "Explore", "general-purpose", "Plan", "statusline-setup"]}
+    ev.update(over)
+    return {k: v for k, v in ev.items() if v is not None}
+
+
+def tool_backend_session(tmp_path, stdout: str):
+    """A ClaudeCodeToolBackend on a fake CLI that prints `stdout`, bound to a stand-in run; returns the
+    backend, where its attempt goes and the calls the fake CLI saw. No Lean, no model."""
+    from core.open_lane.backends import ClaudeCodeToolBackend
+
+    cfg = merge(base_config(tmp_path, [], backend="claude_code", agent_model="m"))
+    where = tmp_path / "runs" / "r" / "round_001" / "attempt_0"
+    where.mkdir(parents=True)
+    calls = []
+
+    def cli(cmd, prompt_text, env, cwd, timeout_s):
+        calls.append({"cmd": cmd, "env": env})
+
+        class Done:
+            stderr, returncode = "", 0
+
+        Done.stdout = stdout
+        return Done()
+
+    b = ClaudeCodeToolBackend(cfg, log=lambda *a: None, runner=cli, sleep=lambda s: None, environ={"PATH": "/usr/bin"})
+    b.bind(cfg, "max2_tiny", [{"id": "max2_tiny-v8-s0", "setting": "v8", "n_inputs": 64}], where.parent.parent)
+    return b, where, calls
+
+
+def answered(init: dict | None, text: str = "CLAIM: nothing") -> str:
+    events = [] if init is None else [init]
+    events += [{"type": "assistant", "session_id": "sess_1",
+                "message": {"role": "assistant", "content": [{"type": "text", "text": text}], "stop_reason": "end_turn"}},
+               {"type": "result", "subtype": "success", "is_error": False, "result": text, "session_id": "sess_1",
+                "num_turns": 1, "usage": {"input_tokens": 10, "output_tokens": 5}}]
+    return "\n".join(json.dumps(e) for e in events) + "\n"
+
+
+def test_a_session_runs_with_the_five_tools_and_nothing_else_or_the_run_stops(tmp_path):
+    """What Claude Code reports it loaded (its init event) is kept with every session and checked: the five
+    tools of the cpl server, connected, and no other tool, MCP server, skill, slash command or memory folder
+    (docs/decisions/agent-told-nothing.md). Anything else stops the run before the session counts. The CLI
+    runs with its auto-memory and an organisation's memory switched off."""
+    from core.agent.backends.api import StopRun
+    from core.agent.build_prompt import Prompt
+
+    b, where, calls = tool_backend_session(tmp_path, answered(cli_init_event()))
+    r = b.respond(Prompt("one", "two", {}), 0, where=where)
+    assert r.meta["cli"]["tools"] == ["mcp__cpl__lean_check", "mcp__cpl__run_python", "mcp__cpl__search_library",
+                                      "mcp__cpl__read_file", "mcp__cpl__submit_candidate"]
+    assert json.loads((where / "response_raw.json").read_text())["cli_init"]["mcp_servers"][0]["name"] == "cpl"
+    env = calls[0]["env"]
+    assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1" and env["CLAUDE_CODE_DISABLE_ORG_MEMORY"] == "1"
+    bad = {
+        "tools Bash, WebFetch": cli_init_event(tools=["mcp__cpl__lean_check", "Bash", "WebFetch"]),
+        "MCP servers notes": cli_init_event(mcp_servers=[{"name": "cpl", "status": "connected"}, {"name": "notes", "status": "connected"}]),
+        "the cpl MCP server .the run's tools. is failed": cli_init_event(mcp_servers=[{"name": "cpl", "status": "failed"}]),
+        "no cpl MCP server": cli_init_event(mcp_servers=[]),
+        "skills review": cli_init_event(skills=["review"]),
+        "slash commands compact": cli_init_event(slash_commands=["compact"]),
+        "memory folders auto: /Users/x/.claude/projects/p/memory/": cli_init_event(memory_paths={"auto": "/Users/x/.claude/projects/p/memory/"}),
+        "the CLI did not report what it loaded": None,
+    }
+    for i, (why, init) in enumerate(bad.items()):
+        b, where, _ = tool_backend_session(tmp_path / str(i), answered(init))
+        with pytest.raises(StopRun, match=why):
+            b.respond(Prompt("one", "two", {}), 0, where=where)
+
+
 def test_the_tool_backend_reports_the_counters_the_tools_saved(tmp_path):
     """The tools run in the MCP server's process and save their counters to the session; the backend's
     metadata must come from that saved state, not from the session it loaded before the CLI ran. A fake
@@ -337,7 +436,7 @@ def test_the_tool_backend_reports_the_counters_the_tools_saved(tmp_path):
     def result_json(text):
         """What the CLI prints with --output-format stream-json --verbose: one JSON object per line."""
         events = [
-            {"type": "system", "subtype": "init", "session_id": "sess_1"},
+            cli_init_event(),
             {"type": "assistant", "session_id": "sess_1",
              "message": {"role": "assistant", "content": [{"type": "text", "text": text}], "stop_reason": "end_turn"}},
             {"type": "result", "subtype": "success", "is_error": False, "result": text, "session_id": "sess_1",

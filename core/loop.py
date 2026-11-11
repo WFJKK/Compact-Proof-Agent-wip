@@ -361,15 +361,17 @@ def check_surface(cfg: dict, folder, entries: list[dict], log=print) -> str:
     """The agent is told nothing about what works on a network (docs/decisions/agent-told-nothing.md), so what
     a run shows it of the Lean project is a named surface (core.open_lane.surface), checked here before the
     run exists: the excerpts are parts of the Lean project's files; nothing the run sends (part 1 of the
-    prompt with everything it pastes, the texts of the sessions after the proof rounds) and no file the
-    agent's tools can read matches an expression the surface forbids, the model folder's own terms and its
-    held-out networks' names among them; and, for a surface that holds proofs to what it shows, Lean reads
-    the library the project built as the surface says (core.open_lane.offered). Returns the digest of what is
-    shown (core.open_lane.surface.digest), which a run records and keeps."""
+    prompt with everything it pastes, the texts of the sessions after the proof rounds), no file the
+    agent's tools can read and no file in the folder its run_python code runs in matches an expression the
+    surface forbids, the model folder's own terms and its held-out networks' names among them; and, for a
+    surface that holds proofs to what it shows, Lean reads the library the project built as the surface
+    says (core.open_lane.offered). Returns the digest of what is shown (core.open_lane.surface.digest),
+    which a run records and keeps."""
     from .agent.build_prompt import PromptError, TEMPLATES, fill, forbidden, load_template
     from .open_lane import offered
     from .open_lane import surface as surfaces
     from .open_lane.prompt import static_values
+    from .open_lane.session import run_python_folder
     from .open_lane.stages import planned
 
     project = resolve(cfg["open_lane"]["lean_project"])
@@ -380,6 +382,8 @@ def check_surface(cfg: dict, folder, entries: list[dict], log=print) -> str:
                  "the prompt's second part (its template)": part2_t}
         for name in planned(cfg):
             shown[f"the {name} session's text"] = (TEMPLATES / f"open_lane_{name}.md").read_text()
+        for name, text in run_python_folder(folder.source()).items():
+            shown[f"run_python's folder: {name}"] = text
         surfaces.check(surface, project, shown, extra_forbidden=forbidden(folder))
         if offered.applies(surface):
             library = offered.self_check(surface, project)

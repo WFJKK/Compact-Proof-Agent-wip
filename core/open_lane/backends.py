@@ -1,8 +1,10 @@
 """Backends for the open lane: a session with tools instead of one response.
 
-- ClaudeCodeToolBackend: the Claude Code CLI headless, as core.agent.backends.claude_code, with the four
+- ClaudeCodeToolBackend: the Claude Code CLI headless, as core.agent.backends.claude_code, with the five
   tools attached as an MCP server (mcp_server.py) and nothing else: no built-in tools, no files, no
-  project settings. The CLI runs under the user's own login; its environment has the API keys removed.
+  project settings, no memory. The CLI runs under the user's own login; its environment has the API keys
+  removed. What the CLI reports it loaded (its init event) must be exactly the five tools of the cpl
+  server, connected, with no skill, slash command or memory folder, or the run stops.
   The session's wall clock is open_lane.worker_seconds; the tools' budgets are the session's.
 - FakeToolBackend: replays scripted tool calls from JSON files, in order, against the same session code,
   so the whole loop (tools, submissions, receipts, records, resume) runs without a model. A script is
@@ -27,11 +29,14 @@ from pathlib import Path
 
 from ..agent.backends import BackendError, Response
 from ..agent.backends.api import StopRun
-from ..agent.backends.claude_code import ClaudeCodeBackend, _join, _parse_output, model_events, models_used, refused, swapped
+from ..agent.backends.claude_code import (ClaudeCodeBackend, _join, _parse_output, cli_init, isolation_problems, model_events,
+                                          models_used, refused, swapped)
 from ..util import REPO_ROOT
 from .session import Session, ToolError
 
 TOOL_NAMES = ("lean_check", "run_python", "search_library", "read_file", "submit_candidate")
+SERVER = "cpl"
+MCP_TOOLS = tuple(f"mcp__{SERVER}__{t}" for t in TOOL_NAMES)
 SYSTEM_PROMPT = (
     "You are working on a research task with five tools (lean_check, run_python, search_library, read_file and "
     "submit_candidate) and no others; you have no files of your own. Use the tools as the message says, "
@@ -60,7 +65,7 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
         cmd = [self.command, "-p", "--tools", "", "--output-format", "stream-json", "--verbose", "--no-session-persistence"]
         cmd += ["--setting-sources", "", "--disable-slash-commands", "--strict-mcp-config"]
         if mcp_config is not None:
-            cmd += ["--mcp-config", str(mcp_config), "--allowedTools", ",".join(f"mcp__cpl__{t}" for t in TOOL_NAMES)]
+            cmd += ["--mcp-config", str(mcp_config), "--allowedTools", ",".join(MCP_TOOLS)]
             cmd += ["--max-turns", str(int(self.cfg["open_lane"]["max_turns"]))]
         cmd += ["--system-prompt", SYSTEM_PROMPT, "--model", self.cfg["agent_model"]]
         if self.cfg["effort"] is not None:
@@ -74,7 +79,7 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
             env["PATH"] = f"{elan}:{os.environ.get('PATH', '')}"
         code = (f"import sys; sys.path.insert(0, {str(REPO_ROOT)!r}); from core.open_lane.mcp_server import main; "
                 f"sys.exit(main(['--session', {str(session.path)!r}]))")
-        cfg = {"mcpServers": {"cpl": {"command": self.cfg["open_lane"]["python"] or shutil.which("python3") or "python3",
+        cfg = {"mcpServers": {SERVER: {"command": self.cfg["open_lane"]["python"] or shutil.which("python3") or "python3",
                                       "args": ["-c", code], "env": env}}}
         path = Path(where) / "mcp.json"
         path.write_text(json.dumps(cfg, indent=1))
@@ -88,7 +93,7 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
         failures = []
         tries = int(self.retries["tries"])
         timeout = float(self.cfg["open_lane"]["worker_seconds"])
-        events, declined = [], None
+        events, declined, init = [], None, None
         for attempt in range(tries):
             with tempfile.TemporaryDirectory(prefix="cpl-claude-code-") as cwd:
                 try:
@@ -106,6 +111,11 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
                 swap = swapped(events, data, self.cfg["agent_model"])
                 if swap:
                     raise StopRun(f"{swap}; the run stops rather than record another model's work as {self.cfg['agent_model']}'s")
+                init = cli_init(out)
+                problems = isolation_problems(init, MCP_TOOLS, {SERVER}, required=SERVER)
+                if problems:
+                    raise StopRun("Claude Code gave the session more or other than this run's five tools (" + "; ".join(problems)
+                                  + "); the run stops rather than record work done that way")
                 text = _join(messages) if messages else (data or {}).get("result")
                 declined = refused(events)
                 if declined is not None:  # what the session submitted before it stands; the loop counts refusals
@@ -136,7 +146,7 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
 
         Path(where).mkdir(parents=True, exist_ok=True)
         tmp = Path(where) / "response_raw.json.tmp"
-        tmp.write_text(json.dumps({**data, "assistant_messages": messages}))
+        tmp.write_text(json.dumps({**data, "assistant_messages": messages, "cli_init": init}))
         tmp.replace(Path(where) / "response_raw.json")
         usage = data.get("usage") or {}
         last_stop = messages[-1].get("stop_reason") if messages else None
@@ -151,6 +161,7 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
             "models_used": models_used(data),
             "safety_stops": data.get("safety_stops"),
             "model_events": events,
+            "cli": init,  # what the CLI reported it loaded (checked above)
             "input_tokens": int(usage.get("input_tokens") or 0),
             "output_tokens": int(usage.get("output_tokens") or 0),
             "cache_creation_input_tokens": int(usage.get("cache_creation_input_tokens") or 0),

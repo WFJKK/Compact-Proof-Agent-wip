@@ -334,6 +334,25 @@ def test_a_run_that_would_paste_a_file_its_surface_does_not_show_does_not_start(
         loop.check_surface(cfg, folder, entries, log=lambda line: None)
 
 
+@needs_project
+def test_a_run_whose_run_python_folder_names_a_rule_does_not_start(tmp_path, monkeypatch):
+    """The folder the agent's run_python code runs in is read like the prompt: its model.py, its harness and
+    the wrapper around the agent's code are scanned before the run starts, and a forbidden expression in one
+    of them refuses the run, with the file and line (model.py is also pasted in the prompt, so it is found
+    there too). The fixed rules lane's helpers.py, which names its rules, is not in that folder at all."""
+    from core.model_folder import load_model_folder
+    from core.open_lane.session import run_python_folder
+
+    cfg = pilot_config(PROJECT, tmp_path)
+    folder = load_model_folder(REPO_ROOT / cfg["model"])
+    entries = loop.select_networks(folder, cfg)
+    assert "helpers.py" not in run_python_folder(folder.source())
+    named = folder.source() + "\n# the two tokens' rows are symmetric, so one half of the inputs is enough\n"
+    monkeypatch.setattr(type(folder), "source", lambda self: named)
+    with pytest.raises(loop.LoopError, match=r"run_python's folder: model.py, line \d+, matches the forbidden .*symmetr"):
+        loop.check_surface(cfg, folder, entries, log=lambda line: None)
+
+
 # ---- the rule on proofs, with Lean and a small library of the tests' own ------------------------------
 TOY_BASE = """namespace Toy
 

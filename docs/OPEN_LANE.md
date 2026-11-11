@@ -36,7 +36,9 @@ response:
   from the model folder (`open_lane.notes`, below).
 - The tools (`core/open_lane/session.py`): `lean_check` saves a module in the session's workspace and
   compiles it through the service against the protected module of a network and claim;
-  `run_python` runs code in the recipe sandbox with the network's weights; `search_library` searches the
+  `run_python` runs code in the recipe sandbox with the network's weights, in a folder that holds the
+  model's code, the harness and the weights and nothing of the fixed rules (no `helpers.py`, which names
+  them; the check before a run scans the folder's text files); `search_library` searches the
   files of the Lean project that the run shows the agent and `read_file` reads a stretch of one of them
   (the run's surface, below: in the minimal-knowledge condition the specification, the semantics and the
   counted language, with the run's worked examples; no docs, none of the fixed rules' sources, never another
@@ -203,10 +205,14 @@ approximation.
   (`tests/test_open_lane.py`) run the scored brute-force example through it.
 - `claude_code`: the Claude Code CLI headless, as in the fixed rules lane, with the tools attached as an MCP
   server over stdio (`core/open_lane/mcp_server.py`, started by the CLI with the command in `mcp.json`) and
-  nothing else: no built-in tools, no files, no project settings, `--max-turns open_lane.max_turns`, the
-  session's wall clock `open_lane.worker_seconds`. The CLI's environment has the API keys removed. The
-  session's final text is the response; what it submitted stands even if the session runs out of time.
-  Not exercised with a live CLI yet: the pilot is the first run (see below).
+  nothing else: no built-in tools, no files, no project settings, no memory, `--max-turns
+  open_lane.max_turns`, the session's wall clock `open_lane.worker_seconds`. The CLI's environment has the
+  API keys removed and its auto-memory and an organisation's memory switched off. Its init event, where it
+  says what it loaded, is kept with every session (`cli` in the response's metadata) and must show the five
+  tools of the `cpl` server, connected, and nothing else, or the run stops; a machine with an organisation's
+  managed Claude Code configuration is refused. The session's final text is the response; what it
+  submitted stands even if the session runs out of time. What the CLI still adds to what the model receives,
+  as measured with Claude Code 2.1.322: docs/decisions/agent-told-nothing.md.
 
 ## Running the pilot
 

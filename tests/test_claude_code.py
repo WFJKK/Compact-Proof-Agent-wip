@@ -273,3 +273,45 @@ def test_the_models_that_answered_are_recorded():
     b, _, _, _ = backend([Completed(result_json(modelUsage=usage, safety_stops=0))])
     m = b.respond(PROMPT, 0).meta
     assert m["models_used"] == {"claude-fable-5-1": 20000} and m["safety_stops"] == 0 and m["model_events"] == []
+
+
+def test_the_clis_memory_is_switched_off_and_what_it_loaded_is_checked(tmp_path):
+    """The flags do not reach the CLI's auto-memory or an organisation's memory, so the CLI's own switches turn
+    them off. Its init event says what it loaded; a plain model call has no tool, MCP server, skill, slash
+    command or memory folder, and an answer given with one stops the run. The init event is kept."""
+    b, cli, _, _ = backend([Completed(result_json())])
+    b.respond(PROMPT, 0, where=tmp_path / "a")
+    env = cli.calls[0]["env"]
+    assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1" and env["CLAUDE_CODE_DISABLE_ORG_MEMORY"] == "1"
+    assert json.loads((tmp_path / "a" / "response_raw.json").read_text())["cli_init"] == {}
+    loaded = json.dumps({"type": "system", "subtype": "init", "session_id": "s", "tools": [], "mcp_servers": [],
+                         "memory_paths": {"auto": "/Users/x/.claude/projects/p/memory/"}})
+    b, _, _, _ = backend([Completed(loaded + "\n" + result_json())])
+    with pytest.raises(StopRun, match="more than this run does .memory folders auto: /Users/x/.claude/projects/p/memory/"):
+        b.respond(PROMPT, 0)
+    loaded = json.dumps({"type": "system", "subtype": "init", "session_id": "s", "tools": ["Read"]})
+    b, _, _, _ = backend([Completed(loaded + "\n" + result_json())])
+    with pytest.raises(StopRun, match="tools Read"):
+        b.respond(PROMPT, 0)
+
+
+def test_a_machine_with_an_organisations_managed_claude_code_configuration_is_refused(tmp_path, monkeypatch):
+    """A managed CLAUDE.md, and what a managed hook prints, reach the model whatever the flags say (tested with
+    Claude Code 2.1.322), and a managed MCP configuration makes --strict-mcp-config refuse to start: on such a
+    machine Claude Code is not a plain model call, and the backend refuses before a run starts."""
+    from core.agent.backends import claude_code
+
+    root = tmp_path / "ClaudeCode"
+    assert claude_code.managed_configuration(root) == []
+    root.mkdir()
+    (root / "managed-settings.d").mkdir()
+    assert claude_code.managed_configuration(root) == []  # an empty folder holds nothing
+    (root / "CLAUDE.md").write_text("organisation-wide instructions\n")
+    (root / "managed-settings.d" / "10-hooks.json").write_text("{}")
+    assert claude_code.managed_configuration(root) == [root / "CLAUDE.md", root / "managed-settings.d" / "10-hooks.json"]
+    monkeypatch.setattr(claude_code.shutil, "which", lambda cmd: "/usr/local/bin/claude")
+    monkeypatch.setattr(claude_code, "managed_configuration", lambda: [root / "CLAUDE.md"])
+    with pytest.raises(BackendError, match="managed Claude Code configuration .*CLAUDE.md.*cannot run a session here as a plain model call"):
+        ClaudeCodeBackend(config(), environ={"PATH": "/usr/bin"}, check_login=False)
+    monkeypatch.setattr(claude_code, "managed_configuration", lambda: [])
+    ClaudeCodeBackend(config(), environ={"PATH": "/usr/bin"}, check_login=False)

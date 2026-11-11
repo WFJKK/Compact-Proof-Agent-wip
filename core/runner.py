@@ -1,9 +1,12 @@
 """Run one recipe on one network and one knob value, in a sandbox.
 
 The runner makes a fresh sandbox folder holding only what the recipe may see:
-recipe.py, read-only copies of the model's model.py and the core's helpers.py,
-the harness, the network's weights (weights.npz, no pickle) and input.json
-(info, knob and limits). It starts `python -I -B harness.py` in the sandbox mode
+recipe.py, read-only copies of the model's model.py and (for the fixed rules
+lane's recipes, which build proof trees with it) the core's helpers.py, the
+harness, the network's weights (weights.npz, no pickle) and input.json (info,
+knob and limits). The open lane's run_python gets no helpers.py: it names the
+fixed rules, which that lane's agent is not told (sandbox_texts lists what a
+folder holds). It starts `python -I -B harness.py` in the sandbox mode
 it is given (core.sandbox: container, landlock or process) with an empty
 environment, enforces the wall-clock and memory limits from outside, and reads
 back one proof file as JSON data. Nothing the sandbox writes is executed or
@@ -225,14 +228,23 @@ def _environment(box: Path, threads: int, sandbox_id: str) -> dict:
     }
 
 
-def _prepare(box: Path, recipe_source: str, model_source: str, weights: dict, info: dict, knob: float, limits: Limits, sb: Sandbox):
+def sandbox_texts(model_source: str, helpers: bool = True) -> dict[str, str]:
+    """The text files a sandbox folder holds besides recipe.py, by name: the model's code, the harness and,
+    when the recipe may use it, helpers.py. (The rest is the weights, input.json, and out/ and tmp/.)"""
+    texts = {"model.py": model_source, "harness.py": HARNESS.read_text(encoding="utf-8")}
+    if helpers:
+        texts["helpers.py"] = HELPERS.read_text(encoding="utf-8")
+    return texts
+
+
+def _prepare(box: Path, recipe_source: str, model_source: str, weights: dict, info: dict, knob: float, limits: Limits, sb: Sandbox,
+             helpers: bool = True):
     box.mkdir()
     (box / "out").mkdir()
     (box / "tmp").mkdir()
     (box / "recipe.py").write_text(recipe_source)
-    (box / "model.py").write_text(model_source)
-    shutil.copyfile(HELPERS, box / "helpers.py")
-    shutil.copyfile(HARNESS, box / "harness.py")
+    for name, text in sandbox_texts(model_source, helpers).items():
+        (box / name).write_text(text, encoding="utf-8")
     np.savez(box / "weights.npz", **{k: np.asarray(v) for k, v in weights.items()})
     job = {
         "info": info,
@@ -247,7 +259,7 @@ def _prepare(box: Path, recipe_source: str, model_source: str, weights: dict, in
         "lockdown": landlock_policy(box, sb.protected) if sb.mode == "landlock" else None,
     }
     (box / "input.json").write_text(json.dumps(job))
-    for name in ("recipe.py", "model.py", "helpers.py", "harness.py", "weights.npz", "input.json"):
+    for name in ("recipe.py", *sandbox_texts(model_source, helpers), "weights.npz", "input.json"):
         os.chmod(box / name, 0o444)
     if sb.mode == "container":
         os.chmod(box / "out", 0o777)  # the container runs as nobody
@@ -311,8 +323,10 @@ def run_recipe(
     limits: Limits,
     sandbox_root: str | Path | None = None,
     sandbox: Sandbox | None = None,
+    helpers: bool = True,
 ) -> Execution:
-    """Run make_proof(weights, info, knob) from recipe_source in a fresh sandbox; return what came back."""
+    """Run make_proof(weights, info, knob) from recipe_source in a fresh sandbox; return what came back.
+    With helpers=False the folder holds no helpers.py (the open lane's run_python)."""
     sb = sandbox or PROCESS
     root = Path(tempfile.mkdtemp(prefix="cpl-sandbox-", dir=sandbox_root))
     box = root / "box"
@@ -320,7 +334,7 @@ def run_recipe(
     if sb.mode != "container":
         _become_subreaper()
     try:
-        _prepare(box, recipe_source, model_source, weights, info, knob, limits, sb)
+        _prepare(box, recipe_source, model_source, weights, info, knob, limits, sb, helpers)
         (root / "logs").mkdir()
         with open(root / "logs" / "stdout.txt", "w+b") as out_f, open(root / "logs" / "stderr.txt", "w+b") as err_f:
             start = time.monotonic()
