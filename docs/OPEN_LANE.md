@@ -212,7 +212,8 @@ approximation.
   tools of the `cpl` server, connected, and nothing else, or the run stops; a machine with an organisation's
   managed Claude Code configuration is refused. The session's final text is the response; what it
   submitted stands even if the session runs out of time. What the CLI still adds to what the model receives,
-  as measured with Claude Code 2.1.322: docs/decisions/agent-told-nothing.md.
+  as measured with Claude Code 2.1.322: docs/decisions/agent-told-nothing.md. What a claude.ai login adds on
+  a given machine: `python -m core.open_lane.context_check --config <run config>` (one short session).
 
 ## Running the pilot
 

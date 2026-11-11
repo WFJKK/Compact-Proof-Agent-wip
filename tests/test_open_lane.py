@@ -1071,3 +1071,45 @@ def test_a_lemma_accepted_in_one_round_is_imported_in_the_next_without_being_pas
     assert (s2 / "workspace" / "out" / "Candidate" / "Lib.olean").is_file()
     assert (s2 / "submissions" / "000" / "Candidate" / "Lib.lean").read_text() == lib  # added to the submission
     assert "Candidate/Lib.lean" in ctx.run.read(2, "prompt.md") or "Lib" in ctx.run.read(2, "prompt.md")
+
+
+@pytest.mark.real_surface
+def test_the_context_check_asks_one_session_what_it_was_given_and_names_what_to_read(tmp_path):
+    """core.open_lane.context_check runs one session as the backend does (its command line without the tools'
+    server, its environment) and asks the model to copy out everything it was given; the report names what the
+    CLI loaded, the lines about memory or instruction files, and any forbidden expression. A fake CLI here."""
+    from core.open_lane import context_check
+    from core.open_lane.backends import SYSTEM_PROMPT
+
+    clean = ("System prompt:\nYou are a Claude agent, built on Anthropic's Claude Agent SDK.\n" + SYSTEM_PROMPT
+             + "\nEnvironment note: working directory /tmp/x, platform darwin, today's date.\nTools: none.")
+    leaky = clean + ("\nContents of /Users/x/.claude/CLAUDE.md (user's private global instructions for all projects):\n"
+                     "The max-of-2 network is symmetric in its two tokens.")
+    cfg = merge(base_config(tmp_path, [], backend="claude_code", agent_model="m", model="models/max2",
+                            open_lane={"knowledge": "minimal"}))
+    seen = []
+
+    def cli(answer, init):
+        def run(cmd, prompt_text, env, cwd, timeout_s):
+            seen.append({"cmd": cmd, "prompt": prompt_text, "env": env})
+
+            class Done:
+                stderr, returncode = "", 0
+
+            Done.stdout = answered(init, answer)
+            return Done()
+        return run
+
+    quiet = cli_init_event(tools=[], mcp_servers=[])
+    r = context_check.check(cfg, log=lambda *a: None, runner=cli(clean, quiet))
+    cmd = seen[0]["cmd"]
+    assert "--mcp-config" not in cmd and cmd[cmd.index("--tools") + 1] == "" and cmd[cmd.index("--system-prompt") + 1] == SYSTEM_PROMPT
+    assert seen[0]["prompt"] == context_check.ECHO and seen[0]["env"]["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+    assert r["loaded_beyond"] == [] and r["forbidden_found"] == [] and r["lines_to_read"] == []
+    assert "nothing beyond what the run gives it" in context_check.report(r)
+    r = context_check.check(cfg, log=lambda *a: None, runner=cli(leaky, cli_init_event(tools=[], mcp_servers=[], memory_paths={"auto": "/m"})))
+    assert r["loaded_beyond"] == ["memory folders auto: /m"]
+    assert r["forbidden_found"] == ["symmetr"]  # the minimal surface's list; the task's name is not on it
+    assert any("CLAUDE.md" in l for l in r["lines_to_read"])
+    text = context_check.report(r)
+    assert "memory folders auto: /m" in text and "symmetr" in text and "The max-of-2 network is symmetric" in text

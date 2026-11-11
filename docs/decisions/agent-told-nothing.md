@@ -101,7 +101,9 @@ configuration.
 - Not testable with a stand-in: what a claude.ai login adds. This version of the CLI has code for an
   account's and a team's memory, behind the login and switches Anthropic sets on its servers. Such a memory
   would show as a memory folder in the init event; anything that leaves no trace there would show only in
-  what a real session receives.
+  what a real session receives. `python -m core.open_lane.context_check --config <run config>` runs one
+  session as the backend does and asks the model to copy out everything it was given (one short session on
+  the machine's login).
 
 The open lane has no API backend. One would send the run's own text and nothing else.
 
