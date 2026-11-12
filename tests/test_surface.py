@@ -245,7 +245,7 @@ def test_the_minimal_surface_fits_the_lean_project_and_shows_no_method(tmp_path)
         "CompactCheck/Eval.lean", "CompactCheck/Semantics.lean", "lean-toolchain", "CompactCheck/CountedOps.lean",
         "CompactCheck/Task.lean", "CompactCheck/Walk.lean", "CompactCheck/LinAlg.lean", "CompactCheck/Check.lean",
         "CompactCheck/CountedCheck.lean", "CompactCheck/CountedGeneral.lean", "CompactCheck/CountedGeneralSound.lean",
-        "CompactCheck/Soundness.lean", "accept/allowlist.txt",
+        "CompactCheck/Soundness.lean", "accept/allowlist.txt", "CompactCheck/Exp.lean", "CompactCheck/ExpSound.lean",
         "examples/open_lane/max2_tiny_scored/Candidate/Max2TinyScored.lean",
         "examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean"}
     folder = load_model_folder(REPO_ROOT / cfg["model"])
@@ -254,7 +254,7 @@ def test_the_minimal_surface_fits_the_lean_project_and_shows_no_method(tmp_path)
     surface.check(s, PROJECT, {"the prompt's first part": part1}, extra_forbidden=forbidden(folder))
     for rel in ("docs/COUNTED.md", "docs/OPEN_LANE.md", "docs/RULES.md", "README.md", "CompactCheck/Symmetry.lean",
                 "CompactCheck/ContractSound.lean", "CompactCheck/CountedOps.lean", "CompactCheck/Task.lean", "CompactCheck/Walk.lean",
-                "CompactCheck/CountedGeneral.lean", "CompactCheck/CountedGeneralSound.lean"):
+                "CompactCheck/CountedGeneral.lean", "CompactCheck/CountedGeneralSound.lean", "CompactCheck/Exp.lean"):
         assert surface.matches((PROJECT / rel).read_text(), s["forbidden"] + ["Gross"]), f"{rel} whole would pass"
     lines = surface.shown_lines(s, PROJECT)
     assert lines["CompactCheck.Spec"] is None and len(lines["CompactCheck.CountedOps"]) > 150 and len(lines["CompactCheck.Walk"]) < 20
