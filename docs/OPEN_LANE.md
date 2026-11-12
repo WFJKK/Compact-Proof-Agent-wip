@@ -312,6 +312,13 @@ network and the seed check's network:
 
 - `config/pilot/linear-max2.yaml`: the linear max-of-2 network at vocabulary size 64 and hidden width 8
   (`models/max2`), proof rounds on `max2-v64-s0`, the seed check on `max2-v64-s1`.
+- `config/pilot/attn-min2.yaml`: the attention min-of-2 network at vocabulary size 64 and width 8
+  (`models/attn-min2`, size v64d8, added 12 November 2026), proof rounds on `attn-min2-v64d8-s1`, the seed
+  check on `attn-min2-v64d8-s2`; `config/pilot/attn-min2-quick.yaml` is one round of 90 minutes of it,
+  without the seed check and the scaling question. Not the zoo's width 32 (the paper's): there the protected
+  module exceeds Lean's default recursion depth, and the kernel's loops over a tensor cost the square of its
+  length (docs/decisions/attn-min2-width8.md). The minimal surface shows the exp bounds (Exp.lean and
+  ExpSound.lean as excerpts) for every run.
 
 What an open-lane run needs to know about an architecture is the model folder's to state, under `open_lane`
 in its `config.yaml`: the worked example and the further Lean sources (`example`, `extra_sources`) and notes
