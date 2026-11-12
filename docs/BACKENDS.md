@@ -19,6 +19,35 @@ Before a run starts, the loop checks that the CLI is installed and logged in (`c
 
 Each round's `meta.json` records `cost_usd: 0` (nothing was billed) and `api_equivalent_usd`, the CLI's own estimate of what the same tokens would have cost on the API, so you can still see how much of your allowance a run consumed. When the CLI is signed in with an API key instead (`claude auth status` shows `"authMethod": "api_key"`; Claude Code's Console login, "Create an API key", which works where an organization blocks the Console's OAuth sign-in for Claude Code), the calls are billed and `api_equivalent_usd` is the bill.
 
+**An API key, within a budget (`auth: api_key`, the open lane only; ported from the level-1 pipeline).** With
+`auth: api_key` (or `run --auth api_key`) an open-lane run bills the API key in the variable `api_key_env` names
+(`CPL_ANTHROPIC_KEY`), never `ANTHROPIC_API_KEY`, which stays removed:
+
+    export CPL_ANTHROPIC_KEY=sk-ant-...        # for example from a file: export CPL_ANTHROPIC_KEY=$(cat ~/.cpl-key)
+    python3 -m core.loop run --config config/pilot/attn-min2-quick.yaml --auth api_key --budget-usd 40
+
+- The CLI runs with `--bare`, which reads no login and no keychain, and gets the key from an `apiKeyHelper` that
+  prints that variable: the key's value is on no command line and in no file. The tools' server drops the key
+  variables from its environment, so neither the Lean service nor the agent's Python can see them. A key not
+  scoped to one workspace takes the workspace ID from `api_workspace_env` (`CPL_ANTHROPIC_WORKSPACE`).
+- Before the run the key is checked against the API's model list (`GET /v1/models/<model>`, free): a refused key,
+  a model the key cannot use and a retired model stop the run before it exists.
+- Every try's init event must say the CLI billed the helper (`apiKeySource: apiKeyHelper`); anything else (a
+  login it found, a key from elsewhere) stops the run.
+- `api_budget: {run_usd, round_usd}` (60 and 20 by default), dollars by Claude Code's own count. Every try gets
+  `--max-budget-usd`, the smaller of what is left of its round's budget and of the run's; the run folder's
+  `spend.jsonl` keeps every try's cap and cost, so the count holds across tries, rounds and resumes (a try the
+  CLI reported no cost for, one stopped at the session's time limit, counts at its cap). A session whose budget is
+  spent ends with what it submitted; when the run's is spent the rounds stop, with nothing locked and no seed
+  check, and `resume --budget-usd <dollars>` raises it and goes on. The CLI checks its spending after every
+  answer, so a try can go over its cap by one answer.
+- An account that cannot pay (no credit, or its spend limit reached) stops the run without retries. Each round's
+  meta records `auth`, `billed_to`, `cost_usd` (what the tries cost) and an `api_budget` block.
+
+Tested with Claude Code 2.1.322 against a stand-in model server on a stand-in key (no paid call): the key went to
+the server, the init event said `apiKeyHelper`, the cost reached `spend.jsonl`, and the agent's Python saw no key
+variable.
+
 **Terms.** Whether a subscription may be used for scripted, headless Claude Code runs is set by Anthropic's terms for Claude Code, which have changed during 2026. At the time of writing, signing in to the unmodified Claude Code binary with your own subscription counts as ordinary use, headless runs draw on the subscription's limits, and products built on the Agent SDK are expected to use an API key. Read the current policy for your own account before relying on this backend.
 
 **Model names.** `agent_model` is passed to `--model`, which accepts either a full model name or an alias the CLI knows (such as `opus`). `effort` goes to `--effort` (`low`, `medium`, `high`, `xhigh`, `max`). `thinking` and `max_output_tokens` are API-only and ignored here; the CLI manages its own thinking.

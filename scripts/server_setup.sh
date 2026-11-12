@@ -90,7 +90,9 @@ cat <<EOF
 Done. Next, by hand:
   1. claude            (sign in: "Anthropic Console account" for the API, or the subscription;
                         then /exit)
-  2. claude auth status
+     or, with an API key and no sign-in: export CPL_ANTHROPIC_KEY=sk-ant-...  and start the run
+     with --auth api_key --budget-usd <dollars> (docs/BACKENDS.md)
+  2. claude auth status   (not needed with an API key)
   3. tmux new -s pilot
      cd $PIPE_DIR && source .venv/bin/activate
      python3 -m pytest tests/test_open_lane.py        (a few minutes: the pair works together)

@@ -38,6 +38,10 @@ removed), so the login is what pays.
 - "Anthropic Console account": the API, billed per token to the Console organisation. Set a spend limit on
   the workspace first. Each session's dollar figure is in its `response_meta.json` (`api_equivalent_usd`, the
   CLI's own figure); `cost_usd` stays 0 there.
+- An API key, with no sign-in at all: `export CPL_ANTHROPIC_KEY=sk-ant-...` (never `ANTHROPIC_API_KEY`) and start
+  the run with `--auth api_key --budget-usd <dollars>`. The run checks the key before it starts and stops itself
+  when the budget is spent (docs/BACKENDS.md). Several runs may use one key at once: they share the
+  organisation's rate limits and bill, each run keeps its own budget.
 - The subscription: no per-call bill; the runs count against its usage limits, and the loop waits when it hits
   one (docs/BACKENDS.md, including the note on Anthropic's terms).
 
