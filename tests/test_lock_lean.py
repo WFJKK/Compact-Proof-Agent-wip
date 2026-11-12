@@ -520,7 +520,7 @@ def test_a_whole_run_with_lean_reading_what_was_compiled(tmp_path, monkeypatch):
     from core.open_lane import stages
     from core.open_lane.session import Session
 
-    import test_stages as stand_ins
+    from tests import test_stages as stand_ins
 
     A, B, call = stand_ins.A, stand_ins.B, stand_ins.call
     pa, pb = "N_max2_ladder_n2v24d8_s0_c576", "N_max2_ladder_n2v24d8_s3_c570"

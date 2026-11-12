@@ -33,8 +33,8 @@ from core.open_lane.session import Session, ToolError
 from core.run_config import merge, read_run_config_file
 from core.util import REPO_ROOT
 
-import test_lock_lean as lean_tests
-import test_stages as stand_ins
+from tests import test_lock_lean as lean_tests
+from tests import test_stages as stand_ins
 
 
 def _project() -> Path | None:
