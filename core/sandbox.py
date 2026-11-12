@@ -243,6 +243,19 @@ def _both(paths) -> list[str]:
     return sorted(out)
 
 
+def python_executables(python: str | None = None) -> list[str]:
+    """The programs that starting this Python runs. On a macOS framework build (python.org's installer,
+    Homebrew) bin/python3.x is a launcher that replaces itself with the interpreter inside the framework's
+    Python.app, so a profile that lets only the launcher run would stop Python before it starts."""
+    paths = [python or sys.executable]
+    framework = sysconfig.get_config_var("PYTHONFRAMEWORK")
+    if sys.platform == "darwin" and framework:
+        app = os.path.join(sys.base_prefix, "Resources", "Python.app", "Contents", "MacOS", framework)
+        if os.path.exists(app):
+            paths.append(app)
+    return _both(paths)
+
+
 def seatbelt_profile(box: Path, protected: tuple = (), python: str | None = None) -> str:
     """The sandbox-exec profile for one recipe. Everything not named stays as macOS allows it (allow default),
     and the rules after it take that away: in seatbelt profiles a later rule wins over an earlier one. So the
@@ -269,7 +282,7 @@ def seatbelt_profile(box: Path, protected: tuple = (), python: str | None = None
         "(deny network*)",
         "(deny process-fork)",
         "(deny process-exec)",
-        "(allow process-exec " + " ".join(f"(literal {_sb(p)})" for p in _both([python])) + ")",
+        "(allow process-exec " + " ".join(f"(literal {_sb(p)})" for p in python_executables(python)) + ")",
         "(deny signal)",
         "(allow signal (target self))",
         "(deny file-write*)",

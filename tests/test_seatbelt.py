@@ -41,6 +41,24 @@ def test_the_profile_takes_away_the_home_folder_the_protected_folders_the_networ
     assert sandbox._sb('/a "b') == '"/a \\"b"'
 
 
+def test_on_a_framework_python_the_interpreter_inside_python_app_may_run_too(tmp_path, monkeypatch):
+    # python.org's and Homebrew's builds: bin/python3.x replaces itself with Resources/Python.app/.../Python
+    app = tmp_path / "Versions" / "3.12" / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
+    app.parent.mkdir(parents=True)
+    app.write_text("")
+    monkeypatch.setattr(sandbox.sys, "platform", "darwin")
+    monkeypatch.setattr(sandbox.sys, "base_prefix", str(tmp_path / "Versions" / "3.12"))
+    monkeypatch.setattr(sandbox.sysconfig, "get_config_var", lambda name: "Python" if name == "PYTHONFRAMEWORK" else None)
+    text = seatbelt_profile(tmp_path / "box", (), "/opt/python/bin/python3.12")
+    rule = next(l for l in text.splitlines() if l.startswith("(allow process-exec"))
+    assert '(literal "/opt/python/bin/python3.12")' in rule and f'(literal "{app}")' in rule
+    # not a framework build (Linux, pyenv, uv, conda): the launcher alone
+    monkeypatch.setattr(sandbox.sysconfig, "get_config_var", lambda name: "" if name == "PYTHONFRAMEWORK" else None)
+    rule = next(l for l in seatbelt_profile(tmp_path / "box", (), "/opt/python/bin/python3.12").splitlines()
+                if l.startswith("(allow process-exec"))
+    assert rule == '(allow process-exec (literal "/opt/python/bin/python3.12"))'
+
+
 def test_the_harness_starts_under_sandbox_exec_in_seatbelt_mode(tmp_path, monkeypatch):
     seen = []
 
