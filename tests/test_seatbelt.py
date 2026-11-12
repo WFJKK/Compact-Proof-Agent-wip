@@ -93,3 +93,25 @@ def test_seatbelt_is_used_only_when_asked_for_and_only_on_a_mac(monkeypatch):
     with pytest.raises(SandboxError, match="refuses to fall back"):
         choose({"sandbox": "hardened"})
     assert merge({"run_id": "x", "model": "tests/max2_tiny", "backend": "fake", "rule_set": ["single"], "sandbox": "seatbelt"})["sandbox"] == "seatbelt"
+
+
+def test_a_seatbelt_run_asks_the_lean_service_for_its_seatbelt_box(tmp_path, monkeypatch):
+    from core.open_lane import session as session_mod
+    from core.open_lane.session import Session, service_box
+
+    assert service_box("seatbelt") == "seatbelt"
+    assert [service_box(m) for m in ("auto", "hardened", "landlock", "container", "process", None)] == ["hardened"] * 6
+    seen = []
+
+    def popen(cmd, **kw):
+        seen.append(cmd)
+        raise OSError("not started in this test")
+
+    monkeypatch.setattr(session_mod.subprocess, "Popen", popen)
+    s = Session.__new__(Session)
+    s.lean_project = tmp_path / "lean"
+    for sandbox, mode in (("seatbelt", "seatbelt"), ("process", "hardened")):
+        s.state = {"repo": str(tmp_path), "work_dir": str(tmp_path / "work"), "sandbox": sandbox, "knowledge": "minimal"}
+        assert s._service(["identity"], 10)["ok"] is False
+        cmd = seen[-1]
+        assert cmd[cmd.index("--mode") + 1] == mode

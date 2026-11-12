@@ -423,6 +423,13 @@ LEGACY_READABLE = ("CompactCheck/", "docs/", "examples/open_lane/max2_tiny_brute
                    "accept/", "README.md", "lean-toolchain", "lakefile.toml")
 
 
+def service_box(sandbox: str | None) -> str:
+    """The box the acceptance service compiles in (accept.py --mode): seatbelt when the run's own sandbox is
+    seatbelt (a Mac, asked for by name), else hardened (Landlock where the kernel has it, else the service's
+    process box, recorded as weak in every receipt)."""
+    return "seatbelt" if sandbox == "seatbelt" else "hardened"
+
+
 class Session:
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -794,7 +801,7 @@ class Session:
     def _service(self, args: list[str], timeout_s: float) -> dict:
         """One command of the service, stopped after timeout_s with every process it started."""
         cmd = [sys.executable, "-B", str(self.lean_project / "scripts" / "accept.py")] + args + \
-              ["--repo", self.state["repo"], "--work", self.state["work_dir"], "--mode", "hardened",
+              ["--repo", self.state["repo"], "--work", self.state["work_dir"], "--mode", service_box(self.state.get("sandbox")),
                "--knowledge", self.state.get("knowledge", "minimal")]
         env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
         try:

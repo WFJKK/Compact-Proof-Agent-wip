@@ -22,7 +22,7 @@ PIPE_DIR=~/Desktop/VerifiedMechanisms/CompactProofsAgent/Compact-Proof-Agent-wip
 LEAN_REPO=https://github.com/WFJKK/Compact-Proof-Checker
 PIPE_REPO=https://github.com/WFJKK/Compact-Proof-Agent-wip
 # The Lean project's commit the pipeline was tested with (a run records the one it starts on).
-LEAN_COMMIT=${LEAN_COMMIT:-3320eab}
+LEAN_COMMIT=${LEAN_COMMIT:-949095c}
 
 echo "== system packages"
 sudo apt-get update -qq
