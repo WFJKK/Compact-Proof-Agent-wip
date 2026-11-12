@@ -201,6 +201,62 @@ points to place; brute force on any subset of the inputs is 1; a scored proof ke
 alive only if it raised the score. The agent is shown this score alone. Q, Q_grid, Q_exact and Q_above are
 still computed for the reports.
 
+## Choosing a workflow
+
+How the proof rounds are organised is chosen before a run starts, with `open_lane.workflow_mode`, and kept for
+the run's whole life (the run records it; a resume with another schedule is refused).
+
+- `interleaved` (the default): every round, the agent explores in Python and develops and submits Lean proofs.
+  `prompt_template` picks the template and `patience` can end the proof rounds early. Every run made before the
+  setting existed is this, and resumes as it was.
+- `python_then_lean`: a fixed schedule of two phases (core/open_lane/workflow.py). Rounds 1 to
+  `discovery_rounds` are discovery, the rounds after them up to `rounds_max` formalization; the seed check and
+  the scaling question follow as before. `discovery_rounds` is at least 1 and less than `rounds_max`.
+  Patience does not apply in either phase; the hard limits, a stop, a backend's failure and the model declining
+  stop a run as before, and a resume continues the same phase. The phases choose their own templates
+  (`open_lane_discovery_v1`, `open_lane_formalization_v1`, recorded in each round's meta); `prompt_template`
+  goes on deciding only for interleaved runs.
+
+To run the new mode, start a separate run from a config that sets it, for example
+
+    python3 -m core.loop run --config config/pilot/linear-max2-python-then-lean.yaml
+
+(the linear pilot with discovery rounds 1 to 4 and formalization rounds 5 to 7: a first setting to try, not a
+claim that the split is the best one). `--set open_lane.workflow_mode=python_then_lean --set
+open_lane.discovery_rounds=3` does the same on another config.
+
+What the agent has in a python_then_lean proof round, besides the five tools:
+
+- A research folder, `Research/`, the run's (<run>/research/): every session of either phase reads and writes the
+  same files. `research_write(path, text)` and `research_list(prefix)`; `read_file` reads its text files. A
+  candidate record, `Research/candidates/<id>.json`, has at least the keys id, title, mechanism_claim,
+  proof_sketch, predictions, experiment_refs, counterexamples, estimated_coverage, estimated_cost,
+  cost_estimation_method, unresolved_questions and agent_assessment; no key and no assessment may say that it
+  is proved. `Research/shortlist.json` is a list of {id, reason} in order of priority. Held to
+  `research_workspace_mb` and `research_workspace_files`; paths of plain parts only, no link followed.
+- `run_python(code, network, files, outputs)`: the declared input files are put in the folder, read-only; the
+  declared outputs are what the code writes at `out/Research/...`, kept in the research folder when the code
+  completes. Every call is kept as an experiment record (attempt_j/open_lane/experiments/<call>/: code,
+  inputs, outputs, status, diagnostics, read-only), and the answer says whether the code raised
+  (`python.ok`). A failed or stopped experiment is marked incomplete and its outputs stay in its record.
+- In discovery: `lean_check` and auxiliary `submit_candidate` calls name `candidate_id` and `question` and
+  draw on the phase's Lean allowance, a total over the phase: `probe_compile_calls`,
+  `probe_auxiliary_submissions` and `probe_seconds` (the service's work and Lean's questions included). A call
+  takes its share before it starts and settles it when it ends; a call that never settled counts whole, so a
+  crash or a resume gives nothing back. All three zero: no Lean in discovery. Proofs of Target wait for
+  formalization. Outcomes are recorded as compiled, compiler_error, timeout, infrastructure_error, accepted or
+  rejected; a compile is never an acceptance.
+- At the transition (before the first formalization round, once): a read-only copy of the research folder
+  (<run>/workflow/discovery/) and the shortlist the folder holds, or, without one, the candidates unranked.
+- In formalization: the session's normal budgets, Python, the research folder, and `candidate_id` to name the
+  candidate a proof comes from.
+
+What counts is unchanged: the receipts. Research records, estimates and the agent's assessments never enter a
+frontier or a score; an accepted auxiliary lemma stays a lemma; a formalization round's scored proof is an
+ordinary record (with `phase`, never `stage`) and enters the frontier and the score. `status` and the report
+show the mode, the rounds, time and tool calls of each phase, the Lean checks and their outcomes, the
+candidates with their estimates, and the accepted proofs that name each candidate.
+
 ## After the proof rounds
 
 A pilot run is about one network and has two more sessions after its proof rounds

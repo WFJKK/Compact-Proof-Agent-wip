@@ -279,6 +279,12 @@ def open_context(run: RunDir, cfg: dict, log=print, surface_checked: bool = Fals
         )
     if cfg.get("open_lane", {}).get("enabled"):
         check_lean_checker(cfg, started, run.run_id)
+        from .open_lane import workflow
+
+        try:
+            workflow.check_resume(run.path, cfg)  # the schedule the run started with, or none (interleaved)
+        except workflow.WorkflowError as exc:
+            raise LoopError(f"run {run.run_id}: {exc}") from exc
     entries = select_networks(folder, cfg)
     if cfg.get("open_lane", {}).get("enabled") and not surface_checked:
         # a resumed run: what it shows the agent is checked again, and must be what it showed when it started
@@ -377,9 +383,17 @@ def check_surface(cfg: dict, folder, entries: list[dict], log=print) -> str:
     project = resolve(cfg["open_lane"]["lean_project"])
     try:
         surface = surfaces.of_run(cfg)
+        from .open_lane import workflow
+
+        statics = static_values(cfg, folder, entries)
         part1_t, part2_t = load_template(cfg["prompt_template"])
-        shown = {"the prompt's first part": fill(part1_t, static_values(cfg, folder, entries)),
+        shown = {"the prompt's first part": fill(part1_t, statics),
                  "the prompt's second part (its template)": part2_t}
+        if workflow.is_phased(cfg):  # the phases' own templates, which the rounds send instead
+            for phase, name in workflow.TEMPLATES.items():
+                p1, p2 = load_template(name)
+                shown[f"the {phase} prompt's first part"] = fill(p1, statics)
+                shown[f"the {phase} prompt's second part (its template)"] = p2
         for name in planned(cfg):
             shown[f"the {name} session's text"] = (TEMPLATES / f"open_lane_{name}.md").read_text()
         for name, text in run_python_folder(folder.source()).items():
@@ -498,6 +512,12 @@ def start(config_path: str | Path, log=print, run_id: str | None = None, overrid
             versions["surface"] = found["surface"]  # what the run shows the agent, kept for the whole run
     write_json(run.path / "versions.json", {**versions, "git": git_state(), "created": now(),
                                             "config_file": str(config_path), "set_on_command_line": overrides or {}})
+    from .open_lane import workflow
+
+    if workflow.is_phased(cfg):  # the schedule, fixed now for the run's whole life
+        sched = workflow.record(run.path, cfg)["schedule"]
+        log(f"workflow python_then_lean: discovery rounds {sched['discovery_rounds'][0]} to {sched['discovery_rounds'][1]}, "
+            f"formalization rounds {sched['formalization_rounds'][0]} to {sched['formalization_rounds'][1]}")
     log(f"run {cfg['run_id']} at {run.path}")
     if overrides:
         log("set on the command line: " + ", ".join(f"{k}={v}" for k, v in overrides.items()))
@@ -530,19 +550,25 @@ def drive(ctx: Context) -> None:
 
     after = bool(stages.planned(cfg))
     check_entry = seed_check_entry(cfg, folder, ctx.entries)
+    from .open_lane import workflow
+
+    # a python_then_lean run keeps a fixed schedule of phases: patience does not apply (core.open_lane.workflow)
+    phased = workflow.is_phased(cfg)
     ended = f"the round limit ({cfg['rounds_max']})"  # why the proof rounds ended, when they ended for good
     k = max(run.next_round(), 1)
     while k <= cfg["rounds_max"] and not (after and stages.started(run)):
         first = (k - 1) * per_round
         fresh = not run.round_done(k) and run.read(k, "attempt_0/response.md") is None
         if fresh:
-            if cfg.get("open_lane", {}).get("enabled"):
+            if phased:
+                stale, what = 0, ""
+            elif cfg.get("open_lane", {}).get("enabled"):
                 stale = rounds_without_new_artifact(run, ctx.entries, cfg["metric"], cfg.get("budget_ratio"))
                 what = "no new accepted submission" + (f" and no gain in {cfg['metric']}" if cfg["metric"] in GAIN_METRICS else "")
             else:
                 stale = rounds_without_gain(run, ctx.entries, cfg["metric"], cfg.get("budget_ratio"))
                 what = "no gain"
-            if stale >= cfg["patience"]:
+            if not phased and stale >= cfg["patience"]:
                 ctx.log(f"{what} in {stale} rounds (patience {cfg['patience']}); stopping after round {k - 1}")
                 ended = f"{what} in {stale} rounds (patience {cfg['patience']})"
                 break
@@ -555,6 +581,14 @@ def drive(ctx: Context) -> None:
                 ctx.log(f"the {backend.name} backend has no more responses; stopping after round {k - 1}")
                 ended = None
                 break
+        if phased:
+            phase = workflow.phase(cfg, k)
+            if phase == workflow.FORMALIZATION and workflow.transition(run.path) is None:
+                tr = workflow.record_transition(run.path, k)  # once: the research as discovery left it
+                ctx.log("  end of discovery: " + (f"shortlist {', '.join(x['id'] for x in tr['shortlist'])}" if tr["ranked"] else
+                                                  f"no shortlist; {len(tr['candidates'])} candidate(s) unranked"))
+            if not run.round_done(k):
+                ctx.log(f"round {k}: {phase}")
         before = {p["record_id"] for pts in frontier(run.read_archive()).values() for p in pts}
         run_round(ctx, k, backend, first, per_round, "agent", prompt=round_prompt(ctx, k))
         if cfg["lean_spot_check"]:
@@ -614,8 +648,10 @@ def status_text(run: RunDir, diagnostics: bool = False) -> str:
                 f"shortest full-accuracy proof {full}"
             )
     if (cfg.get("open_lane") or {}).get("enabled"):
+        from .open_lane import workflow
         from .open_lane.stages import status_lines
 
+        lines += workflow.lines(run, records)
         lines += status_lines(run)
     return "\n".join(lines)
 

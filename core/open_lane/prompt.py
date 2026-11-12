@@ -35,7 +35,9 @@ from ..model_folder import ModelFolder
 from ..scoring import (brute_force_line, finishing_detail, finishing_ratio, frontier, line_certified, run_cost_of_finishing,
                        summarize)
 from ..util import REPO_ROOT
+from . import research
 from . import surface as surfaces
+from . import workflow
 from .session import Session
 
 MAX_LEMMA_CHARS = 12000
@@ -289,9 +291,10 @@ def protected_interface() -> str:
     )
 
 
-def tools_text(surface: dict, ol: dict | None = None) -> str:
-    """The tools, how they run, and what two of them reach: the files of the Lean project that the run offers."""
-    out = "\n".join(f"- {name}: {spec['description']}" for name, spec in Session.TOOLS.items())
+def tools_text(surface: dict, ol: dict | None = None, table: dict | None = None) -> str:
+    """The tools, how they run, and what two of them reach: the files of the Lean project that the run offers.
+    `table` is another inventory than the five (a python_then_lean run's, session.RESEARCH_TOOLS)."""
+    out = "\n".join(f"- {name}: {spec['description']}" for name, spec in (table or Session.TOOLS).items())
     out += "\nThe tools answer one call at a time, in the order you make them: a call starts when the one before it has answered."
     if ol and ol.get("python_workspace_mb"):
         out += (f" Your Python workspace (py/) holds up to {ol['python_workspace_mb']:g} MB in "
@@ -343,6 +346,32 @@ def static_values(cfg: dict, folder: ModelFolder, entries: list[dict]) -> dict:
         "BUDGETS": budgets,
         "METRIC": metric_text(cfg, folder, entries) + (
             f"\nThe budget grid, per size setting: {grid_text(entries, cfg['budget_ratio'])}." if cfg["metric"] == "Q_grid" else ""),
+        **phase_static_values(cfg, surface),
+    }
+
+
+def phase_static_values(cfg: dict, surface: dict) -> dict:
+    """What the phase templates of a python_then_lean run say in part 1 (core.open_lane.workflow); nothing for
+    another run, whose templates do not ask for it."""
+    if not workflow.is_phased(cfg):
+        return {}
+    from .session import RESEARCH_TOOLS
+
+    sched = workflow.schedule(cfg)
+    (d0, d1), (f0, f1) = sched["discovery_rounds"], sched["formalization_rounds"]
+    probe, res = sched["probe"], sched["research"]
+    allowance = (f"{probe['compile_calls']} lean_check compiles, {probe['auxiliary_submissions']} auxiliary submissions and "
+                 f"{probe['seconds']:,.0f} s of their wall clock (the service's work and Lean's questions included)")
+    if not (probe["compile_calls"] or probe["auxiliary_submissions"]) or not probe["seconds"]:
+        allowance = "none: this run's discovery phase uses no Lean"
+    return {
+        "PHASE_SCHEDULE": (f"This run has two phases on a fixed schedule. Rounds {d0} to {d1} are discovery: Python "
+                           "experiments and mathematical arguments, written to the research folder, with a small Lean "
+                           f"allowance. Rounds {f0} to {f1} are formalization: the strongest saved candidates are turned into "
+                           "accepted Lean results. Neither phase ends early for want of a submission."),
+        "PROBE_ALLOWANCE": allowance,
+        "RESEARCH_LIMITS": f"The folder holds up to {res['mb']:g} MB in {res['files']:,} files.",
+        "RESEARCH_TOOLS": tools_text(surface, cfg["open_lane"], RESEARCH_TOOLS),
     }
 
 
@@ -607,7 +636,7 @@ def stalled(records: list[dict], k: int, n: int) -> bool:
     return not any(r["status"] in ("ok", "verified", "lemma") for r in recent)
 
 
-def aim(records: list[dict], entries: list[dict], cfg: dict, k: int) -> str:
+def aim(records: list[dict], entries: list[dict], cfg: dict, k: int, stall: bool = True) -> str:
     summary = summarize(records, entries, cfg.get("budget_ratio"))
     if cfg["metric"] == "cost_of_finishing":
         ratios = [finishing_ratio(m["cost_of_finishing"]) for v in summary.values() for m in v["networks"].values()]
@@ -621,13 +650,116 @@ def aim(records: list[dict], entries: list[dict], cfg: dict, k: int) -> str:
             text += "\n" + AIM_UNCOVERED_TEXT.format(n=at_one, total=len(ratios))
     else:
         text = AIM_TEXT.format(scores=f"{cfg['metric']}: " + metric_scores(summary, cfg["metric"]))
-    if stalled(records, k, cfg["open_lane"]["stall_rounds"]):
+    if stall and stalled(records, k, cfg["open_lane"]["stall_rounds"]):
         text += "\n" + STALL_TEXT.format(n=cfg["open_lane"]["stall_rounds"])
     return text
 
 
+# part 2 of a python_then_lean run's phases (core.open_lane.workflow) ---------------------------------
+SHORTLIST_ASK = ('This is the last discovery round. Before you end, write Research/shortlist.json: the candidates to '
+                 'formalise, in order of priority, each with the reason for its place, as a JSON list '
+                 '[{"id": "c001", "reason": "..."}, ...]. The formalization sessions start from it.')
+
+
+def phase_now(cfg: dict, k: int) -> str:
+    sched = workflow.schedule(cfg)
+    (d0, d1), (f0, f1) = sched["discovery_rounds"], sched["formalization_rounds"]
+    if workflow.phase(cfg, k) == workflow.DISCOVERY:
+        text = (f"Round {k}: discovery round {k - d0 + 1} of {d1 - d0 + 1}. Formalization runs from round {f0} to round {f1}.")
+        return text + ("\n" + SHORTLIST_ASK if k == d1 else "")
+    return f"Round {k}: formalization round {k - f0 + 1} of {f1 - f0 + 1}, the last proof round being {f1}."
+
+
+def _num_or(x) -> str:
+    return "none" if x is None else (f"{x:,}" if isinstance(x, int) and not isinstance(x, bool) else str(x)[:60])
+
+
+def candidate_line(c: dict) -> str:
+    est = (f"estimated coverage {_num_or(c.get('estimated_coverage'))}, estimated cost {_num_or(c.get('estimated_cost'))}"
+           + (f" ({str(c.get('cost_estimation_method'))[:120]})" if c.get("cost_estimation_method") else ""))
+    bad = f" [record: {'; '.join(c['problems'])}]" if c.get("problems") else ""
+    return (f"- {c['id']}: {str(c.get('title') or '(no title)')[:120]}; your assessment: "
+            f"{str(c.get('agent_assessment') or 'none')[:40]}; {est}{bad}")
+
+
+def research_text(run_dir: Path, max_files: int = 40) -> str:
+    cands = research.candidates(run_dir)
+    files = research.listing(run_dir)
+    if not cands and not files:
+        return "The research folder is empty."
+    lines = ["Candidates:" if cands else "No candidate records yet."]
+    lines += [candidate_line(c) for c in cands]
+    total, count = research.usage(run_dir)
+    lines.append(f"Files ({count}, {total:,} bytes; read them with read_file):")
+    newest = sorted(files, key=lambda f: (-(f.get("round") or 0), f["path"]))[:max_files]
+    lines += [f"- {f['path']} ({f['bytes']:,} bytes" + (f", round {f['round']}" if f.get("round") else "") + ")"
+              for f in sorted(newest, key=lambda f: f["path"])]
+    if len(files) > max_files:
+        lines.append(f"... and {len(files) - max_files} more (research_list lists them all)")
+    return "\n".join(lines)
+
+
+def probes_text(run_dir: Path) -> str:
+    left = workflow.probe_left(run_dir)
+    lines = [f"Left of the allowance: {left['compile_calls']} compiles, {left['auxiliary_submissions']} auxiliary submissions, "
+             f"{left['seconds']:,.0f} s."]
+    entries = workflow.probe_entries(run_dir)
+    if not entries:
+        lines.append("No Lean check yet. None is required.")
+    for e in entries:
+        lines.append(f"- round {e.get('round')}, {e['kind']} for {e.get('candidate_id')}: "
+                     f"{e.get('outcome') or 'did not finish (its share counts whole)'}; question: {str(e.get('question') or '')[:200]}")
+    return "\n".join(lines)
+
+
+def shortlist_text(run_dir: Path) -> str:
+    """The transition's record: the shortlist and the candidates as discovery left them (a read-only copy)."""
+    tr = workflow.transition(run_dir)
+    if tr is None:
+        return "(the transition has not been recorded)"
+    base = Path(run_dir) / tr["snapshot"]
+    cands = {c["id"]: c for c in research.candidates(run_dir, base)}
+    if tr["ranked"]:
+        lines = ["In the order discovery ranked them (a copy of the folder as discovery left it is kept; the folder "
+                 "itself is yours to change):"]
+        for i, x in enumerate(tr["shortlist"], 1):
+            c = cands.get(x["id"])
+            lines.append(f"{i}. {x['id']}: {x['reason'][:400]}")
+            if c is None:
+                lines.append("   (no record of this candidate was saved)")
+            else:
+                lines.append("   " + candidate_line(c)[2:])
+                if c.get("mechanism_claim"):
+                    lines.append(f"   mechanism: {str(c['mechanism_claim'])[:500]}")
+        rest = [c for i, c in cands.items() if i not in {x['id'] for x in tr['shortlist']}]
+        if rest:
+            lines.append("Saved but not shortlisted:")
+            lines += [candidate_line(c) for c in rest]
+        return "\n".join(lines)
+    if not cands:
+        return ("Discovery left no shortlist and no candidate record. Read Research/ (research_list) and the latest notes, "
+                "and choose what to formalise.")
+    return "\n".join(["Discovery left no shortlist. The saved candidates, unranked: choose among them."]
+                     + [candidate_line(c) for c in cands.values()])
+
+
+def phase_values(cfg: dict, run: RunDir, records: list[dict], entries: list[dict], k: int, session, nudge: str) -> dict:
+    values = {"PHASE_NOW": phase_now(cfg, k), "SCOREBOARD": scoreboard(records, entries, cfg.get("budget_ratio"), cfg["metric"]),
+              "RECEIPTS": receipts_text(records, entries, cfg["metric"], None),
+              "RESEARCH": research_text(run.path),
+              "WORKSPACE": workspace_text(session.state.get("carried"), session.state.get("drafts"), session.state.get("py_files"))}
+    if workflow.phase(cfg, k) == workflow.DISCOVERY:
+        values["PROBES"] = probes_text(run.path)
+    else:
+        values["SHORTLIST"] = shortlist_text(run.path)
+        values["AIM"] = aim(records, entries, cfg, k, stall=False) + ("\n" + nudge if nudge else "")
+    return values
+
+
 def build_open_lane_prompt(cfg: dict, folder: ModelFolder, entries: list[dict], run: RunDir, k: int) -> Prompt:
-    part1_t, part2_t = load_template(cfg["prompt_template"])
+    template = workflow.template(cfg, k)  # the phase's in a python_then_lean run, prompt_template otherwise
+    phase = workflow.phase(cfg, k)
+    part1_t, part2_t = load_template(template)
     terms = forbidden(folder)
     part1 = fill(part1_t, static_values(cfg, folder, entries))
     leaked = [t for t in terms if t in part1]
@@ -641,14 +773,19 @@ def build_open_lane_prompt(cfg: dict, folder: ModelFolder, entries: list[dict], 
     # whether it compiled; the backend opens the same session (Session.create returns an existing one)
     session = Session.create(run.round_path(k) / "attempt_0" / "open_lane", cfg, cfg["model"], entries, run.path)
     unread: list[str] = []
-    ready = lock_readiness(run, records, lean_project(cfg), unread) if cfg["open_lane"].get("seed_check") else None
+    ready = (lock_readiness(run, records, lean_project(cfg), unread)
+             if cfg["open_lane"].get("seed_check") and phase != workflow.DISCOVERY else None)
     nudge = not_ready_line(records, entries, ready)
-    values = {
-        "SCOREBOARD": scoreboard(records, entries, cfg.get("budget_ratio"), cfg["metric"]),
-        "RECEIPTS": receipts_text(records, entries, cfg["metric"], ready),
-        "AIM": aim(records, entries, cfg, k) + ("\n" + nudge if nudge else ""),
-        "WORKSPACE": workspace_text(session.state.get("carried"), session.state.get("drafts"), session.state.get("py_files")),
-    }
+    if phase:
+        values = phase_values(cfg, run, records, entries, k, session, nudge)
+        values["RECEIPTS"] = receipts_text(records, entries, cfg["metric"], ready)
+    else:
+        values = {
+            "SCOREBOARD": scoreboard(records, entries, cfg.get("budget_ratio"), cfg["metric"]),
+            "RECEIPTS": receipts_text(records, entries, cfg["metric"], ready),
+            "AIM": aim(records, entries, cfg, k) + ("\n" + nudge if nudge else ""),
+            "WORKSPACE": workspace_text(session.state.get("carried"), session.state.get("drafts"), session.state.get("py_files")),
+        }
     while True:
         values["LEMMAS"] = accepted_sources(run, records, cfg["shown_top_recipes"], lemma_chars)
         values["NOTES"] = latest_notes(run, k, notes_chars)
@@ -662,7 +799,10 @@ def build_open_lane_prompt(cfg: dict, folder: ModelFolder, entries: list[dict], 
             notes_chars = 0
             trimmed.append("notes")
     stats = {"chars": len(part1) + len(part2), "tokens_estimate": (len(part1) + len(part2)) // CHARS_PER_TOKEN,
-             "trimmed": trimmed, "template": cfg["prompt_template"], "lane": "open", "stalled": stalled(records, k, cfg["open_lane"]["stall_rounds"])}
+             "trimmed": trimmed, "template": template, "lane": "open",
+             "stalled": stalled(records, k, cfg["open_lane"]["stall_rounds"]) if not phase else False}
+    if phase:
+        stats.update(phase=phase, workflow_mode=workflow.PYTHON_THEN_LEAN)
     if unread:  # for the log: the prompt says nothing about these proofs' readiness for the seed check
         stats["lock_unread"] = unread
     return Prompt(part1, part2, stats)

@@ -1,4 +1,5 @@
-"""One open-lane session: the agent's workspace, its five tools, their budgets and their log.
+"""One open-lane session: the agent's workspace, its five tools (seven in a python_then_lean proof round), their
+budgets and their log.
 
 A session lives in an attempt's folder:
 
@@ -59,6 +60,13 @@ or a submission still running then is stopped, with every process it started, an
 the agent wrote is saved before a call starts (a module before it is compiled, run_python's code before it
 runs, as python/<n>.py), so a call or a session that is stopped loses nothing of it.
 
+A proof round of a python_then_lean run (core.open_lane.workflow) records its phase (discovery or
+formalization) in session.json's `workflow` and offers RESEARCH_TOOLS: the five, research_write and
+research_list on the run's research folder (core.open_lane.research), run_python with declared input and output
+files and an experiment record per call (experiments/<call>/), and, in discovery, Lean calls that name a
+candidate and a question and draw on the phase's Lean allowance. A submission's candidate is written beside its
+manifest (research.json), never into it.
+
 A session after the proof rounds (core.open_lane.stages) works under a lock (core.open_lane.lock): the
 locked proof's checker modules are in its workspace, cannot be saved over, and are written again from the
 lock before every compile and submission. When the service accepts a scored proof of the seed check, or a
@@ -93,7 +101,9 @@ from ..runner import Limits, run_recipe, workspace_files
 from ..sandbox import Sandbox
 from ..util import REPO_ROOT
 from . import offered
+from . import research
 from . import surface as surfaces
+from . import workflow
 
 MAX_TEXT = 20000  # characters of compiler output, program output or search results returned to the agent
 
@@ -474,6 +484,10 @@ class Session:
         state["py_files"] = "pending" if python else {}
         if stage:
             state["stage"] = stage
+        elif workflow.is_phased(cfg) and k:
+            # a proof round of a python_then_lean run: its phase, and the research tools (stages keep theirs)
+            state["workflow"] = {"mode": workflow.PYTHON_THEN_LEAN, "phase": workflow.phase(cfg, k),
+                                 "research": {"mb": float(ol["research_workspace_mb"]), "files": int(ol["research_workspace_files"])}}
         tmp = path / "session.json.tmp"
         tmp.write_text(json.dumps(state, indent=1))
         tmp.replace(state_path)
@@ -494,6 +508,46 @@ class Session:
         if self.state.get("surface"):
             return self.state["surface"]
         return surfaces.legacy(list(self.state.get("readable") or LEGACY_READABLE), self.state.get("knowledge", "minimal"))
+
+    # the workflow: a proof round of a python_then_lean run ----------------------------------------
+    def phase(self) -> str | None:
+        """discovery or formalization in a python_then_lean run's proof round; None otherwise."""
+        return (self.state.get("workflow") or {}).get("phase")
+
+    @property
+    def tools(self) -> dict:
+        """The tools this session offers: the research inventory in a python_then_lean proof round, else the five."""
+        return RESEARCH_TOOLS if self.phase() else self.TOOLS
+
+    def tool_names(self) -> list[str]:
+        return list(self.tools)
+
+    def _research_limits(self) -> dict:
+        return self.state["workflow"]["research"]
+
+    def _candidate(self, candidate_id, question, required: bool) -> dict:
+        """A discovery Lean call names the candidate it is about (a record in Research/candidates/) and the
+        question it settles; a formalization call may name a candidate."""
+        if candidate_id is None and question is None and not required:
+            return {}
+        if not isinstance(candidate_id, str) or not research.CANDIDATE.match(f"{research.PREFIX}/candidates/{candidate_id}.json"):
+            raise ToolError("candidate_id must name a candidate record you saved: Research/candidates/<id>.json, given as <id>")
+        try:
+            research.read_bytes(self.run_dir(), f"{research.PREFIX}/candidates/{candidate_id}.json")
+        except research.ResearchError:
+            raise ToolError(f"no candidate record Research/candidates/{candidate_id}.json: write it with research_write first")
+        if required and (not isinstance(question, str) or len(question.strip()) < 10):
+            raise ToolError("question must say the specific uncertainty this Lean call settles for the candidate (a sentence or more)")
+        if question is not None and (not isinstance(question, str) or len(question) > 2000):
+            raise ToolError("question must be text of at most 2,000 characters")
+        return {"candidate_id": candidate_id, **({"question": question.strip()} if question else {})}
+
+    def _probe(self, kind: str, cap: float | None, info: dict) -> dict:
+        try:
+            return workflow.probe_reserve(self.run_dir(), kind, cap, {"round": round_of(self.path), **info})
+        except workflow.ProbeRefused as exc:
+            raise ToolError(f"{exc}. Python research (run_python, research_write) stays available; full Lean "
+                            "formalization comes in the formalization phase, with its own budgets")
 
     def _offered(self, oleans: dict, protected: str | None = None, timeout_s: float = EARLY_WORD_TIMEOUT_S) -> dict | None:
         """In a run that holds proofs to its surface: whether these compiled modules use only what the run
@@ -695,6 +749,11 @@ class Session:
         left = self.seconds_left()
         if left is not None:
             out["seconds"] = max(0, int(left))
+        if self.phase() == workflow.DISCOVERY:
+            try:
+                out["discovery_lean_allowance"] = workflow.probe_left(self.run_dir())
+            except workflow.WorkflowError:
+                pass
         return out
 
     # the session's clock ---------------------------------------------------------------------
@@ -790,11 +849,26 @@ class Session:
             raise ToolError(f"the edited module would be longer than {MAX_SOURCE} characters")
         return text
 
+    def _check_budget(self, tool: str) -> None:
+        if self.state["used"][tool] >= self.state["budgets"][tool]:
+            raise ToolError(f"the {tool} budget of this session ({self.state['budgets'][tool]} calls) is used up")
+
+    def _late(self, deadline: float | None) -> float | None:
+        """The seconds left for Lean's further questions after a call: the session's, and a discovery call's share."""
+        left = self.seconds_left()
+        if deadline is not None:
+            rest = deadline - time.monotonic()
+            left = rest if left is None else min(left, rest)
+        return left
+
     def lean_check(self, path: str, source: str | None = None, network: str | None = None, claimed_count: int | None = None,
-                   certificate: list | None = None, edits: list | None = None) -> dict:
+                   certificate: list | None = None, edits: list | None = None, candidate_id: str | None = None,
+                   question: str | None = None) -> dict:
         t0 = time.monotonic()
         args = {"path": path, "network": network, "claimed_count": claimed_count, "certificate": certificate}
-        args.update({k: v for k, v in (("source", source), ("edits", edits)) if v is not None})
+        args.update({k: v for k, v in (("source", source), ("edits", edits), ("candidate_id", candidate_id),
+                                       ("question", question)) if v is not None})
+        probe, outcome, saved = None, "infrastructure_error", None
         try:
             left = self._time_for_call()
             if not isinstance(path, str) or not MODULE_PATH.match(path):
@@ -809,10 +883,20 @@ class Session:
             if path in ((self._lock() or {}).get("modules") or {}):
                 raise ToolError(f"{path} is locked: this session runs the accepted checker unchanged. Write in another "
                                 "module, which may import it.")
+            discovery = self.phase() == workflow.DISCOVERY
+            tag = self._candidate(candidate_id, question, required=discovery) if self.phase() else {}
             if edits is not None:
                 source = self._edited(path, edits)
-            self._spend("lean_check")
             src = self.workspace / path
+            self._check_budget("lean_check")
+            if discovery:
+                try:
+                    probe = self._probe("compile", COMPILE_TIMEOUT_S if left is None else min(COMPILE_TIMEOUT_S, left), {**tag, "path": path})
+                except ToolError as exc:
+                    src.parent.mkdir(parents=True, exist_ok=True)
+                    src.write_text(source)  # the source is kept: it goes on to formalization as a draft
+                    raise ToolError(f"{exc}. {path} is saved, not compiled.")
+            self._spend("lean_check")
             src.parent.mkdir(parents=True, exist_ok=True)
             src.write_text(source)  # saved before anything runs: a compile that is stopped loses nothing
             saved = {"lines": len(source.splitlines()), "sha256": hashlib.sha256(source.encode()).hexdigest()[:16]}
@@ -823,9 +907,14 @@ class Session:
                 cpath.write_text(json.dumps(certificate))
                 cmd += ["--certificate", str(cpath)]
             limit = COMPILE_TIMEOUT_S if left is None else min(COMPILE_TIMEOUT_S, left)
+            deadline = None
+            if probe is not None:
+                limit = min(limit, probe["reserved_s"])
+                deadline = time.monotonic() + probe["reserved_s"]
             res = self._service(cmd, limit)
             if res.get("status") == "timeout" and not res.get("messages"):  # stopped here, at the limit of the call
-                why = (f"the {limit:.0f} s this session had left" if limit < COMPILE_TIMEOUT_S else f"the limit of a compile, {limit:.0f} s")
+                why = (f"the {limit:.0f} s left of the discovery phase's Lean allowance" if probe is not None and limit == probe["reserved_s"]
+                       else f"the {limit:.0f} s this session had left" if limit < COMPILE_TIMEOUT_S else f"the limit of a compile, {limit:.0f} s")
                 res = {"ok": False, "timed_out": True, "module": module_name(path),
                        "messages": f"The compile was stopped: it did not finish within {why}. The module is saved.", "seconds": round(limit)}
             if "error" in res and not res.get("messages"):
@@ -834,6 +923,7 @@ class Session:
             out = {"ok": bool(res.get("ok")), "timed_out": bool(res.get("timed_out")), "module": res.get("module"),
                    "protected_module": res.get("protected_module"), "lines": saved["lines"],
                    "messages": excerpt(text) if text else "(no messages)", "seconds": res.get("seconds")}
+            outcome = "timeout" if out["timed_out"] else "compiled" if out["ok"] else "compiler_error"
             logged = {"ok": out["ok"], "saved": saved, "messages": out["messages"][:500], "errors": error_lines(out["messages"])}
             if out["timed_out"]:
                 logged["timed_out"] = True
@@ -841,31 +931,120 @@ class Session:
             if showed:  # Lean printed what the run does not show the agent (a #print, a goal, a suggestion): kept for review
                 logged["showed"] = [line for _, _, line in showed[:5]]
             compiled = self.workspace / "out" / (path[: -len(".lean")] + ".olean")
-            late = self.seconds_left()
+            late = self._late(deadline)
             if out["ok"] and compiled.is_file() and (late is None or late >= LATE_QUESTION_S):
                 said = self._offered({module_name(path): compiled},
                                      timeout_s=EARLY_WORD_TIMEOUT_S if late is None else min(EARLY_WORD_TIMEOUT_S, late))
                 if said is not None and not said["clean"]:  # said now, while it costs a compile and not a submission
                     out["offered"] = said
                     logged["offered"] = False
+            if probe is not None:
+                out["discovery_check"] = {"outcome": outcome, "candidate_id": tag["candidate_id"],
+                                          "note": "A compile is not an acceptance: only a receipt of submit_candidate says that a "
+                                                  "lemma is proved." if outcome == "compiled" else
+                                                  "Inconclusive: the compile did not finish." if outcome == "timeout" else
+                                                  "The compiler's messages are above."}
+                logged["discovery_check"] = {"outcome": outcome, **tag}
+            elif tag:
+                logged["candidate_id"] = tag["candidate_id"]
+            if probe is not None:
+                workflow.probe_settle(self.run_dir(), probe, time.monotonic() - t0, outcome, {"module_sha256": saved["sha256"]})
+                probe = None
             out["remaining"] = self.remaining()
             self._log("lean_check", args, logged, time.monotonic() - t0)
             return out
         except ToolError as exc:
             self._log("lean_check", args, {"error": str(exc)}, time.monotonic() - t0)
             raise
+        finally:
+            if probe is not None:  # an error, or the session being stopped: settled as it stands
+                workflow.probe_settle(self.run_dir(), probe, time.monotonic() - t0, outcome,
+                                      {"module_sha256": (saved or {}).get("sha256")})
 
-    def run_python(self, code: str, network: str, save_as: str | None = None) -> dict:
+    MAX_DECLARED = 50  # research files a run_python call may declare as inputs, and as outputs
+
+    def _declared(self, files, outputs) -> tuple[dict[str, bytes], list[str]]:
+        """A research run_python call's declared inputs (their contents now) and outputs, checked."""
+        inputs, outs = {}, []
+        for name, value in (("files", files), ("outputs", outputs)):
+            if value is None:
+                continue
+            if not isinstance(value, list) or len(value) > self.MAX_DECLARED or not all(isinstance(x, str) for x in value):
+                raise ToolError(f"{name} must be a list of at most {self.MAX_DECLARED} paths Research/...")
+        for path in files or []:
+            try:
+                research.check_path(path)
+                inputs[path] = research.read_bytes(self.run_dir(), path)
+            except research.ResearchError as exc:
+                raise ToolError(f"files: {exc}")
+        if sum(len(d) for d in inputs.values()) > self._research_limits()["mb"] * MIB:
+            raise ToolError("files: the declared inputs are larger than the research folder may be")
+        for path in outputs or []:
+            try:
+                research.check_path(path)
+            except research.ResearchError as exc:
+                raise ToolError(f"outputs: {exc}")
+            if path in outs:
+                raise ToolError(f"outputs: {path} is declared twice")
+            outs.append(path)
+        return inputs, outs
+
+    def _experiment(self, call: int, code: str, network: str, inputs: dict[str, bytes], outs: list[str], found: dict[str, bytes],
+                    ex, raised: str | None, limit_note: str | None) -> dict:
+        """Keep one research run_python call as it happened, apart from the working files: its code, the inputs
+        it was given, the outputs it wrote, whether it completed, and its diagnostics (experiments/<call>/,
+        read-only). A failed or stopped call is marked incomplete and its outputs are kept only here."""
+        d = self.path / "experiments" / f"{call:03d}"
+        complete = ex.status == "ok" and raised is None
+        status = "complete" if complete else "python_error" if ex.status == "ok" else ex.status
+        rec = {"call": call, "round": round_of(self.path), "phase": self.phase(), "network": network,
+               "code_sha256": research.sha(code.encode()), "status": status, "complete": complete,
+               "runner_status": ex.status, "python_raised": raised, "diagnostics": (ex.error or limit_note or "")[-2000:],
+               "runtime_s": ex.runtime_s, "inputs": [{"path": p, "sha256": research.sha(b), "bytes": len(b)} for p, b in inputs.items()],
+               "outputs": [], "missing": [p for p in outs if p not in found]}
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "code.py").write_text(code)
+        for kind, files in (("inputs", inputs), ("outputs", found)):
+            for p, b in files.items():
+                t = d / kind / p
+                t.parent.mkdir(parents=True, exist_ok=True)
+                t.write_bytes(b)
+        limits = self._research_limits()
+        for p, b in found.items():
+            entry = {"path": p, "sha256": research.sha(b), "bytes": len(b), "kept": False}
+            if complete:
+                try:
+                    research.write(self.run_dir(), p, b, limits, {"via": "run_python", "round": round_of(self.path), "call": call})
+                    entry["kept"] = True
+                except research.ResearchError as exc:
+                    entry["not_kept"] = str(exc)
+            else:
+                entry["not_kept"] = "the experiment did not complete: its outputs are kept in its record only"
+            rec["outputs"].append(entry)
+        (d / "record.json").write_text(json.dumps(rec, indent=1))
+        for dirpath, dirnames, filenames in os.walk(d, topdown=False):
+            for f in filenames:
+                os.chmod(os.path.join(dirpath, f), 0o444)
+            os.chmod(dirpath, 0o555)
+        return rec
+
+    def run_python(self, code: str, network: str, save_as: str | None = None, files: list | None = None,
+                   outputs: list | None = None) -> dict:
         t0 = time.monotonic()
         args = {"code": code, "network": network}
         if save_as is not None:
             args["save_as"] = save_as
+        for k_, v_ in (("files", files), ("outputs", outputs)):
+            if v_ is not None:
+                args[k_] = v_
         try:
             left = self._time_for_call()
             if not isinstance(code, str) or len(code) > MAX_SOURCE:
                 raise ToolError("code must be a string")
             self._network(network)
             python = self._python_enabled()
+            phased = bool(self.phase())
+            inputs, outs = self._declared(files, outputs) if phased else ({}, [])
             if save_as is not None:
                 if not python:
                     raise ToolError("this session has no Python workspace")
@@ -900,7 +1079,8 @@ class Session:
             limit = float(lim["time_limit_s"]) if left is None else min(float(lim["time_limit_s"]), left)
             limits = Limits.from_config({"time_limit_s": limit, "memory_limit_mb": lim["memory_limit_mb"],
                                          "max_proof_mb": lim["max_proof_mb"], "threads_per_recipe": lim["threads_per_recipe"]})
-            recipe = WRAPPER.replace("@@CODE@@", repr(code))
+            input_dirs = sorted({str(Path(p).parent) for p in inputs if p.endswith(".py")})
+            recipe = WRAPPER.replace("@@CODE@@", repr(code)).replace("@@OUTPUTS@@", repr(outs)).replace("@@INPUT_DIRS@@", repr(input_dirs))
             from ..sandbox import choose, protected_paths
 
             sb = choose({"sandbox": self.state["sandbox"], "sandbox_image": "auto-research-compact-proof-sandbox:1"},
@@ -913,18 +1093,41 @@ class Session:
                 except Exception as exc:  # the call's answer must come back whatever this does
                     kept["not_kept"] = [f"the workspace could not be updated ({exc}); it stays as it was"]
 
+            found: dict[str, bytes] = {}
+
+            def collect_outputs(root):  # the declared outputs only, plain files, read with no help from the program
+                try:
+                    have = research._files(root)
+                    for p in outs:
+                        f = have.get(p[len(research.PREFIX) + 1:])
+                        if f is not None and f.stat().st_size <= self._research_limits()["mb"] * MIB:
+                            found[p] = f.read_bytes()
+                except Exception:  # the call's answer must come back whatever this does
+                    pass
+
             if python:
                 (self.path / PY_DIR).mkdir(exist_ok=True)
             ex = run_recipe(recipe, folder.source(), weights, info, 0.0, limits, self.state["sandbox_dir"], sandbox=sb,
                             helpers=RUN_PYTHON_HELPERS, workspace=(self.path / PY_DIR) if python else None,
-                            collect=collect if python else None)
+                            collect=collect if python else None, inputs=inputs or None,
+                            outputs=research.PREFIX if phased else None, collect_outputs=collect_outputs if phased else None)
+            raised = ex.proof.get("raised") if ex.status == "ok" and isinstance(ex.proof, dict) else None
+            note = None
             if ex.status == "ok" and isinstance(ex.proof, dict):
                 output = str(ex.proof.get("stdout", ""))
             elif ex.status == "timeout" and limit < float(lim["time_limit_s"]):
-                output = f"(timeout) stopped: it ran past the {limit:.0f} s this session had left"
+                output = note = f"(timeout) stopped: it ran past the {limit:.0f} s this session had left"
             else:
                 output = f"({ex.status}) {ex.error or ''}"
             out = {"status": ex.status, "output": output[-MAX_TEXT:], "runtime_s": ex.runtime_s}
+            if phased:
+                out["python"] = {"ok": ex.status == "ok" and raised is None, "raised": raised}
+                rec = self._experiment(call, code, network, inputs, outs, found, ex, raised, note)
+                out["experiment"] = {"status": rec["status"], "complete": rec["complete"],
+                                     "record": f"round {rec['round']}, run_python call {call}",
+                                     "outputs": [{k_: v_ for k_, v_ in o.items() if k_ != "sha256"} | {"sha256": o["sha256"][:16]}
+                                                 for o in rec["outputs"]],
+                                     "missing": rec["missing"]}
             if save_as is not None and save_as not in kept.get("removed", []) and self.state["py_files"].get(save_as[3:]):
                 kept["saved"] = [f"{save_as} ({len(code.encode()):,} bytes, before the code ran)"] + [
                     s for s in kept.get("saved", []) if not s.startswith(save_as + " ")]
@@ -934,6 +1137,8 @@ class Session:
             logged = {"status": ex.status, "saved": str(saved), "output": output[:500]}
             if kept:
                 logged["py"] = kept
+            if phased:
+                logged["experiment"] = {"status": out["experiment"]["status"], "outputs": [o["path"] for o in out["experiment"]["outputs"] if o["kept"]]}
             self._log("run_python", args, logged, time.monotonic() - t0)
             return out
         except ToolError as exc:
@@ -956,6 +1161,16 @@ class Session:
                 p = self.path / path  # a draft set apart, its path held by a carried module
                 if p.is_symlink() or not p.is_file():
                     raise ToolError(f"no draft {path}")
+            elif isinstance(path, str) and path.startswith(research.PREFIX + "/") and self.phase():
+                try:
+                    data = research.read_bytes(self.run_dir(), path)
+                except research.ResearchError as exc:
+                    raise ToolError(str(exc))
+                try:
+                    text_ = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    raise ToolError(f"{path} is not text ({len(data):,} bytes): load it in run_python, declared in files") from None
+                return self._read_lines(path, text_, start, lines, args, t0)
             elif isinstance(path, str) and path.startswith(PY_DIR + "/") and self._python_enabled():
                 rel = path[len(PY_DIR) + 1:]
                 if rel not in self.state["py_files"]:
@@ -976,18 +1191,70 @@ class Session:
                                     "the files of the Lean project that this run offers: " + ", ".join(surfaces.names(surface)))
                 if p.is_symlink() or not p.is_file():
                     raise ToolError(f"no file {path} in the Lean project")
-            all_lines = p.read_text().splitlines()
-            start = max(1, int(start or 1))
-            n = max(1, min(int(lines or 200), self.MAX_READ_LINES))
-            chunk = all_lines[start - 1:start - 1 + n]
-            text = "\n".join(f"{start + i}: {ln}" for i, ln in enumerate(chunk))
-            out = {"path": path, "total_lines": len(all_lines), "start": start, "end": start + len(chunk) - 1,
-                   "text": text[:MAX_TEXT], "truncated": len(chunk) < len(all_lines) - start + 1 or len(text) > MAX_TEXT,
-                   "remaining": self.remaining()}
-            self._log("read_file", args, {"lines": len(chunk)}, time.monotonic() - t0)
-            return out
+            return self._read_lines(path, p.read_text(), start, lines, args, t0)
         except ToolError as exc:
             self._log("read_file", args, {"error": str(exc)}, time.monotonic() - t0)
+            raise
+
+    def _read_lines(self, path: str, whole: str, start, lines, args: dict, t0: float) -> dict:
+        all_lines = whole.splitlines()
+        start = max(1, int(start or 1))
+        n = max(1, min(int(lines or 200), self.MAX_READ_LINES))
+        chunk = all_lines[start - 1:start - 1 + n]
+        text = "\n".join(f"{start + i}: {ln}" for i, ln in enumerate(chunk))
+        out = {"path": path, "total_lines": len(all_lines), "start": start, "end": start + len(chunk) - 1,
+               "text": text[:MAX_TEXT], "truncated": len(chunk) < len(all_lines) - start + 1 or len(text) > MAX_TEXT,
+               "remaining": self.remaining()}
+        self._log("read_file", args, {"lines": len(chunk)}, time.monotonic() - t0)
+        return out
+
+    def research_write(self, path: str, text: str) -> dict:
+        """Write a text file of the run's research folder (core.open_lane.research)."""
+        t0 = time.monotonic()
+        args = {"path": path, "text": text}
+        try:
+            self._time_for_call()
+            if not isinstance(text, str):
+                raise ToolError("text must be a string")
+            data = text.encode("utf-8")
+            n = len(list((self.path / "research_writes").glob("*"))) if (self.path / "research_writes").is_dir() else 0
+            try:
+                entry = research.write(self.run_dir(), path, data, self._research_limits(),
+                                       {"via": "research_write", "round": round_of(self.path), "phase": self.phase(), "write": n})
+            except research.ResearchError as exc:
+                raise ToolError(str(exc))
+            kept = self.path / "research_writes" / f"{n:03d}"  # every version, as written, for the record
+            kept.mkdir(parents=True, exist_ok=True)
+            (kept / "path.txt").write_text(path)
+            (kept / "text").write_bytes(data)
+            out = {"path": path, "bytes": entry["bytes"], "sha256": entry["sha256"][:16], "remaining": self.remaining()}
+            if research.CANDIDATE.match(path) or path == research.SHORTLIST:
+                out["note"] = "Saved as your account: nothing in the research folder is checked or counted."
+            self._log("research_write", args, {"bytes": entry["bytes"], "sha256": entry["sha256"][:16]}, time.monotonic() - t0)
+            return out
+        except ToolError as exc:
+            self._log("research_write", args, {"error": str(exc)}, time.monotonic() - t0)
+            raise
+
+    def research_list(self, prefix: str = research.PREFIX) -> dict:
+        """The files of the run's research folder under a prefix, with their sizes and the round that last wrote each."""
+        t0 = time.monotonic()
+        args = {"prefix": prefix}
+        try:
+            self._time_for_call()
+            try:
+                files = research.listing(self.run_dir(), prefix)
+            except research.ResearchError as exc:
+                raise ToolError(str(exc))
+            total, count = research.usage(self.run_dir())
+            lim = self._research_limits()
+            out = {"files": files[:500], "truncated": len(files) > 500,
+                   "folder": f"{total:,} bytes in {count} files of {lim['mb']:g} MB and {lim['files']} files",
+                   "remaining": self.remaining()}
+            self._log("research_list", args, {"files": len(files)}, time.monotonic() - t0)
+            return out
+        except ToolError as exc:
+            self._log("research_list", args, {"error": str(exc)}, time.monotonic() - t0)
             raise
 
     def search_library(self, query: str, max_results: int = 40) -> dict:
@@ -1027,14 +1294,20 @@ class Session:
             raise
 
     def submit_candidate(self, network: str, claimed_count: int, theorem: str, modules: list, scored: dict | None = None,
-                         kind: str = "performance") -> dict:
+                         kind: str = "performance", candidate_id: str | None = None, question: str | None = None) -> dict:
         t0 = time.monotonic()
         args = {"network": network, "claimed_count": claimed_count, "theorem": theorem, "modules": modules, "scored": scored, "kind": kind}
+        args.update({k_: v_ for k_, v_ in (("candidate_id", candidate_id), ("question", question)) if v_ is not None})
+        probe, outcome = None, "infrastructure_error"
         try:
             left = self._time_for_call()
             self._network(network)
             if kind not in ("performance", "auxiliary"):
                 raise ToolError("kind must be performance (a proof of Target) or auxiliary (a lemma)")
+            discovery = self.phase() == workflow.DISCOVERY
+            if discovery and kind != "auxiliary":
+                raise ToolError("the discovery phase takes lemmas only (kind auxiliary), within its Lean allowance: proofs of "
+                                "Target are submitted in the formalization phase")
             if not isinstance(modules, list) or not modules or not all(isinstance(m, str) and MODULE_PATH.match(m) for m in modules):
                 raise ToolError("modules must be a list of Candidate/<Name>.lean paths saved with lean_check")
             for m in modules:
@@ -1051,10 +1324,14 @@ class Session:
                         raise ToolError(f"scored.{key} must be {lock[key]}: the seed check runs the locked checker")
             elif stage.get("name") == "scaling" and kind != "auxiliary":
                 raise ToolError("this session takes lemmas only (kind auxiliary): the proof rounds are over")
+            tag = self._candidate(candidate_id, question, required=discovery) if self.phase() else {}
             applied = self._apply_lock(network, claimed_count, (scored or {}).get("certificate") if isinstance(scored, dict) else None)
             if lock:  # the locked modules always go along, so the constants the manifest names are the locked ones
                 modules = list(dict.fromkeys(list(modules) + list(lock["modules"])))
             modules = self.with_imports(modules)
+            self._check_budget("submit_candidate")
+            if discovery:
+                probe = self._probe("auxiliary", SUBMIT_TIMEOUT_S if left is None else min(SUBMIT_TIMEOUT_S, left), {**tag, "theorem": theorem})
             self._spend("submit_candidate")
             n = len(list((self.path / "submissions").glob("*"))) if (self.path / "submissions").is_dir() else 0
             cdir = self.path / "submissions" / f"{n:03d}"
@@ -1069,14 +1346,23 @@ class Session:
             if scored is not None:
                 manifest["scored"] = scored
             (cdir / "manifest.json").write_text(json.dumps(manifest, indent=1))
+            if self.phase():  # the pipeline's own note, beside the manifest (whose schema is the service's)
+                (cdir / "research.json").write_text(json.dumps({"phase": self.phase(), **tag}, indent=1))
             # hardened: Landlock where it exists, else process mode, which the receipt records as weak
             limit = SUBMIT_TIMEOUT_S if left is None else min(SUBMIT_TIMEOUT_S, left)
+            deadline = None
+            if probe is not None:
+                limit = min(limit, probe["reserved_s"])
+                deadline = time.monotonic() + probe["reserved_s"]
             receipt = self._service(["submit", str(cdir)], limit)
             if "status" not in receipt:
                 receipt = {"status": "error", "reason": receipt.get("error", "no receipt")}
             if receipt.get("status") == "timeout" and "reason" not in receipt:
-                receipt["reason"] = (f"the service did not answer within the {limit:.0f} s this session had left"
+                receipt["reason"] = (f"the service did not answer within the {limit:.0f} s left of the discovery phase's Lean allowance"
+                                     if probe is not None and limit == probe["reserved_s"] else
+                                     f"the service did not answer within the {limit:.0f} s this session had left"
                                      if limit < SUBMIT_TIMEOUT_S else receipt.get("error"))
+            outcome = {"accepted": "accepted", "rejected": "rejected", "timeout": "timeout"}.get(receipt.get("status"), "infrastructure_error")
             receipt["submission"] = n
             (cdir / "receipt.json").write_text(json.dumps(receipt, indent=1))
             if applied:
@@ -1125,7 +1411,7 @@ class Session:
             if offered.applies(surface) and receipt.get("status") == "accepted":
                 # does the accepted proof use only what this run offers of the Lean project's library? Asked of
                 # Lean now, of the modules the service has just compiled; the records ask again if this fails.
-                late = self.seconds_left()
+                late = self._late(deadline)
                 try:
                     if late is not None and late < LATE_QUESTION_S:
                         raise RuntimeError("this session's time ran out")
@@ -1150,20 +1436,32 @@ class Session:
             elif applied and unasked:
                 out["locked_checker"] = {"same": None, "note": "This submission was accepted. Whether it has the locked checker could "
                                                                f"not be asked now ({unasked}); it is asked again when this session ends."}
+            if probe is not None:
+                workflow.probe_settle(self.run_dir(), probe, time.monotonic() - t0, outcome, {"submission": n})
+                probe = None
+                out["discovery_check"] = {"outcome": outcome, "candidate_id": tag["candidate_id"],
+                                          "note": "Accepted: the service proved exactly the statement in the receipt, a lemma "
+                                                  "with no count and no score." if outcome == "accepted" else
+                                                  "Not accepted: the reason is above."}
             out["remaining"] = self.remaining()
             scoring = receipt.get("scoring") or {}
-            outcome = {"status": receipt.get("status"), "scoring": scoring.get("status"),
-                       "reason": (receipt.get("reason") or scoring.get("reason") or "")[:300],
-                       "length": scoring.get("length"), "certified": receipt.get("certified_count")}
+            logged = {"status": receipt.get("status"), "scoring": scoring.get("status"),
+                      "reason": (receipt.get("reason") or scoring.get("reason") or "")[:300],
+                      "length": scoring.get("length"), "certified": receipt.get("certified_count")}
             if "locked_checker" in out:
-                outcome["locked_checker"] = out["locked_checker"]["same"]
+                logged["locked_checker"] = out["locked_checker"]["same"]
             if "offered" in out:
-                outcome["offered"] = out["offered"]["clean"]
-            self._log("submit_candidate", args, outcome, time.monotonic() - t0)
+                logged["offered"] = out["offered"]["clean"]
+            if tag:
+                logged.update(tag)
+            self._log("submit_candidate", args, logged, time.monotonic() - t0)
             return out
         except ToolError as exc:
             self._log("submit_candidate", args, {"error": str(exc)}, time.monotonic() - t0)
             raise
+        finally:
+            if probe is not None:  # an error, or the session being stopped: settled as it stands
+                workflow.probe_settle(self.run_dir(), probe, time.monotonic() - t0, outcome)
 
     CONTEXT_FILE = "context.jsonl"
 
@@ -1290,16 +1588,17 @@ class Session:
     }
 
     def call(self, tool: str, arguments: dict) -> dict:
-        if tool not in self.TOOLS:
-            raise ToolError(f"no tool {tool!r}; the tools are {sorted(self.TOOLS)}")
+        tools = self.tools
+        if tool not in tools:
+            raise ToolError(f"no tool {tool!r}; the tools are {sorted(tools)}")
         if not isinstance(arguments, dict):
             raise ToolError("arguments must be an object")
         fn = getattr(self, tool)
-        required = self.TOOLS[tool]["schema"]["required"]
+        required = tools[tool]["schema"]["required"]
         missing = [k for k in required if k not in arguments]
         if missing:
             raise ToolError(f"{tool} needs {missing}")
-        allowed = set(self.TOOLS[tool]["schema"]["properties"])
+        allowed = set(tools[tool]["schema"]["properties"])
         extra = sorted(set(arguments) - allowed)
         if extra:
             raise ToolError(f"{tool} does not take {extra}")
@@ -1310,6 +1609,53 @@ class Session:
             if left is None or left <= 0:
                 raise
             raise ToolError(f"{exc} ({left:.0f} s of this session left)") from None
+
+
+def _research_tools() -> dict:
+    """The tools of a python_then_lean run's proof rounds (core/open_lane/workflow.py): the five, with a research
+    folder (Research/) to write, list and read, run_python's declared inputs and outputs, and the candidate and
+    question a discovery Lean call names. The five keep their names and arguments."""
+    import copy
+
+    t = copy.deepcopy(Session.TOOLS)
+    tag = {"candidate_id": {"type": "string", "description": "the research candidate this call is about (Research/candidates/<id>.json, "
+                                                             "given as <id>): required in the discovery phase"},
+           "question": {"type": "string", "description": "the specific uncertainty this call settles for the candidate: "
+                                                         "required in the discovery phase"}}
+    t["lean_check"]["description"] += (" In the discovery phase a call must name candidate_id and question, and counts "
+                                       "against the discovery phase's Lean allowance (a total over the phase); a compile "
+                                       "is never an acceptance.")
+    t["lean_check"]["schema"]["properties"].update(copy.deepcopy(tag))
+    t["submit_candidate"]["description"] += (" In the discovery phase only lemmas (kind auxiliary) are taken, naming "
+                                             "candidate_id and question, within the discovery phase's Lean allowance. In "
+                                             "the formalization phase candidate_id may name the research candidate a "
+                                             "proof comes from.")
+    t["submit_candidate"]["schema"]["properties"].update(copy.deepcopy(tag))
+    t["run_python"]["description"] += (" `files` (paths Research/...) are put in the folder, read-only, at the same "
+                                       "paths, and a folder of a .py among them is importable; `outputs` (paths "
+                                       "Research/...) are what your code writes at out/Research/..., kept in the research "
+                                       "folder when the code completes. Every call is kept as an experiment record (its "
+                                       "code, inputs, outputs and status); `python.ok` says whether your code raised.")
+    t["run_python"]["schema"]["properties"].update({
+        "files": {"type": "array", "items": {"type": "string"}, "description": "optional: research files to read, Research/..."},
+        "outputs": {"type": "array", "items": {"type": "string"}, "description": "optional: research files your code writes, at out/Research/..."}})
+    t["read_file"]["description"] = t["read_file"]["description"].replace(
+        "of a text file of your Python workspace (py/...)", "of a text file of your Python workspace (py/...), of a text "
+        "file of the research folder (Research/...)")
+    t["research_write"] = {
+        "description": "Write a text file of the run's research folder (Research/...), kept for every later session of "
+                       "the run: notes, candidate records (Research/candidates/<id>.json), the shortlist "
+                       "(Research/shortlist.json), experiment code. Nothing in it is checked or counted.",
+        "schema": {"type": "object", "properties": {"path": {"type": "string", "description": "Research/<folder>/.../<name>"},
+                                                    "text": {"type": "string"}}, "required": ["path", "text"]}}
+    t["research_list"] = {
+        "description": "List the files of the run's research folder under a prefix (default Research/), with their sizes "
+                       "and the round that last wrote each.",
+        "schema": {"type": "object", "properties": {"prefix": {"type": "string"}}, "required": []}}
+    return t
+
+
+RESEARCH_TOOLS = _research_tools()
 
 
 # The fixed rules lane's helpers.py names that lane's rules, which this lane's agent is not told
@@ -1331,21 +1677,30 @@ import io, contextlib, os, sys, traceback
 import numpy as np
 
 CODE = @@CODE@@
+OUTPUTS = @@OUTPUTS@@
+INPUT_DIRS = @@INPUT_DIRS@@
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def make_proof(weights, info, knob):
-    kept = os.path.join(HERE, "py")
-    if os.path.isdir(kept) and kept not in sys.path:
-        sys.path.append(kept)  # after the standard library and numpy: a file in py/ never hides them
+    for d in ["py"] + INPUT_DIRS:
+        kept = os.path.join(HERE, d)
+        if os.path.isdir(kept) and kept not in sys.path:
+            sys.path.append(kept)  # after the standard library and numpy: a file of yours never hides them
+    for p in OUTPUTS:  # declared outputs are written at out/Research/...
+        os.makedirs(os.path.dirname(os.path.join(HERE, "out", p)), exist_ok=True)
     buf = io.StringIO()
+    raised = None
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
         try:
             exec(compile(CODE, "<run_python>", "exec"), {"weights": weights, "info": info, "np": np, "__name__": "__main__"})
-        except BaseException:
+        except BaseException as exc:
             buf.write(traceback.format_exc())
+            if not (isinstance(exc, SystemExit) and exc.code in (0, None)):
+                raised = (type(exc).__name__ + ": " + str(exc))[:500]
     text = buf.getvalue()
     for here in {HERE, os.path.realpath(HERE)}:  # paths as the code sees them: py/name.py, not the machine's folder
         text = text.replace(here + os.sep, "")
-    return {"stdout": text[-20000:]}
+        raised = raised.replace(here + os.sep, "") if raised else raised
+    return {"stdout": text[-20000:], "raised": raised}
 '''

@@ -76,6 +76,8 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
     stage = session.state.get("stage") or {}
     if stage:
         base["stage"] = stage["name"]
+    elif session.phase():  # a python_then_lean proof round: its phase (core.open_lane.workflow); never a stage
+        base["phase"] = session.phase()
     by_id = {e["id"]: e for e in ctx.entries}
     surface = session.surface()
     # whether every run of Claude Code in this session ran with the run's five tools and nothing else, and with
@@ -113,6 +115,11 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
             "receipt": {k_: receipt.get(k_) for k_ in ("status", "reason", "scoring", "digests", "receipt_path")},
             "versions": ctx.versions,
         }
+        tag_file = path / "submissions" / f"{int(n):03d}" / "research.json"
+        if tag_file.is_file():  # the research candidate a submission of a python_then_lean run names (the agent's word)
+            tag = json.loads(tag_file.read_text())
+            if tag.get("candidate_id"):
+                rec["research_candidate"] = tag["candidate_id"]
         if stage and lock_file.is_file():
             applied = json.loads(lock_file.read_text())
             rec["lock"] = {"digest": applied.get("digest"), "of": stage.get("of"), "intact": bool(applied.get("intact")),
@@ -199,7 +206,9 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
         out.append(rec)
     if not out:
         out.append({**base, "record_id": record_id(ctx.run.run_id, k, j), "network": None, "setting": None, "knob": None,
-                    "budget": None, "status": "no_submission", "error": "the session submitted no candidate", "runtime_s": 0.0,
+                    "budget": None, "status": "no_submission",
+                    "error": ("a discovery round: research, no submission (the plan in this phase)" if base.get("phase") == "discovery"
+                              else "the session submitted no candidate"), "runtime_s": 0.0,
                     "peak_rss_mb": None, "sandbox": None, **_fields(), "versions": ctx.versions})
     return out
 

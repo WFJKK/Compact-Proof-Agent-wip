@@ -292,13 +292,35 @@ def _place_workspace(src: Path, box: Path, container: bool) -> None:
     os.symlink(os.path.join("out", WORKSPACE), box / WORKSPACE)
 
 
+def _place_inputs(inputs: dict[str, bytes], box: Path) -> None:
+    """Declared input files, read-only, at their paths in the folder (relative paths of plain parts only)."""
+    for rel, data in inputs.items():
+        parts = rel.split("/")
+        if not parts or any(p in ("", ".", "..") or p.startswith(".") for p in parts) or parts[0] in ("out", "tmp"):
+            raise ValueError(f"not an input path: {rel!r}")
+        target = box.joinpath(*parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        os.chmod(target, 0o444)
+    for top in {rel.split("/")[0] for rel in inputs}:
+        for dirpath, dirnames, _ in os.walk(box / top):
+            os.chmod(dirpath, 0o555)
+
+
 def _prepare(box: Path, recipe_source: str, model_source: str, weights: dict, info: dict, knob: float, limits: Limits, sb: Sandbox,
-             helpers: bool = True, workspace: Path | None = None):
+             helpers: bool = True, workspace: Path | None = None, inputs: dict[str, bytes] | None = None,
+             outputs: str | None = None):
     box.mkdir()
     (box / "out").mkdir()
     (box / "tmp").mkdir()
     if workspace is not None:
         _place_workspace(Path(workspace), box, sb.mode == "container")
+    if outputs is not None:  # declared outputs are written under out/<outputs>
+        (box / "out" / outputs).mkdir(parents=True)
+        if sb.mode == "container":
+            os.chmod(box / "out" / outputs, 0o777)
+    if inputs:
+        _place_inputs(inputs, box)
     (box / "recipe.py").write_text(recipe_source)
     for name, text in sandbox_texts(model_source, helpers).items():
         (box / name).write_text(text, encoding="utf-8")
@@ -383,11 +405,16 @@ def run_recipe(
     helpers: bool = True,
     workspace: Path | None = None,
     collect=None,
+    inputs: dict[str, bytes] | None = None,
+    outputs: str | None = None,
+    collect_outputs=None,
 ) -> Execution:
     """Run make_proof(weights, info, knob) from recipe_source in a fresh sandbox; return what came back.
     With helpers=False the folder holds no helpers.py (the open lane's run_python). With a workspace, its files
     are put in the folder at py/ (WORKSPACE), and collect is called with that folder once the recipe and
-    everything it started have ended, whatever became of the run: what it wrote there is for collect to keep."""
+    everything it started have ended, whatever became of the run: what it wrote there is for collect to keep.
+    `inputs` ({relative path: bytes}) are put in the folder read-only; with `outputs`, out/<outputs> is made
+    for the recipe to write in, and collect_outputs is called with it at the same moment as collect."""
     sb = sandbox or PROCESS
     root = Path(tempfile.mkdtemp(prefix="cpl-sandbox-", dir=sandbox_root))
     box = root / "box"
@@ -395,7 +422,7 @@ def run_recipe(
     if sb.mode != "container":
         _become_subreaper()
     try:
-        _prepare(box, recipe_source, model_source, weights, info, knob, limits, sb, helpers, workspace)
+        _prepare(box, recipe_source, model_source, weights, info, knob, limits, sb, helpers, workspace, inputs, outputs)
         (root / "logs").mkdir()
         with open(root / "logs" / "stdout.txt", "w+b") as out_f, open(root / "logs" / "stderr.txt", "w+b") as err_f:
             start = time.monotonic()
@@ -410,6 +437,8 @@ def run_recipe(
             _reap_marked(sandbox_id)  # kill anything that escaped the process group (for example via setsid)
         if collect is not None and workspace is not None:
             collect(box / "out" / WORKSPACE)
+        if collect_outputs is not None and outputs is not None:
+            collect_outputs(box / "out" / outputs)
         _remove(root)
 
 
