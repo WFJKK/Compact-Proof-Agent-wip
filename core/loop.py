@@ -519,17 +519,33 @@ def start(config_path: str | Path, log=print, run_id: str | None = None, overrid
         log(f"workflow python_then_lean: discovery rounds {sched['discovery_rounds'][0]} to {sched['discovery_rounds'][1]}, "
             f"formalization rounds {sched['formalization_rounds'][0]} to {sched['formalization_rounds'][1]}")
     log(f"run {cfg['run_id']} at {run.path}")
+    if cfg["backend"] == "claude_code" and cfg.get("auth") == "api_key":
+        b = cfg["api_budget"]
+        log(f"billed to the API key in {cfg['api_key_env']}: at most ${float(b['run_usd']):.2f} for the run and "
+            f"${float(b['round_usd']):.2f} for a round, by Claude Code's own count (spend.jsonl)")
     if overrides:
         log("set on the command line: " + ", ".join(f"{k}={v}" for k, v in overrides.items()))
     return open_context(run, run.config(), log, surface_checked=True)
 
 
-def resume(run_path: str | Path, log=print) -> Context:
+def resume(run_path: str | Path, log=print, budget_usd: float | None = None) -> Context:
     run_path = Path(run_path).expanduser().resolve()
     run = RunDir(run_path.parent, run_path.name)
     if not run.exists():
         raise LoopError(f"no run at {run_path}")
-    return open_context(run, run.config(), log)
+    cfg = run.config()
+    if budget_usd is not None:  # a new budget for a run billed to an API key, kept in its spend log
+        from .open_lane import api_budget
+
+        if cfg.get("auth") != "api_key":
+            raise LoopError("this run is not billed to an API key, so it has no budget to change")
+        errors = api_budget.check({**cfg["api_budget"], "run_usd": budget_usd})
+        if errors:
+            raise LoopError("; ".join(errors))
+        before = api_budget.state(run.path, cfg["api_budget"])
+        api_budget.set_run_budget(run.path, budget_usd)
+        log(f"the run's API budget is now ${budget_usd:.2f} (was ${before['run_usd']:.2f}; ${before['spent']:.2f} counted so far)")
+    return open_context(run, cfg, log)
 
 
 def drive(ctx: Context) -> None:
@@ -571,6 +587,11 @@ def drive(ctx: Context) -> None:
             if not phased and stale >= cfg["patience"]:
                 ctx.log(f"{what} in {stale} rounds (patience {cfg['patience']}); stopping after round {k - 1}")
                 ended = f"{what} in {stale} rounds (patience {cfg['patience']})"
+                break
+            spent = backend.exhausted(run.path) if hasattr(backend, "exhausted") else None
+            if spent:  # auth api_key: the run's budget is spent; resume --budget-usd raises it and goes on
+                ctx.log(f"{spent}; stopping after round {k - 1} (raise it with resume --budget-usd to go on)")
+                ended = None  # not an end of the proof rounds: nothing is locked
                 break
             refused = consecutive_refusals(run)
             if refused >= cfg["max_consecutive_refusals"]:
@@ -669,6 +690,9 @@ def main(argv=None):
         p = sub.add_parser(name)
         p.add_argument("--run", required=True, help="the run's folder, <runs_dir>/<run_id>")
     sub.choices["status"].add_argument("--diagnostics", action="store_true", help="show each attempt's diagnostics")
+    p_run.add_argument("--auth", choices=("login", "api_key"), help="who pays the sessions (default: the config's auth)")
+    p_run.add_argument("--budget-usd", type=float, help="auth api_key: what the whole run may spend, in dollars")
+    sub.choices["resume"].add_argument("--budget-usd", type=float, help="auth api_key: a new budget for the whole run, in dollars")
     args = ap.parse_args(argv)
     ctx = None
     try:
@@ -677,9 +701,14 @@ def main(argv=None):
             print(status_text(RunDir(path.parent, path.name), diagnostics=args.diagnostics))
             return 0
         if args.cmd == "run":
-            ctx = start(args.config, run_id=args.run_id, overrides=parse_overrides(args.settings))
+            overrides = parse_overrides(args.settings)
+            if args.auth:
+                overrides["auth"] = args.auth
+            if args.budget_usd is not None:
+                overrides["api_budget.run_usd"] = args.budget_usd
+            ctx = start(args.config, run_id=args.run_id, overrides=overrides)
         else:
-            ctx = resume(args.run)
+            ctx = resume(args.run, budget_usd=args.budget_usd)
         drive(ctx)
         print(status_text(ctx.run))
         return 0

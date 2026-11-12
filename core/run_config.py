@@ -174,6 +174,26 @@ def _number(cfg, key, errors, integer=False, minimum=None, positive=False):
         errors.append(f"{key} must be at least {minimum}")
 
 
+AUTH_MODES = ("login", "api_key")
+
+
+def auth_errors(cfg: dict) -> list[str]:
+    """Who pays a claude_code run (`auth`), and the dollars an API key may spend (`api_budget`)."""
+    from .open_lane.api_budget import check
+
+    auth = cfg.get("auth", "login")
+    if auth not in AUTH_MODES:
+        return [f"auth must be login or api_key, not {auth!r}"]
+    if auth != "api_key":
+        return []
+    errors = []
+    if cfg.get("backend") != "claude_code" or not (cfg.get("open_lane") or {}).get("enabled"):
+        errors.append("auth api_key is for the open lane's claude_code backend (the fixed rules lane bills a key with "
+                      "backend api)")
+    errors += check(cfg.get("api_budget"))
+    return errors
+
+
 def validate(cfg: dict, source: str = "run config") -> None:
     errors = []
     if not isinstance(cfg["run_id"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", cfg["run_id"]):
@@ -210,6 +230,7 @@ def validate(cfg: dict, source: str = "run config") -> None:
         errors.append("api_key_env must name an environment variable")
     elif cfg["api_key_env"] in FORBIDDEN_KEY_VARIABLES:
         errors.append(f"api_key_env must not be {cfg['api_key_env']}: Claude Code would bill its own work to that key")
+    errors += auth_errors(cfg)
     ws = cfg.get("api_workspace_env")
     if not isinstance(ws, str) or not ws or ws in FORBIDDEN_KEY_VARIABLES:
         errors.append("api_workspace_env must name an environment variable")

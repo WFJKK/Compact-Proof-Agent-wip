@@ -39,10 +39,11 @@ from pathlib import Path
 
 from ..agent.backends import BackendError, Response
 from ..agent.backends.api import StopRun
-from ..agent.backends.claude_code import (ClaudeCodeBackend, _join, _parse_output, cli_init, isolation_problems, model_events,
-                                          models_used, refused, swapped)
+from ..agent.backends.claude_code import (API_KEY_SOURCE, KEY_VARIABLES, ClaudeCodeBackend, _join, _parse_output, cli_init,
+                                          isolation_problems, model_events, models_used, refused, swapped)
 from ..util import REPO_ROOT
-from .session import Session, ToolError, kill_tree
+from . import api_budget
+from .session import Session, ToolError, kill_tree, round_of
 
 TOOL_NAMES = ("lean_check", "run_python", "search_library", "read_file", "submit_candidate")
 SERVER = "cpl"
@@ -171,7 +172,8 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
 
     def command_line(self, mcp_config: Path | None = None, session: Session | None = None) -> list[str]:
         tools, system = inventory(session)
-        cmd = [self.command, "-p", "--tools", "", "--output-format", "stream-json", "--verbose", "--no-session-persistence"]
+        cmd = [self.command, "-p", *self.key_flags()]  # with auth api_key: --bare and the key's helper
+        cmd += ["--tools", "", "--output-format", "stream-json", "--verbose", "--no-session-persistence"]
         cmd += ["--setting-sources", "", "--disable-slash-commands", "--strict-mcp-config"]
         if mcp_config is not None:
             cmd += ["--mcp-config", str(mcp_config), "--allowedTools", ",".join(tools)]
@@ -186,8 +188,11 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
         elan = Path("~/.elan/bin").expanduser()
         if elan.is_dir():
             env["PATH"] = f"{elan}:{os.environ.get('PATH', '')}"
-        code = (f"import sys; sys.path.insert(0, {str(REPO_ROOT)!r}); from core.open_lane.mcp_server import main; "
-                f"sys.exit(main(['--session', {str(session.path)!r}]))")
+        # the CLI hands its own environment to the tools' server, which needs no key: it drops them first, so no
+        # program it starts (the Lean service, the agent's Python) can see one
+        forget = sorted({*KEY_VARIABLES, "ANTHROPIC_CUSTOM_HEADERS", *(v for v in (self.key_var, self.workspace_var) if v)})
+        code = (f"import os, sys; [os.environ.pop(v, None) for v in {forget!r}]; sys.path.insert(0, {str(REPO_ROOT)!r}); "
+                f"from core.open_lane.mcp_server import main; sys.exit(main(['--session', {str(session.path)!r}]))")
         cfg = {"mcpServers": {SERVER: {"command": self.cfg["open_lane"]["python"] or shutil.which("python3") or "python3",
                                       "args": ["-c", code], "env": env}}}
         path = Path(where) / "mcp.json"
@@ -214,11 +219,30 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
                           "it ran it with (" + "; ".join(problems) + "); none of this session's proofs is counted, and the run stops")
         return init
 
+    def exhausted(self, run_path: Path) -> str | None:
+        """Why no session can start, when the run's API budget is spent; None otherwise (and always under a login)."""
+        if self.auth != "api_key":
+            return None
+        st = api_budget.state(run_path, self.cfg["api_budget"])
+        return api_budget.spent_why(st) if api_budget.left(st) < api_budget.MIN_CAP_USD else None
+
+    def _source_problem(self, init: dict | None) -> str | None:
+        """With auth api_key, a try whose init event says the CLI billed anything but the key's helper must not
+        go on (a login it found, a key from elsewhere)."""
+        if self.auth != "api_key" or init is None:
+            return None
+        if init.get("apiKeySource") != API_KEY_SOURCE:
+            return (f"Claude Code billed {init.get('apiKeySource')!r} for this session, where auth api_key allows only "
+                    f"{API_KEY_SOURCE!r}")
+        return None
+
     def respond(self, prompt, index: int, where=None) -> Response:
         session = self.session(where)
         mcp = self.mcp_config(session, Path(where))
         cmd = self.command_line(mcp, session)
         tools, _ = inventory(session)
+        k = round_of(session.path) or 0
+        caps, costs, sources, ended = [], [], [], None
         t0 = time.monotonic()
         failures = []
         tries = int(self.retries["tries"])
@@ -226,26 +250,58 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
         reserve = float(self.cfg["open_lane"].get("notes_reserve_seconds", 0))  # a run from before the reserve has none
         events, declined, init = [], None, None
         for attempt in range(tries):
+            this_try, n = list(cmd), None
+            if self.auth == "api_key":
+                st = api_budget.state(self.run_path, self.cfg["api_budget"])
+                cap = api_budget.cap(st, k)
+                if cap <= 0:  # what the session submitted stands; the loop ends the rounds when the run's is spent
+                    ended = api_budget.spent_why(st, k)
+                    self.log(f"  {ended}; the session ends with what it submitted")
+                    data, messages, text = {}, [], f"({ended})"
+                    break
+                n = api_budget.next_try(self.run_path, k)
+                api_budget.start(self.run_path, k, n, cap)
+                caps.append(cap)
+                this_try += ["--max-budget-usd", f"{cap:.2f}"]
+
+            def early(line):
+                return _init_problem(line, tools) or self._source_problem(cli_init(line))
+
+            timed_out, raw = False, ""
             with tempfile.TemporaryDirectory(prefix="cpl-claude-code-") as cwd:
                 session.start_clock(timeout, reserve)  # read by the tools' server when the CLI starts it
                 try:
-                    r = self.run(cmd, prompt.text, self.env, cwd, timeout,
-                                 **({"early": lambda line: _init_problem(line, tools)} if self.early else {}))
+                    r = self.run(this_try, prompt.text, self.env, cwd, timeout, **({"early": early} if self.early else {}))
+                    raw = r.stdout or ""
                 except EarlyStop as exc:
                     # what the CLI said it loaded fails the check: stopped before the agent worked in the session
+                    self._settle(k, n, exc.output, "stopped at its init event")
                     self._context(session, exc.output)  # keeps the verdict and stops the run
-                    raise StopRun(f"Claude Code was stopped at the start of the session: {exc}") from exc
+                    raise StopRun(f"Claude Code was stopped at the start of the session: {self.scrub(exc)}") from exc
                 except subprocess.TimeoutExpired as exc:
                     # the session's wall clock ran out: what it submitted stands once what the CLI printed until then
                     # shows the context it ran in; the text is what we have
-                    r = None
-                    init = self._context(session, _decoded(exc.stdout if exc.stdout is not None else exc.output), timed_out=True)
+                    r, timed_out = None, True
+                    raw = _decoded(exc.stdout if exc.stdout is not None else exc.output)
+                    self._settle(k, n, raw, "timed out")
+                    init = self._context(session, raw, timed_out=True)
                     retry, what = False, f"the session did not finish within {timeout:g} s"
                 except OSError as exc:
+                    if n is not None:
+                        api_budget.end(self.run_path, k, n, 0.0, "not started")
                     raise StopRun(f"could not run the Claude Code CLI: {exc}") from exc
             if r is not None:
-                out = (r.stdout or "").strip()
+                out = self.scrub(raw).strip()
                 data, messages = _parse_output(out)
+                cost = self._settle(k, n, out, (data or {}).get("subtype") if isinstance(data, dict) else None)
+                if cost is not None:
+                    costs.append(cost)
+                found = cli_init(out)
+                if found is not None:
+                    sources.append(found.get("apiKeySource"))
+                    problem = self._source_problem(found)
+                    if problem:
+                        raise StopRun(problem + "; the run stops")
                 events = model_events(out)
                 failed = r.returncode != 0 or not isinstance(data, dict) or bool(data.get("is_error"))
                 if failed and cli_init(out) is None and not messages:
@@ -268,7 +324,12 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
                 if isinstance(data, dict) and data.get("subtype") == "error_max_turns":
                     data, text = data, _join(messages) if messages else "(the session reached its turn limit)"
                     break
-                retry, what = self._classify(message)
+                if isinstance(data, dict) and data.get("subtype") == "error_max_budget_usd":
+                    ended = f"the session reached its spending cap (${caps[-1]:.2f})" if caps else "the session reached its spending cap"
+                    self.log(f"  {ended}; the session ends with what it submitted")
+                    text = _join(messages) if messages else f"({ended})"
+                    break
+                retry, what = self._classify(self.scrub(message))
             failures.append(what)
             if not retry:
                 if r is None:
@@ -283,7 +344,7 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
 
         Path(where).mkdir(parents=True, exist_ok=True)
         tmp = Path(where) / "response_raw.json.tmp"
-        tmp.write_text(json.dumps({**data, "assistant_messages": messages, "cli_init": init}))
+        tmp.write_text(self.scrub(json.dumps({**data, "assistant_messages": messages, "cli_init": init})))
         tmp.replace(Path(where) / "response_raw.json")
         usage = data.get("usage") or {}
         last_stop = messages[-1].get("stop_reason") if messages else None
@@ -292,9 +353,9 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
             "backend": self.name,
             "source": data.get("session_id"),
             "model": self.cfg["agent_model"],
-            "stop_reason": "refusal" if declined is not None else
+            "stop_reason": "refusal" if declined is not None else "budget" if ended else
                            (last_stop or data.get("stop_reason") or ("end_turn" if not data.get("is_error") else "error")),
-            "stop_details": {"category": declined} if declined is not None else None,
+            "stop_details": {"category": declined} if declined is not None else {"budget": ended} if ended else None,
             "models_used": models_used(data),
             "safety_stops": data.get("safety_stops"),
             "model_events": events,
@@ -303,7 +364,9 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
             "output_tokens": int(usage.get("output_tokens") or 0),
             "cache_creation_input_tokens": int(usage.get("cache_creation_input_tokens") or 0),
             "cache_read_input_tokens": int(usage.get("cache_read_input_tokens") or 0),
-            "cost_usd": 0.0,
+            "auth": self.auth,
+            "billed_to": sources[-1] if sources else None,  # the CLI's apiKeySource
+            "cost_usd": round(sum(costs), 6) if self.auth == "api_key" else 0.0,  # what the tries cost, by the CLI's count
             "api_equivalent_usd": data.get("total_cost_usd"),
             "num_turns": data.get("num_turns"),
             "assistant_messages": len(messages),
@@ -313,7 +376,25 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
             "failed_tries": failures,
             "seconds": round(time.monotonic() - t0, 1),
         }
-        return Response(text=str(text), meta=meta)
+        if self.auth == "api_key":
+            st = api_budget.state(self.run_path, self.cfg["api_budget"])
+            meta["api_budget"] = {"caps_usd": caps, "round_counted_usd": round(st["rounds"].get(k, 0.0), 6),
+                                  "run_counted_usd": round(st["spent"], 6), "round_usd": st["round_usd"], "run_usd": st["run_usd"],
+                                  "unreported_tries": st["unreported"]}
+            self.log(f"  API: round {k} ${st['rounds'].get(k, 0.0):.2f}; the run ${st['spent']:.2f} of ${st['run_usd']:.2f}"
+                     + (f" ({st['unreported']} tries counted at their caps: the CLI reported no cost)" if st["unreported"] else ""))
+        return Response(text=self.scrub(str(text)), meta=meta)
+
+    def _settle(self, k: int, n: int | None, out: str, ended: str | None) -> float | None:
+        """With auth api_key: the try's cost as the CLI reported it (its result event), into the spend log; a try
+        with none counts at its cap. Returns the cost, or None."""
+        if n is None:
+            return None
+        data, _ = _parse_output(self.scrub(out or ""))
+        cost = data.get("total_cost_usd") if isinstance(data, dict) else None
+        cost = float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
+        api_budget.end(self.run_path, k, n, cost, ended)
+        return cost
 
 
 def _decoded(out) -> str:

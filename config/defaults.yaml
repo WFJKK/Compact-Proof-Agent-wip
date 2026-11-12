@@ -79,6 +79,18 @@ api_key_env: CPL_ANTHROPIC_KEY
 # anthropic-workspace-id header. Needed only for a key not scoped to one
 # workspace; left unset, no header is sent.
 api_workspace_env: CPL_ANTHROPIC_WORKSPACE
+# Who pays an open-lane run on the claude_code backend (core/open_lane/backends.py, docs/BACKENDS.md):
+#   login    the CLI's own login: a Claude subscription, or a Claude Console account. No key from the
+#            environment ever reaches the CLI.
+#   api_key  the API key in the variable api_key_env names, billed per token: the CLI runs with --bare and
+#            takes the key from that variable through an apiKeyHelper (the value is on no command line and
+#            in no file), within api_budget. Ported from the level-1 pipeline.
+auth: login
+# api_key: dollars, by Claude Code's own count (core/open_lane/api_budget.py, the run's spend.jsonl). Every try
+# of a session gets --max-budget-usd, the smaller of what is left of its round's budget and of the run's; a
+# round whose budget is spent ends with what it submitted; the rounds end when the run's is spent (resume
+# --budget-usd raises it). A try the CLI reported no cost for counts at its cap.
+api_budget: {run_usd: 60, round_usd: 20}
 # Retries for errors that pass by themselves (overloaded, server errors, rate
 # limits with a retry-after, lost connections); waits double from first_wait_s.
 # Spend limits, billing, authentication and malformed requests stop the run.

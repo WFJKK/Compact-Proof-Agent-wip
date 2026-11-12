@@ -428,6 +428,10 @@ def run_stages(ctx, backend, check_entry: dict | None, why: str, run_round) -> N
         entry = check_entry if name == "seed_check" else ctx.entries[0]
         saved = run.read(k, "prompt.json")
         fresh = saved is None and not run.round_done(k)
+        spent = backend.exhausted(run.path) if hasattr(backend, "exhausted") and not run.round_done(k) else None
+        if spent:  # auth api_key: the run's budget is spent; resume --budget-usd raises it and goes on
+            ctx.log(f"{spent}; {name} (round {k}) is left for a resume with a higher budget")
+            return
         if fresh and not backend.available((k - 1) * per_round):
             ctx.log(f"the {backend.name} backend has no more responses; {name} (round {k}) is left for a resume")
             return

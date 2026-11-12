@@ -167,7 +167,7 @@ def test_the_research_inventory_passes_the_backends_context_checks_and_the_five_
     assert backends.inventory(legacy) == (backends.MCP_TOOLS, backends.SYSTEM_PROMPT)
     assert [t["name"] for t in tool_list(legacy)] == list(Session.TOOLS)
     b = backends.ClaudeCodeToolBackend.__new__(backends.ClaudeCodeToolBackend)
-    b.cfg, b.command = {**cfg, "agent_model": "m", "effort": None}, "claude"
+    b.cfg, b.command, b.auth = {**cfg, "agent_model": "m", "effort": None}, "claude", "login"
     cmd = b.command_line(Path("mcp.json"), s)
     assert cmd[cmd.index("--allowedTools") + 1] == ",".join(tools) and cmd[cmd.index("--system-prompt") + 1] == system
     cmd = b.command_line(Path("mcp.json"), legacy)
