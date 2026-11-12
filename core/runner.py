@@ -30,7 +30,7 @@ from pathlib import Path
 import numpy as np
 import psutil
 
-from .sandbox import Sandbox, container_command, landlock_policy
+from .sandbox import Sandbox, container_command, landlock_policy, seatbelt_command
 
 HARNESS = Path(__file__).with_name("harness.py")
 HELPERS = Path(__file__).with_name("helpers.py")
@@ -429,7 +429,7 @@ def run_recipe(
             if sb.mode == "container":
                 rc, verdict, peak = _wait_container(sb, box, limits, out_f, err_f)
             else:
-                rc, verdict, peak = _wait_process(box, limits, out_f, err_f, sandbox_id)
+                rc, verdict, peak = _wait_process(box, limits, out_f, err_f, sandbox_id, sb)
             ex = Execution(status="crash", runtime_s=round(time.monotonic() - start, 3), peak_rss_mb=round(peak / MIB, 1), mode=sb.mode)
             return _interpret(ex, rc, verdict, box, limits, sb, _clean(_tail(err_f, STDERR_TAIL_BYTES), box))
     finally:
@@ -442,10 +442,14 @@ def run_recipe(
         _remove(root)
 
 
-def _wait_process(box: Path, limits: Limits, out_f, err_f, sandbox_id: str):
-    """Start the harness as a separate process in its own process group; watch its time and resident memory."""
+def _wait_process(box: Path, limits: Limits, out_f, err_f, sandbox_id: str, sb: Sandbox | None = None):
+    """Start the harness as a separate process in its own process group; watch its time and resident memory.
+    In seatbelt mode it starts under sandbox-exec (core.sandbox.seatbelt_command)."""
+    argv = [sys.executable, "-I", "-B", str(box / "harness.py")]
+    if sb is not None and sb.mode == "seatbelt":
+        argv = seatbelt_command(box, sb.protected, argv)
     proc = subprocess.Popen(
-        [sys.executable, "-I", "-B", str(box / "harness.py")],
+        argv,
         cwd=box,
         env=_environment(box, limits.threads, sandbox_id),
         stdin=subprocess.DEVNULL,

@@ -12,13 +12,20 @@ Three modes, strongest first:
                installation, system libraries, the process's own /proc entry and
                the sandbox folder, writing only the sandbox's out/ and tmp/, and
                no ptrace or signals outside the sandbox. Needs no root.
+    seatbelt   macOS without a container (ported from the level-1 pipeline): the
+               harness runs under sandbox-exec with a profile that refuses reading
+               the home folder (except Python's own folders) and the protected
+               folders (the repository, the model folder, the runs), writing
+               anywhere but the sandbox's out/ and tmp/, the network, starting
+               other programs and signals. Used only when asked for by name
+               (sandbox: seatbelt) until it has passed the probe on a Mac.
     process    a plain separate process: python -I -B, an empty environment, a
                fresh folder and resource limits. Weak: the recipe runs as you and
                can read and write whatever you can. Only for recipes you trust.
 
-`auto` takes the strongest mode that works here, falling back to process;
+`auto` takes the strongest of container, landlock and process that works here;
 `hardened` does the same but never falls back: with neither container nor
-landlock available it refuses to start, which is what an unattended run
+landlock available (nor seatbelt, when asked for by name) it refuses to start, which is what an unattended run
 wants (a stopped Docker otherwise turns the next resume weak). Every run starts with
 probe(), which tries real escapes in the chosen mode; a hardened mode that lets
 anything critical out is refused.
@@ -49,7 +56,8 @@ from pathlib import Path
 
 from .util import REPO_ROOT
 
-MODES = ("container", "landlock", "process")
+MODES = ("container", "landlock", "seatbelt", "process")
+SEATBELT = "/usr/bin/sandbox-exec"
 DEFAULT_IMAGE = "auto-research-compact-proof-sandbox:1"
 DOCKERFILE_DIR = REPO_ROOT / "sandbox"
 NOBODY = "65534:65534"
@@ -101,6 +109,10 @@ def landlock_abi() -> int:
 
 def landlock_available() -> bool:
     return landlock_abi() >= 1 and platform.machine() in SECCOMP_ARCHES
+
+
+def seatbelt_available() -> bool:
+    return sys.platform == "darwin" and os.path.exists(SEATBELT)
 
 
 # Docker Desktop can take a while to answer after its resource saver paused it.
@@ -162,6 +174,11 @@ def choose(cfg: dict, protected: tuple = ()) -> Sandbox:
         if want == "container":
             why = "no docker or podman is running" if not rt else f"the image {image} is missing"
             raise SandboxError(f"container mode needs a container runtime and its image: {why}. Build it with python -m core.sandbox build")
+    if want == "seatbelt":
+        if not seatbelt_available():
+            raise SandboxError("seatbelt mode needs macOS with sandbox-exec")
+        seatbelt_profile(Path(tempfile.gettempdir()) / "box", protected)  # refuses if the profile would expose a protected path
+        return Sandbox("seatbelt", protected=protected)
     if want in ("auto", "hardened", "landlock"):
         if landlock_available():
             sb = Sandbox("landlock", protected=protected)
@@ -210,6 +227,63 @@ def landlock_policy(box: Path, protected: tuple = ()) -> dict:
                 )
     read_write = [str(box / "out"), str(box / "tmp")] + [p for p in DEVICE_READ_WRITE if os.path.exists(p)]
     return {"read": read, "read_write": read_write, "own_proc": True}
+
+
+# seatbelt (macOS) ----------------------------------------------------------------------------
+def _sb(path) -> str:
+    return '"' + str(path).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _both(paths) -> list[str]:
+    """Each path as given and with its links resolved: the profile is matched against real paths."""
+    out = set()
+    for p in paths:
+        out.add(os.path.abspath(str(p)))
+        out.add(os.path.realpath(str(p)))
+    return sorted(out)
+
+
+def seatbelt_profile(box: Path, protected: tuple = (), python: str | None = None) -> str:
+    """The sandbox-exec profile for one recipe. Everything not named stays as macOS allows it (allow default),
+    and the rules after it take that away: in seatbelt profiles a later rule wins over an earlier one. So the
+    order matters: reading the home folder and the protected paths is refused, then Python's own folders and
+    the sandbox folder are allowed again (a Python installation may sit in the home folder). Refuses a profile
+    in which a readable folder would contain a protected one, as landlock_policy does."""
+    readable_paths = python_paths() + [str(box)]
+    for r in readable_paths:
+        rp = Path(r).resolve()
+        for p in protected:
+            pp = Path(p)
+            if rp == pp or rp in pp.parents:
+                raise SandboxError(
+                    f"seatbelt mode would let recipes read {r}, which contains {p}; "
+                    "move the repository, the runs folder or the Python installation apart, or use container mode"
+                )
+    python = python or sys.executable
+    home = os.path.realpath(str(Path.home()))
+    readable = _both(readable_paths)
+    writable = _both([box / "out", box / "tmp"])
+    rules = [
+        "(version 1)",
+        "(allow default)",
+        "(deny network*)",
+        "(deny process-fork)",
+        "(deny process-exec)",
+        "(allow process-exec " + " ".join(f"(literal {_sb(p)})" for p in _both([python])) + ")",
+        "(deny signal)",
+        "(allow signal (target self))",
+        "(deny file-write*)",
+        "(allow file-write* " + " ".join(f"(subpath {_sb(p)})" for p in writable)
+        + "".join(f" (literal {_sb(p)})" for p in DEVICE_READ_WRITE) + ")",
+        "(deny file-read* " + " ".join(f"(subpath {_sb(p)})" for p in _both([home, *protected])) + ")",
+        "(allow file-read* " + " ".join(f"(subpath {_sb(p)})" for p in readable) + ")",
+        "(allow file-read-metadata)",  # finding one's way along a path; no contents, no listings
+    ]
+    return "\n".join(rules) + "\n"
+
+
+def seatbelt_command(box: Path, protected: tuple, argv: list) -> list:
+    return [SEATBELT, "-p", seatbelt_profile(box, protected, argv[0])] + list(argv)
 
 
 # containers ------------------------------------------------------------------------------
@@ -500,6 +574,7 @@ def main(argv=None):
         rt = container_runtime()
         print(f"container: runtime {rt or 'none'}; image {DEFAULT_IMAGE} {'present' if rt and image_id(rt, DEFAULT_IMAGE) else 'missing'}")
         print(f"landlock: {'available' if landlock_available() else 'not available'} (ABI {landlock_abi()}, {platform.machine()})")
+        print(f"seatbelt: {'available' if seatbelt_available() else 'not available'} (macOS sandbox-exec; used when asked for by name)")
         print("process: always available (weak)")
         return 0
     if args.cmd == "build":

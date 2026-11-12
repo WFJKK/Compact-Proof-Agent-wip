@@ -45,11 +45,13 @@ def sandbox_modes(hardened_only: bool = False) -> list[str]:
     """The sandbox modes that work on this machine. CPL_TEST_SANDBOX_IMAGE names the container image to test with."""
     import os
 
-    from core.sandbox import DEFAULT_IMAGE, container_runtime, image_id, landlock_available
+    from core.sandbox import DEFAULT_IMAGE, container_runtime, image_id, landlock_available, seatbelt_available
 
     modes = [] if hardened_only else ["process"]
     if landlock_available():
         modes.append("landlock")
+    if seatbelt_available():  # macOS: the adversarial tests are the seatbelt profile's test on a Mac
+        modes.append("seatbelt")
     rt = container_runtime()
     if rt and image_id(rt, os.environ.get("CPL_TEST_SANDBOX_IMAGE", DEFAULT_IMAGE)):
         modes.append("container")

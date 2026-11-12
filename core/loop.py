@@ -691,6 +691,7 @@ def main(argv=None):
         p.add_argument("--run", required=True, help="the run's folder, <runs_dir>/<run_id>")
     sub.choices["status"].add_argument("--diagnostics", action="store_true", help="show each attempt's diagnostics")
     p_run.add_argument("--auth", choices=("login", "api_key"), help="who pays the sessions (default: the config's auth)")
+    p_run.add_argument("--sandbox", help="auto, hardened, container, landlock, seatbelt or process (default: the config's)")
     p_run.add_argument("--budget-usd", type=float, help="auth api_key: what the whole run may spend, in dollars")
     sub.choices["resume"].add_argument("--budget-usd", type=float, help="auth api_key: a new budget for the whole run, in dollars")
     args = ap.parse_args(argv)
@@ -704,6 +705,8 @@ def main(argv=None):
             overrides = parse_overrides(args.settings)
             if args.auth:
                 overrides["auth"] = args.auth
+            if args.sandbox:
+                overrides["sandbox"] = args.sandbox
             if args.budget_usd is not None:
                 overrides["api_budget.run_usd"] = args.budget_usd
             ctx = start(args.config, run_id=args.run_id, overrides=overrides)
