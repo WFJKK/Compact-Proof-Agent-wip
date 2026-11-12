@@ -1,0 +1,15 @@
+# The pilot on the attention min-of-2 network (models/attn-min2: a one-layer, one-head, attention-only
+# transformer) at vocabulary size 64 and width 8 (v64d8): 4,096 inputs of two tokens, 1,296 weights, brute
+# force 4,371,728 (c = 1,067 per input). At this size the weights cannot be written out in a checker: they
+# measure about 31,000 units against the Lean service's description budget of 13,376. Width 8, not the
+# zoo's width 32: at width 32 the protected module exceeds Lean's default recursion depth, and the kernel's
+# loops over its 2,048-entry tensors cost 16 times those over 512 (models/attn-min2/config.yaml).
+#   proof rounds on  attn-min2-v64d8-s1  (4,096 of 4,096 inputs correct)
+#   seed check on    attn-min2-v64d8-s2  (4,096 of 4,096 inputs correct), the same sizes, another seed
+# Everything else is config/pilot/base.yaml; config/pilot/attn-min2-quick.yaml is one short round of it.
+extends: base.yaml
+run_id: pilot-attn-min2
+model: models/attn-min2
+networks: [attn-min2-v64d8-s1]
+open_lane:
+  seed_check: {network: attn-min2-v64d8-s2}

@@ -1,0 +1,10 @@
+# One proof round of config/pilot/attn-min2.yaml, of 90 minutes (600 s of them kept for the notes), with no
+# seed check and no scaling question: a first look at the agent on attention, through the API. A run that
+# stops early resumes with `python -m core.loop resume`.
+extends: attn-min2.yaml
+run_id: pilot-attn-min2-quick
+rounds_max: 1
+open_lane:
+  worker_seconds: 5400
+  seed_check: null
+  scaling: false

@@ -26,6 +26,8 @@ whole:
 #   CountedGeneral, CountedGeneralSound   the single rule on a general network (attention): its price, its
 #                run, its correctness and the lemmas an instance is put together with
 #   Soundness    the evaluator computes what the specification computes; an accepted input is correct
+#   Exp, ExpSound  the bounds on exp that the counted language's exp returns, and that they are right
+#                (without the file's notes on where they come from, and without softmax)
 #   allowlist    what a scored checker may use, without the linear rule for groups of inputs and its types
 excerpts:
   - CompactCheck/CountedOps.lean
@@ -37,6 +39,8 @@ excerpts:
   - CompactCheck/CountedGeneral.lean
   - CompactCheck/CountedGeneralSound.lean
   - CompactCheck/Soundness.lean
+  - CompactCheck/Exp.lean
+  - CompactCheck/ExpSound.lean
   - accept/allowlist.txt
 
 # The Lean project's library. Its compiled modules hold everything, shown or not, and every module the agent
@@ -73,6 +77,10 @@ probes:
     - CompactCheck.CostM.gsingle_correct
     - CompactCheck.gsingleRun
     - CompactCheck.Cost.total_add
+    - CompactCheck.CostM.qexp
+    - CompactCheck.expInterval
+    - CompactCheck.expInterval_spec
+    - CompactCheck.expBounds_spec
   closed:
     - CompactCheck.Interp.interval
     - CompactCheck.Interp.ginterval
@@ -96,6 +104,9 @@ probes:
     - CompactCheck.check_sound
     - CompactCheck.singleOk_perm
     - CompactCheck.symmetricNet
+    - CompactCheck.softmaxRowBounds
+    - CompactCheck.softmaxRowBoundsAt_spec
+    - CompactCheck.expBoundsParts_spec
 
 # The run's worked examples (open_lane.example, split_example, second_example) are added, each file alone.
 # What a run pastes into its prompt beyond these (open_lane.extra_sources) must be a file of this list.

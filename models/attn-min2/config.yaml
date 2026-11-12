@@ -42,3 +42,30 @@ cost_model: cost-v2
 control_networks: []
 # The prompt never names the paper this work follows: part 1 refuses these, part 2 removes them.
 hygiene: ["Gross", "Compact Proofs of Model Performance"]
+
+# What an open-lane run on this model takes from the Lean project and tells the agent (a run config may set
+# any of these itself). The worked example is brute force on the tiny attention network of
+# tests/attn_max2_tiny (the same architecture at 8 tokens, width 4, on the maximum): none of this folder's
+# networks. The exp bounds are on the minimal surface; the general single rule's sources are pasted.
+# The notes say how the tools behave at these sizes, never what a proof of these networks looks like
+# (docs/decisions/agent-told-nothing.md). The kernel figures were measured on 12 November 2026 on the
+# v64d8 and v64 networks (Lean 4.35.0-rc4, the Lean project at 3320eab).
+open_lane:
+  example: examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean
+  extra_sources: [CompactCheck/CountedGeneral.lean, CompactCheck/CountedGeneralSound.lean, CompactCheck/ExpSound.lean]
+  notes: |
+    - The worked example below is brute force on a smaller network of this
+      architecture (vocabulary size 8, width 4, 64 inputs) on another task
+      (the maximum of the two tokens), not this session's network. Its
+      checker and its soundness proof hold for any size.
+    - In the kernel an array is a list: reaching entry i of a weight
+      tensor takes i steps, and the memory is held until the theorem is
+      done. A loop that indexes every entry of a tensor of n entries
+      therefore costs about n^2 / 2 steps. Measured at vocabulary size 64
+      and width 8: converting the 512 entries of the embedding into the
+      general rule's form took 10 s and 2.1 GB, and the 64 entries of a
+      width-by-width matrix 0.4 s; the general single rule on one input
+      of this network did not fit in 7 GB.
+    - Whether an instance fits one theorem depends on the length of its
+      run (the limits above). When it does not, build it from small decided
+      facts and combine them with lemmas about the run.
