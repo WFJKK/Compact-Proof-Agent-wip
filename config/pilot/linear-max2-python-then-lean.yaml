@@ -1,0 +1,15 @@
+# The linear max-of-2 pilot (config/pilot/linear-max2.yaml) in the python_then_lean workflow: rounds 1 to 4 are
+# discovery (Python experiments and arguments, written to the run's research folder, with a Lean allowance of
+# three compiles, one auxiliary submission and 600 s over the whole phase), rounds 5 to 7 formalization, then the
+# seed check and the scaling question as in the pilot. These numbers are a first setting to try, not a claim that
+# the split is the best one. The interleaved pilot is unchanged; this is a separate run (docs/OPEN_LANE.md,
+# "Choosing a workflow").
+extends: linear-max2.yaml
+run_id: pilot-linear-max2-python-then-lean
+rounds_max: 7
+open_lane:
+  workflow_mode: python_then_lean
+  discovery_rounds: 4
+  probe_compile_calls: 3
+  probe_auxiliary_submissions: 1
+  probe_seconds: 600

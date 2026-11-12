@@ -259,8 +259,34 @@ def validate(cfg: dict, source: str = "run config") -> None:
 
 OPEN_LANE_KEYS = {"enabled", "lean_project", "work_dir", "python", "compile_calls", "python_calls", "submissions", "max_turns",
                   "worker_seconds", "notes_reserve_seconds", "python_workspace_mb", "python_workspace_files", "stall_rounds", "fake_scripts", "example", "extra_sources", "knowledge", "second_example", "notes",
-                  "seed_check", "scaling", "split_example"}
+                  "seed_check", "scaling", "split_example", "workflow_mode", "discovery_rounds", "probe_compile_calls",
+                  "probe_auxiliary_submissions", "probe_seconds", "research_workspace_mb", "research_workspace_files"}
 KNOWLEDGE_CONDITIONS = ("minimal", "maximum")
+WORKFLOW_MODES = ("interleaved", "python_then_lean")
+
+
+def workflow_errors(cfg: dict, ol: dict) -> list[str]:
+    """The workflow mode and its settings (core/open_lane/workflow.py). A config without them is interleaved."""
+    errors = []
+    mode = ol.get("workflow_mode", "interleaved")
+    if mode not in WORKFLOW_MODES:
+        return [f"open_lane.workflow_mode must be one of {', '.join(WORKFLOW_MODES)}"]
+    for key in ("discovery_rounds", "probe_compile_calls", "probe_auxiliary_submissions"):
+        if key in ol:
+            _number(ol, key, errors, integer=True, minimum=0)
+    if "probe_seconds" in ol:
+        _number(ol, "probe_seconds", errors, minimum=0)
+    for key in ("research_workspace_mb", "research_workspace_files"):
+        if key in ol:
+            _number(ol, key, errors, positive=True, integer=key.endswith("files"))
+    if mode == "python_then_lean" and not errors:
+        if ol.get("enabled") is not True:
+            errors.append("open_lane.workflow_mode python_then_lean needs open_lane.enabled: true")
+        n, total = ol.get("discovery_rounds", 0), cfg.get("rounds_max")
+        if isinstance(total, int) and not isinstance(total, bool) and not 1 <= n < total:
+            errors.append(f"open_lane.discovery_rounds must be at least 1 and less than rounds_max ({total}) in "
+                          "python_then_lean mode: the rounds after discovery are formalization's")
+    return errors
 
 
 def open_lane_errors(cfg: dict) -> list[str]:
@@ -306,6 +332,7 @@ def open_lane_errors(cfg: dict) -> list[str]:
         errors.append("open_lane.scaling must be true or false")
     if ol.get("knowledge") not in KNOWLEDGE_CONDITIONS:
         errors.append(f"open_lane.knowledge must be one of {', '.join(KNOWLEDGE_CONDITIONS)}")
+    errors += workflow_errors(cfg, ol)
     errors = [f"open_lane: {e}" if not e.startswith("open_lane") else e for e in errors]
     if ol.get("enabled") is True and not errors:
         project = ol.get("lean_project")

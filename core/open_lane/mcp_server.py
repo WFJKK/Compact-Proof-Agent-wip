@@ -24,7 +24,7 @@ SERVER_INFO = {"name": "cpl-open-lane", "version": "1"}
 
 def tool_list(session: Session) -> list[dict]:
     return [{"name": name, "description": spec["description"], "inputSchema": spec["schema"]}
-            for name, spec in session.TOOLS.items()]
+            for name, spec in session.tools.items()]
 
 
 def handle(session: Session, msg: dict) -> dict | None:

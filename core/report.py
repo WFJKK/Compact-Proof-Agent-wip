@@ -255,8 +255,10 @@ def build_report(run_path: str | Path, reference_path: str | Path | None = None)
     if statuses:
         lines += ["## Agent attempts by status", "", ", ".join(f"{k} {v}" for k, v in sorted(statuses.items())), ""]
     if open_lane:
+        from .open_lane import workflow
         from .open_lane.stages import report_lines
 
+        lines += workflow.lines(run, markdown=True)
         lines += report_lines(run)
 
     final = run.path / "final" / "final.json"

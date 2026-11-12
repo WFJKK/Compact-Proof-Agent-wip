@@ -167,3 +167,22 @@ open_lane:
   # whose prompt or files would show something that surface forbids (an earlier proof as second_example, say)
   # does not start.
   knowledge: minimal
+  # How the proof rounds are organised (docs/OPEN_LANE.md, "Choosing a workflow"; core/open_lane/workflow.py),
+  # chosen before a run starts and kept for its whole life:
+  #   interleaved       the agent explores in Python and develops and submits Lean proofs in every round
+  #                     (prompt_template and patience as above). Runs made before this setting are this.
+  #   python_then_lean  rounds 1 to discovery_rounds are discovery (Python experiments and mathematical
+  #                     arguments, written to a research folder; a small optional Lean allowance), the rounds
+  #                     after them up to rounds_max formalization (the strongest saved candidates into accepted
+  #                     Lean results). A fixed schedule: patience does not apply; the phases choose their own
+  #                     prompt templates. The seed check and the scaling question follow as before.
+  workflow_mode: interleaved
+  discovery_rounds: 0         # python_then_lean: at least 1 and less than rounds_max
+  # The discovery phase's Lean allowance, totals over the whole phase (not per round). A discovery call must name
+  # a candidate and the question it settles. All zero: no Lean in discovery.
+  probe_compile_calls: 3
+  probe_auxiliary_submissions: 1
+  probe_seconds: 600          # the wall clock of those calls, the acceptance service's work and Lean's questions included
+  # The research folder (Research/) of a python_then_lean run: its size, and how many files it holds.
+  research_workspace_mb: 50
+  research_workspace_files: 500

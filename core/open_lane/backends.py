@@ -3,7 +3,8 @@
 - ClaudeCodeToolBackend: the Claude Code CLI headless, as core.agent.backends.claude_code, with the five
   tools attached as an MCP server (mcp_server.py) and nothing else: no built-in tools, no files, no
   project settings, no memory. The CLI runs under the user's own login; its environment has the API keys
-  removed. What the CLI reports it loaded (its init event) must be exactly the five tools of the cpl
+  removed. What the CLI reports it loaded (its init event) must be exactly the session's tools (the five, or
+  the seven of a python_then_lean proof round: inventory) of the cpl
   server, connected, with no skill, slash command or memory folder, and only the run's model may answer.
   Every run of the CLI is checked (a session that ran out of time on what the CLI printed until then) and
   its verdict kept next to the session's receipts (Session.log_context): a run that fails the check, or
@@ -51,6 +52,26 @@ SYSTEM_PROMPT = (
     "submit_candidate) and no others; you have no files of your own. Use the tools as the message says, "
     "submit what you prove, and end with the notes the message asks for, in exactly that format."
 )
+# A proof round of a python_then_lean run (core/open_lane/workflow.py): two more tools, and a research folder.
+RESEARCH_TOOL_NAMES = TOOL_NAMES + ("research_write", "research_list")
+RESEARCH_SYSTEM_PROMPT = (
+    "You are working on a research task with seven tools (lean_check, run_python, search_library, read_file, "
+    "submit_candidate, research_write and research_list) and no others. Your files are the research folder "
+    "(Research/), which persists between your sessions, and the workspaces the message describes. Use the tools "
+    "as the message says and end with the notes the message asks for, in exactly that format."
+)
+
+
+def mcp_tools(names) -> tuple[str, ...]:
+    return tuple(f"mcp__{SERVER}__{t}" for t in names)
+
+
+def inventory(session) -> tuple[tuple[str, ...], str]:
+    """The tools a session's CLI must load, and its system prompt: the research inventory in a python_then_lean
+    proof round, the five otherwise (the sessions after the proof rounds included)."""
+    if session is not None and session.phase():
+        return mcp_tools(session.tool_names()), RESEARCH_SYSTEM_PROMPT
+    return MCP_TOOLS, SYSTEM_PROMPT
 
 
 class _Bound:
@@ -75,12 +96,12 @@ class EarlyStop(Exception):
         self.output = output
 
 
-def _init_problem(line: str) -> str | None:
+def _init_problem(line: str, tools: tuple[str, ...] = MCP_TOOLS) -> str | None:
     """Why a session cannot count, read off one line of the CLI's output if it is the init event, else None."""
     init = cli_init(line)
     if init is None:
         return None
-    return "; ".join(isolation_problems(init, MCP_TOOLS, {SERVER}, required=SERVER)) or None
+    return "; ".join(isolation_problems(init, tools, {SERVER}, required=SERVER)) or None
 
 
 def _run_cli(cmd, prompt_text, env, cwd, timeout_s, early=None):
@@ -148,13 +169,14 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
         if runner is None:  # the real CLI (checked by ClaudeCodeBackend), run so that its whole tree stops with it
             self.run = _run_cli
 
-    def command_line(self, mcp_config: Path | None = None) -> list[str]:
+    def command_line(self, mcp_config: Path | None = None, session: Session | None = None) -> list[str]:
+        tools, system = inventory(session)
         cmd = [self.command, "-p", "--tools", "", "--output-format", "stream-json", "--verbose", "--no-session-persistence"]
         cmd += ["--setting-sources", "", "--disable-slash-commands", "--strict-mcp-config"]
         if mcp_config is not None:
-            cmd += ["--mcp-config", str(mcp_config), "--allowedTools", ",".join(MCP_TOOLS)]
+            cmd += ["--mcp-config", str(mcp_config), "--allowedTools", ",".join(tools)]
             cmd += ["--max-turns", str(int(self.cfg["open_lane"]["max_turns"]))]
-        cmd += ["--system-prompt", SYSTEM_PROMPT, "--model", self.cfg["agent_model"]]
+        cmd += ["--system-prompt", system, "--model", self.cfg["agent_model"]]
         if self.cfg["effort"] is not None:
             cmd += ["--effort", self.cfg["effort"]]
         return cmd
@@ -181,20 +203,22 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
         events = model_events(out)
         init = cli_init(out)
         swap = swapped(events, data, self.cfg["agent_model"])
-        problems = ([swap] if swap else []) + isolation_problems(init, MCP_TOOLS, {SERVER}, required=SERVER)
+        tools, _ = inventory(session)
+        problems = ([swap] if swap else []) + isolation_problems(init, tools, {SERVER}, required=SERVER)
         session.log_context({"verified": not problems, "problems": problems, "timed_out": timed_out, "cli": init})
         if swap:
             raise StopRun(f"{swap}; the run stops rather than record another model's work as {self.cfg['agent_model']}'s, "
                           "and none of this session's proofs is counted")
         if problems:
-            raise StopRun("Claude Code ran this session with more or other than this run's five tools, or did not say what it "
-                          "ran it with (" + "; ".join(problems) + "); none of this session's proofs is counted, and the run stops")
+            raise StopRun(f"Claude Code ran this session with more or other than this run's {len(tools)} tools, or did not say what "
+                          "it ran it with (" + "; ".join(problems) + "); none of this session's proofs is counted, and the run stops")
         return init
 
     def respond(self, prompt, index: int, where=None) -> Response:
         session = self.session(where)
         mcp = self.mcp_config(session, Path(where))
-        cmd = self.command_line(mcp)
+        cmd = self.command_line(mcp, session)
+        tools, _ = inventory(session)
         t0 = time.monotonic()
         failures = []
         tries = int(self.retries["tries"])
@@ -205,7 +229,8 @@ class ClaudeCodeToolBackend(_Bound, ClaudeCodeBackend):
             with tempfile.TemporaryDirectory(prefix="cpl-claude-code-") as cwd:
                 session.start_clock(timeout, reserve)  # read by the tools' server when the CLI starts it
                 try:
-                    r = self.run(cmd, prompt.text, self.env, cwd, timeout, **({"early": _init_problem} if self.early else {}))
+                    r = self.run(cmd, prompt.text, self.env, cwd, timeout,
+                                 **({"early": lambda line: _init_problem(line, tools)} if self.early else {}))
                 except EarlyStop as exc:
                     # what the CLI said it loaded fails the check: stopped before the agent worked in the session
                     self._context(session, exc.output)  # keeps the verdict and stops the run
