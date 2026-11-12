@@ -289,9 +289,14 @@ def protected_interface() -> str:
     )
 
 
-def tools_text(surface: dict) -> str:
-    """The tools, and what two of them reach: the files of the Lean project that the run offers."""
-    return "\n".join(f"- {name}: {spec['description']}" for name, spec in Session.TOOLS.items()) + "\n" + surfaces.describe(surface)
+def tools_text(surface: dict, ol: dict | None = None) -> str:
+    """The tools, how they run, and what two of them reach: the files of the Lean project that the run offers."""
+    out = "\n".join(f"- {name}: {spec['description']}" for name, spec in Session.TOOLS.items())
+    out += "\nThe tools answer one call at a time, in the order you make them: a call starts when the one before it has answered."
+    if ol and ol.get("python_workspace_mb"):
+        out += (f" Your Python workspace (py/) holds up to {ol['python_workspace_mb']:g} MB in "
+                f"{ol['python_workspace_files']:,} files.")
+    return out + "\n" + surfaces.describe(surface)
 
 
 def networks_text(entries: list[dict]) -> str:
@@ -334,7 +339,7 @@ def static_values(cfg: dict, folder: ModelFolder, entries: list[dict]) -> dict:
         "AFTER_ROUNDS": after_rounds_text(ol),
         "MODULES_RULE": modules_rule_text(ol),
         "KNOWLEDGE": KNOWLEDGE_TEXT[ol.get("knowledge", "minimal")],
-        "TOOLS": tools_text(surface),
+        "TOOLS": tools_text(surface, cfg["open_lane"]),
         "BUDGETS": budgets,
         "METRIC": metric_text(cfg, folder, entries) + (
             f"\nThe budget grid, per size setting: {grid_text(entries, cfg['budget_ratio'])}." if cfg["metric"] == "Q_grid" else ""),
@@ -497,6 +502,11 @@ DRAFTS_HEAD = (
     "module holds is set apart in drafts/: read it there, and save it at a path with lean_check to go on with it."
 )
 MAX_DRAFTS_LISTED = 40
+PYTHON_HEAD = (
+    "Your Python workspace (py/), as your last session left it: the files your run_python code kept there. Your "
+    "code finds them at py/<name> (`import name` loads py/name.py), and read_file reads the text ones. Nothing in "
+    "Python is checked or counted: what you found there counts once a proof of it is accepted."
+)
 
 
 def draft_line(d: dict) -> str:
@@ -515,9 +525,14 @@ def draft_line(d: dict) -> str:
     return f"- {where} ({'; '.join(facts)})"
 
 
-def workspace_text(carried, drafts=None) -> str:
-    """Part 2's account of the modules carried into this round's workspace, and of the agent's drafts
-    (core.open_lane.session): the accepted ones first, the drafts apart."""
+def python_line(path: str, f: dict) -> str:
+    when = f"last saved in round {f['saved_round']}" if f.get("saved_round") else "carried from an earlier round"
+    return f"- py/{path} ({f.get('bytes', 0):,} bytes, {when})"
+
+
+def workspace_text(carried, drafts=None, python=None) -> str:
+    """Part 2's account of the modules carried into this round's workspace, of the agent's drafts and of its
+    Python workspace (core.open_lane.session): the accepted ones first, the drafts apart, then the Python files."""
     parts = []
     if carried and isinstance(carried, list):
         lines = [WORKSPACE_HEAD]
@@ -540,6 +555,13 @@ def workspace_text(carried, drafts=None) -> str:
             rest = ds[MAX_DRAFTS_LISTED:]
             lines.append(f"- and {len(rest)} more, saved earlier: " + ", ".join(
                 (f"drafts/{d['path']}" if d.get("set_apart") else d["path"]) for d in rest))
+        parts.append("\n".join(lines))
+    if python and isinstance(python, dict):
+        files = sorted(python.items(), key=lambda kv: (-(kv[1].get("saved_round") or 0), kv[0]))
+        lines = [PYTHON_HEAD] + [python_line(p, f) for p, f in files[:MAX_DRAFTS_LISTED]]
+        if len(files) > MAX_DRAFTS_LISTED:
+            lines.append(f"- and {len(files) - MAX_DRAFTS_LISTED} more, saved earlier: "
+                         + ", ".join(f"py/{p}" for p, _ in files[MAX_DRAFTS_LISTED:]))
         parts.append("\n".join(lines))
     return "\n\n".join(parts) if parts else "none yet"
 
@@ -625,7 +647,7 @@ def build_open_lane_prompt(cfg: dict, folder: ModelFolder, entries: list[dict], 
         "SCOREBOARD": scoreboard(records, entries, cfg.get("budget_ratio"), cfg["metric"]),
         "RECEIPTS": receipts_text(records, entries, cfg["metric"], ready),
         "AIM": aim(records, entries, cfg, k) + ("\n" + nudge if nudge else ""),
-        "WORKSPACE": workspace_text(session.state.get("carried"), session.state.get("drafts")),
+        "WORKSPACE": workspace_text(session.state.get("carried"), session.state.get("drafts"), session.state.get("py_files")),
     }
     while True:
         values["LEMMAS"] = accepted_sources(run, records, cfg["shown_top_recipes"], lemma_chars)

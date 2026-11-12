@@ -51,6 +51,20 @@ saved), which read_file read. Run first with the cloud session's own environment
 MCP server from the parent session's variables, and the check stopped the session at its init event with no
 request to the model.
 
+## Added on 12 November: a Python workspace
+
+In test-3 (11 November, two rounds of 45 minutes on max2-v64-s0) the Lean drafts went on to round 2, but the
+Python did not: every `run_python` call started in an empty folder, and round 2 began by computing the
+combined weight matrix again. What the agent had found in Python reached round 2 only as words in its notes.
+
+Now `py/` is the agent's Python workspace: the files its code leaves there are there for its later calls and
+its next round, `import name` loads `py/name.py`, `save_as` keeps a call's code as such a module, and
+`read_file` reads the text files. It is held to `open_lane.python_workspace_mb` and `python_workspace_files`,
+and the pipeline takes only plain files with plain names from a program's folder (no link followed, no hard
+link). Nothing in it is checked or counted, as nothing in Python is. The prompt also says that the tools answer
+one call at a time: in test-3's round 2 the agent meant to compile and submit at once, and the two ran one
+after the other.
+
 Not done:
 
 - A cache of the Lean library's reading for the rule on proofs. Measured on the whole library: reading and

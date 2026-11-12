@@ -120,6 +120,8 @@ open_lane:
   max_turns: 200            # the CLI's agentic turns per session
   worker_seconds: 7200      # the session's wall clock
   notes_reserve_seconds: 600  # its last seconds, kept for the agent's answer (its notes): no tool call runs into them
+  python_workspace_mb: 50   # run_python's kept folder (py/), which goes on to the next round: its size,
+  python_workspace_files: 200  # and how many files it holds
   stall_rounds: 3           # rounds without an accepted submission before the prompt asks for a change of approach
   fake_scripts: []          # the fake backend's scripted sessions, in order (files or folders of *.json)
   # The worked example in the prompt and any further Lean sources it shows, as paths in the Lean project.

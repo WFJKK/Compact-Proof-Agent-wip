@@ -97,7 +97,7 @@ configuration.
   symmetry, contract and approximate, next to split trees and "the contract rule". In the capture these
   were the only forbidden expressions that reached the model. The folder now holds the wrapper around the
   agent's code, `model.py`, the harness, the weights and input.json, and the check before a run scans its
-  text files.
+  text files. Since 12 November it also holds `py/`, the files the agent's own code kept there.
 - Lean names a file by its absolute path, which names the run and the machine's user. The agent is shown a
   module's path in Candidate/ instead (in Lean's messages and in receipts), and the mark for forbidden text in
   Lean's output is taken on that: in the first test run on the Mac, whose id begins with "pilot", every

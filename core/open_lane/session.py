@@ -40,6 +40,14 @@ the carried modules; they are never compiled before the agent begins, and a subm
 any other. session.json's `drafts` says what was put where, when each was last saved and whether it compiled
 then. A draft the agent leaves as it was goes on to the next round the same way.
 
+The Python workspace: py/ in the session folder. Each run_python call starts in a fresh folder, with the
+workspace's files at py/ (importable: `import name` loads py/name.py); what the call leaves there is the
+workspace afterwards, within open_lane.python_workspace_mb and python_workspace_files (a link, a file with a
+second name or an odd name is not kept). save_as keeps the call's code itself as py/<name>.py before it
+runs. read_file reads its text files. A new session of a proof round starts with the workspace the latest
+earlier round's session ended with (python_workspace_from); session.json's `py_files` says when each file
+was last saved. Nothing in it is checked or counted: it is the agent's notebook.
+
 Budgets persist in session.json, so a session that is started again (a resumed run) continues them rather
 than starting afresh, and its earlier submissions and their receipts stay.
 
@@ -72,6 +80,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -79,7 +88,8 @@ from pathlib import Path
 
 import psutil
 
-from ..runner import Limits, run_recipe
+from ..runner import WORKSPACE as PY_DIR
+from ..runner import Limits, run_recipe, workspace_files
 from ..sandbox import Sandbox
 from ..util import REPO_ROOT
 from . import offered
@@ -126,6 +136,8 @@ def excerpt(text: str, limit: int = MAX_TEXT) -> str:
     return text[:head] + "\n[...]\n" + text[-tail:]
 MAX_SOURCE = 400_000  # characters of one module
 MODULE_PATH = re.compile(r"^Candidate/([A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\.lean$")
+PY_MODULE = re.compile(r"^py/[A-Za-z_][A-Za-z0-9_]*\.py$")  # run_python's save_as
+MIB = 1024 * 1024
 SUBMIT_TIMEOUT_S = 4 * 3600
 COMPILE_TIMEOUT_S = 3600
 EARLY_WORD_TIMEOUT_S = 180  # for Lean's word, at a compile, on what a module uses of the library; asked again at a submission
@@ -268,6 +280,39 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:16]
 
 
+def source_session(run_path: Path, k: int) -> tuple[Path | None, int | None]:
+    """The session whose unfinished work a new session of proof round k starts from: the latest earlier round's
+    (its last attempt), with that round's number; (None, None) in round 1."""
+    for kk in range(k - 1, 0, -1):
+        attempts = sorted((p for p in (Path(run_path) / f"round_{kk:03d}").glob("attempt_*")
+                           if p.name[len("attempt_"):].isdigit() and (p / "open_lane" / "workspace").is_dir()),
+                          key=lambda p: int(p.name[len("attempt_"):]))
+        if attempts:
+            return attempts[-1] / "open_lane", kk
+    return None, None
+
+
+def python_workspace_from(run_path: Path, k: int) -> list[dict]:
+    """The Python workspace a new session of proof round k starts with: the files of py/ of the session of
+    source_session as it ended, each with the round it was last saved in (None when that is not on record)."""
+    src, _ = source_session(run_path, k)
+    if src is None:
+        return []
+    try:
+        before = json.loads((src / "session.json").read_text()).get("py_files") or {}
+    except (OSError, ValueError, AttributeError):
+        before = {}
+    before = before if isinstance(before, dict) else {}
+    files, _ = workspace_files(src / PY_DIR)
+    out = []
+    for rel, path in sorted(files.items()):
+        data = path.read_bytes()
+        meta = before.get(rel) if isinstance(before.get(rel), dict) else {}
+        out.append({"path": rel, "data": data, "bytes": len(data), "sha256": _sha(data),
+                    "saved_round": meta.get("saved_round") if meta.get("sha256") == _sha(data) else None})
+    return out
+
+
 def draft_modules(run_path: Path, k: int, carried: list[dict]) -> list[dict]:
     """The agent's unfinished modules for a new session of proof round k, from the session of the latest earlier
     round (its last attempt) as it ended: each module of its workspace whose text is not the version a module
@@ -275,14 +320,7 @@ def draft_modules(run_path: Path, k: int, carried: list[dict]) -> list[dict]:
     at that path, what it held when the draft was set apart). A draft goes to its own path, or to drafts/ when a
     carried module holds the path. Each entry: path, text, set_apart, lines, sha256, the round its text was last
     saved in and whether it compiled then (None when no compile of it is on record)."""
-    src = kk = None
-    for kk in range(k - 1, 0, -1):
-        attempts = sorted((p for p in (Path(run_path) / f"round_{kk:03d}").glob("attempt_*")
-                           if p.name[len("attempt_"):].isdigit() and (p / "open_lane" / "workspace").is_dir()),
-                          key=lambda p: int(p.name[len("attempt_"):]))
-        if attempts:
-            src = attempts[-1] / "open_lane"
-            break
+    src, kk = source_session(run_path, k)
     if src is None:
         return []
     held = {m["path"]: Path(m["source"]).read_bytes() for m in carried}
@@ -400,7 +438,9 @@ class Session:
         if state_path.exists():
             session = cls(path)
             k = round_of(path) or 0
-            if session.state.get("drafts") == "pending":  # interrupted while putting them in place: again
+            if session.state.get("py_files") == "pending":  # interrupted while putting them in place: again
+                session._place_python(python_workspace_from(Path(run_path), k))
+            if session.state.get("drafts") == "pending":
                 session._place_drafts(draft_modules(Path(run_path), k, carried_modules(Path(run_path), k)))
             if session.state.get("carried") == "pending":  # interrupted while compiling them: do it again
                 session._carry(carried_modules(Path(run_path), k))
@@ -427,8 +467,11 @@ class Session:
         k = round_of(path)
         carried = carried_modules(Path(run_path), k) if k and not stage else []
         drafts = draft_modules(Path(run_path), k, carried) if k and not stage else []
+        python = python_workspace_from(Path(run_path), k) if k and not stage else []
         state["carried"] = "pending" if carried else []
         state["drafts"] = "pending" if drafts else []
+        state["py_limits"] = {"mb": float(ol["python_workspace_mb"]), "files": int(ol["python_workspace_files"])}
+        state["py_files"] = "pending" if python else {}
         if stage:
             state["stage"] = stage
         tmp = path / "session.json.tmp"
@@ -438,6 +481,8 @@ class Session:
         if stage:
             session._seed_stage()
         else:
+            if python:
+                session._place_python(python)
             if drafts:
                 session._place_drafts(drafts)
             if carried:
@@ -503,6 +548,80 @@ class Session:
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_text(renamed(text, lock["protected"], new) if new else text)
         return {"digest": lock["digest"], "protected_from": lock["protected"], "protected_to": new, "modules": sorted(lock["modules"])}
+
+    def _place_python(self, files: list[dict]) -> None:
+        """Put the Python workspace a new session starts with in place (python_workspace_from), within the
+        session's limits, the most recently saved files first."""
+        dst = self.path / PY_DIR
+        shutil.rmtree(dst, ignore_errors=True)
+        dst.mkdir()
+        cap, most, total, kept = self.state["py_limits"]["mb"] * MIB, self.state["py_limits"]["files"], 0, {}
+        for f in sorted(files, key=lambda f: (-(f.get("saved_round") or 0), f["path"])):
+            if len(kept) >= most or total + f["bytes"] > cap:
+                continue
+            (dst / f["path"]).parent.mkdir(parents=True, exist_ok=True)
+            (dst / f["path"]).write_bytes(f["data"])
+            total += f["bytes"]
+            kept[f["path"]] = {k: f[k] for k in ("bytes", "sha256", "saved_round")}
+        self.state["py_files"] = dict(sorted(kept.items()))
+        self._save()
+
+    def _python_enabled(self) -> bool:
+        """Sessions made before the Python workspace have none: their run_python is as it was."""
+        return isinstance(self.state.get("py_limits"), dict) and isinstance(self.state.get("py_files"), dict)
+
+    def _collect_python(self, root: Path, call: int) -> dict:
+        """After a run_python call: the workspace becomes what the call left in its folder's py/, within the
+        limits (files that did not change are kept first, then the changed ones, smallest first). What was
+        not kept is said, with why. A py/ the program removed or replaced by a link leaves the workspace as
+        it was."""
+        old = self.state.get("py_files") or {}
+        if root.is_symlink() or not root.is_dir():
+            return {"not_kept": ["py/ was removed or replaced by the program: the workspace stays as it was"]}
+        files, passed = workspace_files(root)
+        entries = []
+        for rel, path in files.items():
+            try:
+                entries.append((rel, path.read_bytes()))
+            except OSError:
+                passed.append(rel)
+        same = [(r, d) for r, d in entries if (old.get(r) or {}).get("sha256") == _sha(d)]
+        new = sorted(((r, d) for r, d in entries if (old.get(r) or {}).get("sha256") != _sha(d)), key=lambda e: (len(e[1]), e[0]))
+        cap, most = self.state["py_limits"]["mb"] * MIB, self.state["py_limits"]["files"]
+        kept, over, total = [], [], 0
+        for r, d in same + new:
+            if len(kept) < most and total + len(d) <= cap:
+                kept.append((r, d))
+                total += len(d)
+            else:
+                over.append(r)
+        staging, cur, gone = (self.path / f"{PY_DIR}.new", self.path / PY_DIR, self.path / f"{PY_DIR}.old")
+        for d in (staging, gone):
+            shutil.rmtree(d, ignore_errors=True)
+        staging.mkdir()
+        for r, d in kept:
+            (staging / r).parent.mkdir(parents=True, exist_ok=True)
+            (staging / r).write_bytes(d)
+        if cur.exists():
+            cur.rename(gone)
+        staging.rename(cur)
+        shutil.rmtree(gone, ignore_errors=True)
+        meta, saved = {}, []
+        for r, d in kept:
+            prev = old.get(r) or {}
+            if prev.get("sha256") == _sha(d):
+                meta[r] = prev
+            else:
+                meta[r] = {"bytes": len(d), "sha256": _sha(d), "saved_round": round_of(self.path), "saved_call": call}
+                saved.append(f"py/{r} ({len(d):,} bytes)")
+        self.state["py_files"] = dict(sorted(meta.items()))
+        self._save()
+        in_box = {r for r, _ in entries}
+        out = {"saved": saved, "removed": [f"py/{r}" for r in old if r not in in_box and r not in passed],
+               "not_kept": [f"py/{r}: over the workspace's limit ({self.state['py_limits']['mb']:g} MB, "
+                            f"{most} files)" for r in over]
+                           + [f"py/{r}: not a plain file with one name of letters, digits and _ . -" for r in passed]}
+        return {k: v for k, v in out.items() if v}
 
     def _place_drafts(self, drafts: list[dict]) -> None:
         """Put the agent's unfinished modules in place (draft_modules): at their own path in the workspace, or in
@@ -736,18 +855,39 @@ class Session:
             self._log("lean_check", args, {"error": str(exc)}, time.monotonic() - t0)
             raise
 
-    def run_python(self, code: str, network: str) -> dict:
+    def run_python(self, code: str, network: str, save_as: str | None = None) -> dict:
         t0 = time.monotonic()
         args = {"code": code, "network": network}
+        if save_as is not None:
+            args["save_as"] = save_as
         try:
             left = self._time_for_call()
             if not isinstance(code, str) or len(code) > MAX_SOURCE:
                 raise ToolError("code must be a string")
             self._network(network)
+            python = self._python_enabled()
+            if save_as is not None:
+                if not python:
+                    raise ToolError("this session has no Python workspace")
+                if not isinstance(save_as, str) or not PY_MODULE.match(save_as):
+                    raise ToolError("save_as must be py/<name>.py, the name an identifier")
+                files, rel, size = self.state["py_files"], save_as[len("py/"):], len(code.encode())
+                total = sum(f["bytes"] for r, f in files.items() if r != rel) + size
+                if total > self.state["py_limits"]["mb"] * MIB or len(set(files) | {rel}) > self.state["py_limits"]["files"]:
+                    raise ToolError(f"{save_as} would take the Python workspace over its limit "
+                                    f"({self.state['py_limits']['mb']:g} MB, {self.state['py_limits']['files']} files)")
             self._spend("run_python")
-            saved = Path("python") / f"{self.state['used']['run_python']:03d}.py"
+            call = self.state["used"]["run_python"]
+            saved = Path("python") / f"{call:03d}.py"
             (self.path / saved).parent.mkdir(exist_ok=True)
             (self.path / saved).write_text(code)  # kept before it runs, whole (the log keeps the first 2,000 characters)
+            if save_as is not None:  # the module is in the workspace before the code runs
+                rel = save_as[len("py/"):]
+                (self.path / PY_DIR).mkdir(exist_ok=True)
+                (self.path / PY_DIR / rel).write_text(code)
+                self.state["py_files"][rel] = {"bytes": len(code.encode()), "sha256": _sha(code.encode()),
+                                               "saved_round": round_of(self.path), "saved_call": call}
+                self._save()
             from ..model_folder import load_model_folder
             from ..run_config import resolve
             from ..zoo import load_weights, network_entry
@@ -765,16 +905,36 @@ class Session:
 
             sb = choose({"sandbox": self.state["sandbox"], "sandbox_image": "auto-research-compact-proof-sandbox:1"},
                         protected_paths(None, folder, self.path.parent))
+            kept = {}
+
+            def collect(root):
+                try:
+                    kept.update(self._collect_python(root, call))
+                except Exception as exc:  # the call's answer must come back whatever this does
+                    kept["not_kept"] = [f"the workspace could not be updated ({exc}); it stays as it was"]
+
+            if python:
+                (self.path / PY_DIR).mkdir(exist_ok=True)
             ex = run_recipe(recipe, folder.source(), weights, info, 0.0, limits, self.state["sandbox_dir"], sandbox=sb,
-                            helpers=RUN_PYTHON_HELPERS)
+                            helpers=RUN_PYTHON_HELPERS, workspace=(self.path / PY_DIR) if python else None,
+                            collect=collect if python else None)
             if ex.status == "ok" and isinstance(ex.proof, dict):
                 output = str(ex.proof.get("stdout", ""))
             elif ex.status == "timeout" and limit < float(lim["time_limit_s"]):
                 output = f"(timeout) stopped: it ran past the {limit:.0f} s this session had left"
             else:
                 output = f"({ex.status}) {ex.error or ''}"
-            out = {"status": ex.status, "output": output[-MAX_TEXT:], "runtime_s": ex.runtime_s, "remaining": self.remaining()}
-            self._log("run_python", args, {"status": ex.status, "saved": str(saved), "output": output[:500]}, time.monotonic() - t0)
+            out = {"status": ex.status, "output": output[-MAX_TEXT:], "runtime_s": ex.runtime_s}
+            if save_as is not None and save_as not in kept.get("removed", []) and self.state["py_files"].get(save_as[3:]):
+                kept["saved"] = [f"{save_as} ({len(code.encode()):,} bytes, before the code ran)"] + [
+                    s for s in kept.get("saved", []) if not s.startswith(save_as + " ")]
+            if kept:
+                out["py"] = kept
+            out["remaining"] = self.remaining()
+            logged = {"status": ex.status, "saved": str(saved), "output": output[:500]}
+            if kept:
+                logged["py"] = kept
+            self._log("run_python", args, logged, time.monotonic() - t0)
             return out
         except ToolError as exc:
             self._log("run_python", args, {"error": str(exc)}, time.monotonic() - t0)
@@ -796,13 +956,24 @@ class Session:
                 p = self.path / path  # a draft set apart, its path held by a carried module
                 if p.is_symlink() or not p.is_file():
                     raise ToolError(f"no draft {path}")
+            elif isinstance(path, str) and path.startswith(PY_DIR + "/") and self._python_enabled():
+                rel = path[len(PY_DIR) + 1:]
+                if rel not in self.state["py_files"]:
+                    raise ToolError(f"no file {path} in your Python workspace")
+                p = self.path / PY_DIR / rel
+                if p.is_symlink() or not p.is_file():
+                    raise ToolError(f"no file {path} in your Python workspace")
+                try:
+                    p.read_bytes().decode("utf-8")
+                except UnicodeDecodeError:
+                    raise ToolError(f"{path} is not text ({p.stat().st_size:,} bytes): load it in run_python") from None
             else:
                 surface = self.surface()
                 p = surfaces.served(surface, self.lean_project, path)
                 if p is None:
                     raise ToolError("path must be a module of your workspace (Candidate/<Name>.lean), a draft set apart "
-                                    "(drafts/Candidate/<Name>.lean) or one of the files of the Lean project that this run "
-                                    "offers: " + ", ".join(surfaces.names(surface)))
+                                    "(drafts/Candidate/<Name>.lean), a file of your Python workspace (py/...) or one of "
+                                    "the files of the Lean project that this run offers: " + ", ".join(surfaces.names(surface)))
                 if p.is_symlink() or not p.is_file():
                     raise ToolError(f"no file {path} in the Lean project")
             all_lines = p.read_text().splitlines()
@@ -1072,8 +1243,13 @@ class Session:
         "run_python": {
             "description": "Run Python code in the recipe sandbox with `weights` (a dict of numpy arrays, the network's "
                            "state_dict), `info` (sizes and input_space) and `np` in scope; returns what it printed. "
-                           "No network access; the recipe time and memory limits apply.",
-            "schema": {"type": "object", "properties": {"code": {"type": "string"}, "network": {"type": "string"}},
+                           "No network access; the recipe time and memory limits apply. Each call starts in a fresh "
+                           "folder, but for py/, your Python workspace: what your code leaves in py/ (code, results "
+                           "such as arrays or JSON) is there for your later calls and your next session, and `import "
+                           "name` loads py/name.py. `save_as` (py/<name>.py) keeps the code itself there as a module "
+                           "before it runs. The answer says what was saved, removed or not kept.",
+            "schema": {"type": "object", "properties": {"code": {"type": "string"}, "network": {"type": "string"},
+                                                        "save_as": {"type": "string", "description": "optional: py/<name>.py"}},
                        "required": ["code", "network"]},
         },
         "search_library": {
@@ -1087,9 +1263,9 @@ class Session:
         "read_file": {
             "description": "Read lines of a module of your workspace (Candidate/<Name>.lean: those you saved with "
                            "lean_check and those carried over from earlier rounds), of a draft set apart "
-                           "(drafts/Candidate/<Name>.lean) or of one of the files of the Lean project that this run offers "
-                           "(your prompt lists them; no other file can be read). Returns up to 400 numbered lines from "
-                           "`start`.",
+                           "(drafts/Candidate/<Name>.lean), of a text file of your Python workspace (py/...) or of one of "
+                           "the files of the Lean project that this run offers (your prompt lists them; no other file can "
+                           "be read). Returns up to 400 numbered lines from `start`.",
             "schema": {"type": "object", "properties": {"path": {"type": "string"}, "start": {"type": "integer"},
                                                         "lines": {"type": "integer"}},
                        "required": ["path"]},
@@ -1151,18 +1327,25 @@ def run_python_folder(model_source: str) -> dict[str, str]:
 
 
 WRAPPER = '''"""The open lane's run_python: the agent's code as a recipe, its output as the proof."""
-import io, contextlib, traceback
+import io, contextlib, os, sys, traceback
 import numpy as np
 
 CODE = @@CODE@@
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def make_proof(weights, info, knob):
+    kept = os.path.join(HERE, "py")
+    if os.path.isdir(kept) and kept not in sys.path:
+        sys.path.append(kept)  # after the standard library and numpy: a file in py/ never hides them
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
         try:
             exec(compile(CODE, "<run_python>", "exec"), {"weights": weights, "info": info, "np": np, "__name__": "__main__"})
         except BaseException:
             buf.write(traceback.format_exc())
-    return {"stdout": buf.getvalue()[-20000:]}
+    text = buf.getvalue()
+    for here in {HERE, os.path.realpath(HERE)}:  # paths as the code sees them: py/name.py, not the machine's folder
+        text = text.replace(here + os.sep, "")
+    return {"stdout": text[-20000:]}
 '''

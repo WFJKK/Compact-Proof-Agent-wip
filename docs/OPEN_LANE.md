@@ -47,7 +47,8 @@ response:
   occur exactly once, in order, and no edits compile the module as saved);
   `run_python` runs code in the recipe sandbox with the network's weights, in a folder that holds the
   model's code, the harness and the weights and nothing of the fixed rules (no `helpers.py`, which names
-  them; the check before a run scans the folder's text files); `search_library` searches the
+  them; the check before a run scans the folder's text files), and the agent's Python workspace `py/`
+  (below); `search_library` searches the
   files of the Lean project that the run shows the agent and `read_file` reads a stretch of one of them
   (the run's surface, below: in the minimal-knowledge condition the specification, the semantics and the
   counted language, with the run's worked examples; no docs, none of the fixed rules' sources, never another
@@ -58,6 +59,20 @@ response:
   `python/<n>.py`); the budgets (`compile_calls`, `python_calls`, `submissions`) persist in `session.json`,
   so a session that is started again continues them. Every answer says what is left of them, and of the
   clock.
+- The Python workspace (since 12 November 2026). Each `run_python` call starts in a fresh folder, but for
+  `py/`: the session's workspace (`py/` in the session folder) is put there, importable (`import name` loads
+  `py/name.py`), and what the code leaves there is the workspace afterwards, within
+  `open_lane.python_workspace_mb` and `python_workspace_files` (50 MB and 200 files by default; unchanged
+  files are kept first, then changed ones, smallest first). The pipeline reads only plain files with one
+  name: no link is followed, a hard link is passed over, and names are letters, digits and `_ . -`. A
+  call's answer says what was saved, removed or not kept, and why. `save_as` (`py/<name>.py`) keeps the
+  call's code as a module before it runs. `read_file` reads the workspace's text files. A new session of a
+  proof round starts with the workspace the latest earlier round's session ended with, listed in the
+  prompt with each file's size and the round it was last saved in; the sessions after the proof rounds
+  start with an empty one. Nothing in it is checked or counted. Before this, every call started from
+  nothing, and what the agent computed in Python reached its next round only as words in its notes.
+- The tools answer one call at a time, in the order the agent makes them, and the prompt says so (in round
+  2 of the test run of 11 November the agent meant to compile and submit at once).
 - The clock (since 11 November 2026). The backend starts it in the session before each run of the agent,
   for that run's limit (`open_lane.worker_seconds`), and its last `open_lane.notes_reserve_seconds` (600 by
   default) are kept for the agent's answer, whose NOTES the next round starts from. Every tool's answer says
@@ -131,7 +146,7 @@ response:
 Layout of an open-lane attempt:
 
     round_003/attempt_0/
-        open_lane/session.json, tools.jsonl, context.jsonl, workspace/, drafts/, python/,
+        open_lane/session.json, tools.jsonl, context.jsonl, workspace/, drafts/, py/, python/,
                  submissions/000/{manifest.json, Candidate/, receipt.json}
                                  (and lock.json in a session after the proof rounds: the lock as applied,
                                  and for the seed check whether Lean found the locked checker in the proof)

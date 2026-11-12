@@ -237,11 +237,68 @@ def sandbox_texts(model_source: str, helpers: bool = True) -> dict[str, str]:
     return texts
 
 
+WORKSPACE = "py"  # a recipe's kept files (the open lane's run_python): box/py, a link to box/out/py, which is writable
+
+
+def workspace_files(root: Path) -> tuple[dict[str, Path], list[str]]:
+    """The regular files under root, by path relative to it, and what was passed over: no link is followed, a
+    file with a second name (a hard link) is passed over, and so is a name of other than letters, digits and
+    _ . - (which keeps out .., hidden files and __pycache__). Read with no help from the recipe that wrote them."""
+    import re
+
+    part = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$|^_[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    found, passed = {}, []
+    if not root.is_dir() or root.is_symlink():
+        return found, passed
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        rel_dir = os.path.relpath(dirpath, root)
+        keep = []
+        for d in dirnames:
+            rel = os.path.normpath(os.path.join(rel_dir, d))
+            if os.path.islink(os.path.join(dirpath, d)) or not part.match(d) or d == "__pycache__":
+                passed.append(rel)
+            else:
+                keep.append(d)
+        dirnames[:] = keep
+        for f in filenames:
+            path = os.path.join(dirpath, f)
+            rel = os.path.normpath(os.path.join(rel_dir, f))
+            try:
+                st = os.lstat(path)
+            except OSError:
+                passed.append(rel)
+                continue
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or not part.match(f):
+                passed.append(rel)
+            else:
+                found[rel] = Path(path)
+    return found, sorted(passed)
+
+
+def _place_workspace(src: Path, box: Path, container: bool) -> None:
+    """The kept files into box/out/py, and box/py linking to it (out/ is what every sandbox mode lets a recipe write)."""
+    dst = box / "out" / WORKSPACE
+    dst.mkdir()
+    files, _ = workspace_files(Path(src))
+    for rel, path in files.items():
+        target = dst / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+    if container:  # the container runs as nobody
+        for dirpath, dirnames, filenames in os.walk(dst):
+            os.chmod(dirpath, 0o777)
+            for f in filenames:
+                os.chmod(os.path.join(dirpath, f), 0o666)
+    os.symlink(os.path.join("out", WORKSPACE), box / WORKSPACE)
+
+
 def _prepare(box: Path, recipe_source: str, model_source: str, weights: dict, info: dict, knob: float, limits: Limits, sb: Sandbox,
-             helpers: bool = True):
+             helpers: bool = True, workspace: Path | None = None):
     box.mkdir()
     (box / "out").mkdir()
     (box / "tmp").mkdir()
+    if workspace is not None:
+        _place_workspace(Path(workspace), box, sb.mode == "container")
     (box / "recipe.py").write_text(recipe_source)
     for name, text in sandbox_texts(model_source, helpers).items():
         (box / name).write_text(text, encoding="utf-8")
@@ -324,9 +381,13 @@ def run_recipe(
     sandbox_root: str | Path | None = None,
     sandbox: Sandbox | None = None,
     helpers: bool = True,
+    workspace: Path | None = None,
+    collect=None,
 ) -> Execution:
     """Run make_proof(weights, info, knob) from recipe_source in a fresh sandbox; return what came back.
-    With helpers=False the folder holds no helpers.py (the open lane's run_python)."""
+    With helpers=False the folder holds no helpers.py (the open lane's run_python). With a workspace, its files
+    are put in the folder at py/ (WORKSPACE), and collect is called with that folder once the recipe and
+    everything it started have ended, whatever became of the run: what it wrote there is for collect to keep."""
     sb = sandbox or PROCESS
     root = Path(tempfile.mkdtemp(prefix="cpl-sandbox-", dir=sandbox_root))
     box = root / "box"
@@ -334,7 +395,7 @@ def run_recipe(
     if sb.mode != "container":
         _become_subreaper()
     try:
-        _prepare(box, recipe_source, model_source, weights, info, knob, limits, sb, helpers)
+        _prepare(box, recipe_source, model_source, weights, info, knob, limits, sb, helpers, workspace)
         (root / "logs").mkdir()
         with open(root / "logs" / "stdout.txt", "w+b") as out_f, open(root / "logs" / "stderr.txt", "w+b") as err_f:
             start = time.monotonic()
@@ -347,6 +408,8 @@ def run_recipe(
     finally:
         if sb.mode != "container":
             _reap_marked(sandbox_id)  # kill anything that escaped the process group (for example via setsid)
+        if collect is not None and workspace is not None:
+            collect(box / "out" / WORKSPACE)
         _remove(root)
 
 

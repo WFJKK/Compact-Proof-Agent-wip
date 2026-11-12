@@ -156,7 +156,7 @@ def test_run_pythons_folder_holds_the_models_code_and_the_weights_and_nothing_of
     out = s.run_python(f"MODEL = {model!r}\n" + code, "max2_tiny-v8-s0")
     assert out["status"] == "ok", out
     lines = out["output"].splitlines()
-    assert lines[0] == str(["harness.py", "input.json", "model.py", "out", "recipe.py", "tmp", "weights.npz"])
+    assert lines[0] == str(["harness.py", "input.json", "model.py", "out", "py", "recipe.py", "tmp", "weights.npz"])
     assert lines[1:] == ["no helpers", "True"]
     assert sorted(run_python_folder(model)) == ["harness.py", "model.py", "recipe.py"]
 
@@ -1461,3 +1461,84 @@ def test_a_session_whose_cli_loads_more_than_the_runs_tools_is_stopped_at_its_in
         b.respond(Prompt("one", "two", {}), 0, where=where)
     verdicts = [json.loads(l) for l in (where / "open_lane" / "context.jsonl").read_text().splitlines()]
     assert verdicts[-1]["verified"] is False and Session(where / "open_lane").context()["verified"] is False
+
+
+def test_the_python_workspace_keeps_what_the_code_leaves_and_goes_on_to_the_next_round(tmp_path):
+    """Each run_python call starts in a fresh folder, but for py/: what the code leaves there is kept for later
+    calls and the next round's session, within the workspace's limits, and nothing in it ever counts. No Lean,
+    no model: the code runs in the process sandbox."""
+    from core.open_lane.prompt import workspace_text
+
+    net = "max2_tiny-v8-s0"
+    s = _plain_session(tmp_path, python_workspace_mb=0.01, python_workspace_files=4)  # 10,485 bytes, 4 files
+    out = s.run_python("import json\nnp.save('py/E.npy', weights['embedding.weight'])\n"
+                       "json.dump({'margin': 0.5}, open('py/facts.json', 'w'))\nprint('ok')", net)
+    assert out["output"] == "ok\n" and out["py"] == {"saved": ["py/facts.json (15 bytes)", "py/E.npy (256 bytes)"]}
+    out = s.run_python("def double(x):\n    return 2 * x\n", net, save_as="py/helpers.py")
+    assert out["py"] == {"saved": ["py/helpers.py (32 bytes, before the code ran)"]}
+    out = s.run_python("import helpers, json, os\nprint(helpers.double(21), json.load(open('py/facts.json')), np.load('py/E.npy').shape)\n"
+                       "os.remove('py/facts.json')\nopen('py/big.txt', 'w').write('x' * 20000)\n"
+                       "import helpers\nraise ValueError(helpers.__file__)", net)
+    assert out["output"].startswith("42 {'margin': 0.5} (4, 8)\n")
+    assert out["output"].rstrip().endswith("ValueError: py/helpers.py")  # the folder as the code sees it, not the machine's
+    assert out["py"] == {"removed": ["py/facts.json"], "not_kept": ["py/big.txt: over the workspace's limit (0.01 MB, 4 files)"]}
+    assert sorted(s.state["py_files"]) == ["E.npy", "helpers.py"] and sorted(p.name for p in (s.path / "py").iterdir()) == ["E.npy", "helpers.py"]
+    assert s.read_file("py/helpers.py")["text"] == "1: def double(x):\n2:     return 2 * x"
+    with pytest.raises(ToolError, match="py/E.npy is not text"):
+        s.read_file("py/E.npy")
+    with pytest.raises(ToolError, match="no file py/facts.json in your Python workspace"):
+        s.read_file("py/facts.json")
+    used = s.state["used"]["run_python"]
+    for bad in ("helpers.py", "py/../x.py", "py/a-b.py", "py/sub/x.py"):
+        with pytest.raises(ToolError, match="save_as must be py/<name>.py"):
+            s.run_python("print(1)", net, save_as=bad)
+    with pytest.raises(ToolError, match="would take the Python workspace over its limit"):
+        s.run_python("x = 1\n" * 2000, net, save_as="py/huge.py")
+    assert s.state["used"]["run_python"] == used  # refused before anything was spent
+    out = s.run_python("import shutil, os\nshutil.rmtree('out/py')\nos.symlink('/tmp', 'out/py')", net)
+    assert out["py"] == {"not_kept": ["py/ was removed or replaced by the program: the workspace stays as it was"]}
+    assert sorted(s.state["py_files"]) == ["E.npy", "helpers.py"]
+    # the next round's session starts with it, each file with the round it was saved in; the code finds it
+    s2 = _plain_session(tmp_path, k=2, python_workspace_mb=0.01, python_workspace_files=4)
+    assert {p: f["saved_round"] for p, f in s2.state["py_files"].items()} == {"E.npy": 1, "helpers.py": 1}
+    assert s2.run_python("import helpers\nprint(helpers.double(2), np.load('py/E.npy').sum() == weights['embedding.weight'].sum())", net)["output"] == "4 True\n"
+    text = workspace_text([], [], s2.state["py_files"])
+    assert text.startswith("Your Python workspace (py/), as your last session left it") and "Nothing in Python is checked or counted" in text
+    assert "- py/E.npy (256 bytes, last saved in round 1)" in text and "- py/helpers.py (32 bytes, last saved in round 1)" in text
+    assert workspace_text([], [], {}) == "none yet"
+    # the sessions after the proof rounds start without it
+    lock = {"modules": {}, "free": [], "protected": None}
+    cfg = merge(base_config(tmp_path, [], open_lane={"enabled": False}))
+    cfg["open_lane"].update({"lean_project": str(tmp_path), "work_dir": str(tmp_path / "work")})
+    entries = [{"id": net, "setting": "v8", "n_inputs": 64}]
+    s3 = Session.create(tmp_path / "run" / "round_003" / "attempt_0" / "open_lane", cfg, "tests/max2_tiny", entries,
+                        tmp_path / "run", stage={"name": "scaling", "lock": lock, "submission": str(tmp_path)})
+    assert s3.state["py_files"] == {}
+
+
+def test_only_plain_files_with_plain_names_are_taken_from_a_programs_folder(tmp_path):
+    """What a program leaves in py/ is read by the pipeline, outside any sandbox: a link is not followed (it
+    could point anywhere the pipeline can read), nor a file with a second name (a hard link to a file
+    elsewhere), and names stay plain (no .., hidden files or __pycache__)."""
+    import os
+
+    from core.runner import workspace_files
+
+    root = tmp_path / "py"
+    (root / "data").mkdir(parents=True)
+    (root / "a.py").write_text("x = 1\n")
+    (root / "data" / "m.json").write_text("[1]")
+    secret = tmp_path / "secret.txt"
+    secret.write_text("not for the agent")
+    os.symlink(secret, root / "link.txt")
+    os.symlink(tmp_path, root / "linkdir")
+    os.link(secret, root / "hard.txt")
+    (root / ".hidden").write_text("h")
+    (root / "__pycache__").mkdir()
+    (root / "__pycache__" / "a.pyc").write_bytes(b"x")
+    found, passed = workspace_files(root)
+    assert sorted(found) == ["a.py", "data/m.json"]
+    assert passed == [".hidden", "__pycache__", "hard.txt", "link.txt", "linkdir"]
+    assert workspace_files(tmp_path / "nothing") == ({}, [])
+    os.symlink(tmp_path, tmp_path / "py2")
+    assert workspace_files(tmp_path / "py2") == ({}, [])
