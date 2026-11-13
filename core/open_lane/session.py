@@ -33,7 +33,9 @@ Carried modules: a new session's workspace starts with the modules of every subm
 in the run's earlier rounds (the latest accepted version of each module), compiled there before the agent
 begins, through the same `accept.py compile` as lean_check and without charge to the budgets. The agent
 imports them instead of pasting their code again; whatever it submits is compiled and checked afresh by the
-service, as every submission is. session.json's `carried` says what was carried and whether it compiled.
+service, as every submission is. session.json's `carried` says what was carried and whether it compiled. In a run
+that continues an earlier one (core.open_lane.continuation), the earlier run's accepted modules come first, round
+1 starts from that run's last session (its drafts and Python files), and each entry names the run (`from_run`).
 
 Drafts: the agent's unfinished work goes on with it. A new session of a proof round also gets the modules
 that the workspace of the latest earlier round's session held when that session ended and that are not the
@@ -102,6 +104,7 @@ from ..runner import WORKSPACE as PY_DIR
 from ..runner import Limits, run_recipe, workspace_files
 from ..sandbox import Sandbox
 from ..util import REPO_ROOT
+from . import continuation
 from . import offered
 from . import research
 from . import surface as surfaces
@@ -219,14 +222,11 @@ def module_rel(name: str) -> str:
     return name.replace(".", "/") + ".lean"
 
 
-def carried_modules(run_path: Path, k: int) -> list[dict]:
-    """The modules of the submissions the service accepted in rounds 1 to k - 1 of the run, the latest accepted
-    version of each module path (by round, attempt and submission), in an order where every module comes after
-    the carried modules it imports. Each entry names the submission it comes from and what that submission
-    proved; `source` is the submitted file."""
-    latest: dict[str, dict] = {}
-    for kk in range(1, k):
-        rdir = Path(run_path) / f"round_{kk:03d}"
+def _accepted_into(latest: dict[str, dict], base: Path, rounds, from_run: str | None) -> None:
+    """The modules of the submissions the service accepted in those rounds of the run folder at base (a run's,
+    or its copy of an earlier run's), each over any earlier version of its path."""
+    for kk in rounds:
+        rdir = Path(base) / f"round_{kk:03d}"
         attempts = sorted((p for p in rdir.glob("attempt_*") if p.name[len("attempt_"):].isdigit()),
                           key=lambda p: int(p.name[len("attempt_"):]))
         for adir in attempts:
@@ -255,7 +255,20 @@ def carried_modules(run_path: Path, k: int) -> list[dict]:
                         "certified": receipt.get("certified_count"), "length": (receipt.get("scoring") or {}).get("length"),
                         "network": manifest.get("network"), "claimed_count": int(manifest.get("claimed_count") or 0),
                         "certificate": (manifest.get("scored") or {}).get("certificate") or None,
+                        **({"from_run": from_run} if from_run else {}),
                     }
+
+
+def carried_modules(run_path: Path, k: int) -> list[dict]:
+    """The modules of the submissions the service accepted in rounds 1 to k - 1 of the run, and, in a run that
+    continues an earlier one (core.open_lane.continuation), in that run's proof rounds before them: the latest
+    accepted version of each module path (by run, round, attempt and submission), in an order where every
+    module comes after the carried modules it imports. Each entry names the submission it comes from (and the
+    earlier run, `from_run`) and what that submission proved; `source` is the submitted file."""
+    latest: dict[str, dict] = {}
+    for base in continuation.roots(Path(run_path)):  # the earlier runs this one goes on from, oldest first
+        _accepted_into(latest, base, continuation.rounds_of(base), continuation.run_id_of(base))
+    _accepted_into(latest, Path(run_path), range(1, k), None)
     names = {module_name(rel): rel for rel in latest}
     deps = {n: [i for i in module_imports(Path(latest[rel]["source"]).read_text()) if i in names] for n, rel in names.items()}
     order: list[str] = []
@@ -299,14 +312,23 @@ def _sha(data: bytes) -> str:
 
 def source_session(run_path: Path, k: int) -> tuple[Path | None, int | None]:
     """The session whose unfinished work a new session of proof round k starts from: the latest earlier round's
-    (its last attempt), with that round's number; (None, None) in round 1."""
-    for kk in range(k - 1, 0, -1):
-        attempts = sorted((p for p in (Path(run_path) / f"round_{kk:03d}").glob("attempt_*")
-                           if p.name[len("attempt_"):].isdigit() and (p / "open_lane" / "workspace").is_dir()),
-                          key=lambda p: int(p.name[len("attempt_"):]))
-        if attempts:
-            return attempts[-1] / "open_lane", kk
-    return None, None
+    (its last attempt), with that round's number; in round 1 of a run that continues an earlier one, the last
+    session of the copy of that run (continuation.origin names the run); (None, None) otherwise."""
+    def last_session(base: Path, rounds) -> tuple[Path | None, int | None]:
+        for kk in rounds:
+            attempts = sorted((p for p in (Path(base) / f"round_{kk:03d}").glob("attempt_*")
+                               if p.name[len("attempt_"):].isdigit() and (p / "open_lane" / "workspace").is_dir()),
+                              key=lambda p: int(p.name[len("attempt_"):]))
+            if attempts:
+                return attempts[-1] / "open_lane", kk
+        return None, None
+
+    found = last_session(Path(run_path), range(k - 1, 0, -1))
+    for base in reversed(continuation.roots(Path(run_path))):
+        if found[0] is not None:
+            break
+        found = last_session(base, sorted(continuation.rounds_of(base), reverse=True))
+    return found
 
 
 def python_workspace_from(run_path: Path, k: int) -> list[dict]:
@@ -320,13 +342,16 @@ def python_workspace_from(run_path: Path, k: int) -> list[dict]:
     except (OSError, ValueError, AttributeError):
         before = {}
     before = before if isinstance(before, dict) else {}
+    earlier = continuation.origin(src, Path(run_path))  # a session of an earlier run this one continues
     files, _ = workspace_files(src / PY_DIR)
     out = []
     for rel, path in sorted(files.items()):
         data = path.read_bytes()
         meta = before.get(rel) if isinstance(before.get(rel), dict) else {}
+        same = meta.get("sha256") == _sha(data)
+        from_run = (meta.get("from_run") if same else None) or earlier
         out.append({"path": rel, "data": data, "bytes": len(data), "sha256": _sha(data),
-                    "saved_round": meta.get("saved_round") if meta.get("sha256") == _sha(data) else None})
+                    "saved_round": meta.get("saved_round") if same else None, **({"from_run": from_run} if from_run else {})})
     return out
 
 
@@ -347,6 +372,9 @@ def draft_modules(run_path: Path, k: int, carried: list[dict]) -> list[dict]:
     except (OSError, ValueError, AttributeError):
         before = {}
     saved = last_compiles(src)
+    earlier = continuation.origin(src, Path(run_path))  # a session of an earlier run this one continues
+    here_from = {"from_run": earlier} if earlier else {}
+    kept = ("saved_round", "compiled", "stopped", "from_run")
     found: dict[str, tuple[bytes, dict]] = {}
     ws = src / "workspace"
     for f in sorted(ws.glob("Candidate/**/*.lean")):
@@ -356,11 +384,12 @@ def draft_modules(run_path: Path, k: int, carried: list[dict]) -> list[dict]:
         data = f.read_bytes()
         prior = before.get(rel) or {}
         if rel in saved:  # saved in that session
-            meta = {"saved_round": kk, "compiled": saved[rel].get("ok"), "stopped": bool(saved[rel].get("timed_out"))}
+            meta = {"saved_round": kk, "compiled": saved[rel].get("ok"), "stopped": bool(saved[rel].get("timed_out")), **here_from}
         elif not prior.get("set_apart") and prior.get("sha256") == _sha(data):  # a draft it was given and left as it was
-            meta = {k2: prior.get(k2) for k2 in ("saved_round", "compiled", "stopped")}
+            meta = {k2: prior.get(k2) for k2 in kept if k2 in prior or k2 != "from_run"}
+            meta = {**here_from, **meta} if "from_run" not in meta else meta
         else:
-            meta = {"saved_round": None, "compiled": None, "stopped": False}
+            meta = {"saved_round": None, "compiled": None, "stopped": False, **here_from}
         found[rel] = (data, meta)
     for f in sorted((src / "drafts").glob("Candidate/**/*.lean")):
         rel = f.relative_to(src / "drafts").as_posix()
@@ -370,7 +399,8 @@ def draft_modules(run_path: Path, k: int, carried: list[dict]) -> list[dict]:
         here = ws / rel
         if here.is_file() and _sha(here.read_bytes()) != prior.get("held_sha256"):
             continue  # the agent saved something else at that path since: that is the newer work
-        found[rel] = (f.read_bytes(), {k2: prior.get(k2) for k2 in ("saved_round", "compiled", "stopped")})
+        meta = {k2: prior.get(k2) for k2 in kept if k2 in prior or k2 != "from_run"}
+        found[rel] = (f.read_bytes(), {**here_from, **meta} if "from_run" not in meta else meta)
     out = []
     for rel, (data, meta) in sorted(found.items()):
         if held.get(rel) == data:
@@ -624,13 +654,13 @@ class Session:
         shutil.rmtree(dst, ignore_errors=True)
         dst.mkdir()
         cap, most, total, kept = self.state["py_limits"]["mb"] * MIB, self.state["py_limits"]["files"], 0, {}
-        for f in sorted(files, key=lambda f: (-(f.get("saved_round") or 0), f["path"])):
+        for f in sorted(files, key=lambda f: (bool(f.get("from_run")), -(f.get("saved_round") or 0), f["path"])):
             if len(kept) >= most or total + f["bytes"] > cap:
                 continue
             (dst / f["path"]).parent.mkdir(parents=True, exist_ok=True)
             (dst / f["path"]).write_bytes(f["data"])
             total += f["bytes"]
-            kept[f["path"]] = {k: f[k] for k in ("bytes", "sha256", "saved_round")}
+            kept[f["path"]] = {k: f[k] for k in ("bytes", "sha256", "saved_round", "from_run") if k in f}
         self.state["py_files"] = dict(sorted(kept.items()))
         self._save()
 

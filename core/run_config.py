@@ -281,7 +281,8 @@ def validate(cfg: dict, source: str = "run config") -> None:
 OPEN_LANE_KEYS = {"enabled", "lean_project", "work_dir", "python", "compile_calls", "python_calls", "submissions", "max_turns",
                   "worker_seconds", "notes_reserve_seconds", "python_workspace_mb", "python_workspace_files", "stall_rounds", "fake_scripts", "example", "extra_sources", "knowledge", "second_example", "notes",
                   "seed_check", "scaling", "split_example", "workflow_mode", "discovery_rounds", "probe_compile_calls",
-                  "probe_auxiliary_submissions", "probe_seconds", "research_workspace_mb", "research_workspace_files"}
+                  "probe_auxiliary_submissions", "probe_seconds", "research_workspace_mb", "research_workspace_files",
+                  "continue_from", "continue_note"}
 KNOWLEDGE_CONDITIONS = ("minimal", "maximum")
 WORKFLOW_MODES = ("interleaved", "python_then_lean")
 
@@ -304,9 +305,11 @@ def workflow_errors(cfg: dict, ol: dict) -> list[str]:
         if ol.get("enabled") is not True:
             errors.append("open_lane.workflow_mode python_then_lean needs open_lane.enabled: true")
         n, total = ol.get("discovery_rounds", 0), cfg.get("rounds_max")
-        if isinstance(total, int) and not isinstance(total, bool) and not 1 <= n < total:
-            errors.append(f"open_lane.discovery_rounds must be at least 1 and less than rounds_max ({total}) in "
-                          "python_then_lean mode: the rounds after discovery are formalization's")
+        least = 0 if ol.get("continue_from") else 1  # a continuation may go straight on with formalization
+        if isinstance(total, int) and not isinstance(total, bool) and not least <= n < total:
+            errors.append(f"open_lane.discovery_rounds must be at least {least} and less than rounds_max ({total}) in "
+                          "python_then_lean mode: the rounds after discovery are formalization's"
+                          + ("" if least == 0 else " (0 only in a run that continues an earlier one, open_lane.continue_from)"))
     return errors
 
 
@@ -346,6 +349,12 @@ def open_lane_errors(cfg: dict) -> list[str]:
         errors.append("open_lane.split_example must be null or a path under examples/ in the Lean project")
     if not isinstance(ol.get("notes", ""), str):
         errors.append("open_lane.notes must be text")
+    if ol.get("continue_from") is not None and (not isinstance(ol["continue_from"], str) or not ol["continue_from"].strip()):
+        errors.append("open_lane.continue_from must be null, a run id under runs_dir or the path of a run's folder")
+    if not isinstance(ol.get("continue_note") or "", str):
+        errors.append("open_lane.continue_note must be text")
+    elif ol.get("continue_note") and not ol.get("continue_from"):
+        errors.append("open_lane.continue_note is shown with an earlier run's submissions: it needs open_lane.continue_from")
     check = ol.get("seed_check")
     if check is not None and not (isinstance(check, dict) and set(check) == {"network"} and isinstance(check["network"], str)):
         errors.append("open_lane.seed_check must be null or {network: <a development network of the model>}")
