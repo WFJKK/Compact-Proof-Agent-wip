@@ -77,6 +77,24 @@ The service builds both statements itself, so they must match exactly.
 Length = L (the bill) + E (the weights, charged once) + the number of
 certificate numbers (charged 1 each).
 
+A PLAN steers a checker for free. If your checker needs data you
+computed offline that says WHERE to look (which inputs go into which
+group, where a loop stops), give it as a plan: natural numbers in the
+scored block ("plan": [...]), below 2^32, at most 4 per input plus
+10,000. The checker is then `D : List Nat → Checker` and reads the plan
+as ordinary Lean data, with no charge; turning an entry into a number
+for arithmetic goes through `I.lit`, charged 1. A plan is not trusted:
+the soundness theorem must hold for every plan,
+
+    theorem D_sound : ∀ (p : List Nat) (w : Weights ℚ) (c : Cert) (n : Nat) (cost : Cost),
+        CostM.exec (D p Interp.counting) ⟨w, c⟩ = some (n, cost) → n ≤ numCorrect graph w task
+    theorem D_instance : CostM.billed (D plan Interp.counting) ⟨weights, cert⟩ = some (N, L)
+
+where `plan` is the protected module's (its name ends in _p and the
+plan's hash; lean_check takes the same plan). The checker's own code
+may not mention the protected `plan`. Data written into D's code counts
+toward its description size; data in a plan does not.
+
 The interface a checker is written against, the counting interpreter
 with its prices, and the specification lemmas for proofs
 (CountedOps.lean):
@@ -115,6 +133,9 @@ depend on):
 - The description size of D and the definitions it uses (every node
   counted, a numeral 1 per bit, a string 8 per byte) is at most
   8192 + 4E. A real network's weights written out measure more.
+- lean_check with `checker` (D's name) shows, before you submit, whether
+  D stays in the counted language and its description size against
+  the budget, with its largest definitions.
 - It must replay in the kernel within 120 s.
 A proof refused scoring stays verified.
 

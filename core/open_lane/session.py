@@ -11,10 +11,12 @@ A session lives in an attempt's folder:
 
 The tools:
 
-- lean_check(path, source or edits, network, claimed_count, certificate): save a module in the workspace (its
-  full source, or edits to the module saved at that path, each of whose old texts must occur exactly once) and
-  compile it against the protected module of that network and claim (`accept.py compile` of the Lean project,
-  in its box), returning the compiler's messages. Counts against the compile budget.
+- lean_check(path, source or edits, network, claimed_count, certificate, checker, plan): save a module in the
+  workspace (its full source, or edits to the module saved at that path, each of whose old texts must occur
+  exactly once) and compile it against the protected module of that network and claim (`accept.py compile` of
+  the Lean project, in its box), returning the compiler's messages; with `checker`, also the scoring preview
+  (the counted-language closure and the description size against the budget); with `plan`, the protected
+  module has that plan, for a planned checker. Counts against the compile budget.
 - run_python(code, network): run code in the recipe sandbox with that network's weights and info, returning
   what it printed. Same limits as a recipe.
 - search_library(query, max_results): search the files of the Lean project that the run shows the agent (its
@@ -146,6 +148,11 @@ def excerpt(text: str, limit: int = MAX_TEXT) -> str:
     return text[:head] + "\n[...]\n" + text[-tail:]
 MAX_SOURCE = 400_000  # characters of one module
 MODULE_PATH = re.compile(r"^Candidate/([A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\.lean$")
+CHECKER_NAME = re.compile(r"^Candidate(\.[A-Za-z_][A-Za-z0-9_]*)+$")  # as the service checks a manifest's names
+SCORING_PREVIEW_NOTE = ("What scoring checks without the kernel, measured as the score step measures it: whether the "
+                        "checker uses only the counted language, and its description size against the budget. Not a "
+                        "verdict: a submission's score step also has the kernel check the soundness and instance theorems "
+                        "and time the general layer.")
 PY_MODULE = re.compile(r"^py/[A-Za-z_][A-Za-z0-9_]*\.py$")  # run_python's save_as
 MIB = 1024 * 1024
 SUBMIT_TIMEOUT_S = 4 * 3600
@@ -870,11 +877,13 @@ class Session:
 
     def lean_check(self, path: str, source: str | None = None, network: str | None = None, claimed_count: int | None = None,
                    certificate: list | None = None, edits: list | None = None, candidate_id: str | None = None,
-                   question: str | None = None) -> dict:
+                   question: str | None = None, checker: str | None = None, plan: list | None = None) -> dict:
         t0 = time.monotonic()
         args = {"path": path, "network": network, "claimed_count": claimed_count, "certificate": certificate}
         args.update({k: v for k, v in (("source", source), ("edits", edits), ("candidate_id", candidate_id),
-                                       ("question", question)) if v is not None})
+                                       ("question", question), ("checker", checker)) if v is not None})
+        if plan is not None:
+            args["plan_entries"] = len(plan) if isinstance(plan, list) else None  # the log keeps the size, not the plan
         probe, outcome, saved = None, "infrastructure_error", None
         try:
             left = self._time_for_call()
@@ -887,6 +896,11 @@ class Session:
             self._network(network)
             if isinstance(claimed_count, bool) or not isinstance(claimed_count, int) or claimed_count < 0:
                 raise ToolError("claimed_count must be a natural number")
+            if checker is not None and (not isinstance(checker, str) or not CHECKER_NAME.match(checker)):
+                raise ToolError("checker must be the name of your checker, a constant of your modules such as Candidate.MyChecker.D")
+            if plan is not None and (not isinstance(plan, list) or not all(isinstance(v, int) and not isinstance(v, bool)
+                                                                            and 0 <= v for v in plan)):
+                raise ToolError("plan must be a list of natural numbers")
             if path in ((self._lock() or {}).get("modules") or {}):
                 raise ToolError(f"{path} is locked: this session runs the accepted checker unchanged. Write in another "
                                 "module, which may import it.")
@@ -913,6 +927,12 @@ class Session:
                 cpath = self.path / "certificate.json"
                 cpath.write_text(json.dumps(certificate))
                 cmd += ["--certificate", str(cpath)]
+            if checker is not None:
+                cmd += ["--checker", checker]
+            if plan is not None:
+                ppath = self.path / "plan.json"
+                ppath.write_text(json.dumps(plan))
+                cmd += ["--plan", str(ppath)]
             limit = COMPILE_TIMEOUT_S if left is None else min(COMPILE_TIMEOUT_S, left)
             deadline = None
             if probe is not None:
@@ -930,8 +950,14 @@ class Session:
             out = {"ok": bool(res.get("ok")), "timed_out": bool(res.get("timed_out")), "module": res.get("module"),
                    "protected_module": res.get("protected_module"), "lines": saved["lines"],
                    "messages": excerpt(text) if text else "(no messages)", "seconds": res.get("seconds")}
+            if isinstance(res.get("scoring_preview"), dict):
+                out["scoring_preview"] = {**res["scoring_preview"], "note": SCORING_PREVIEW_NOTE}
             outcome = "timeout" if out["timed_out"] else "compiled" if out["ok"] else "compiler_error"
             logged = {"ok": out["ok"], "saved": saved, "messages": out["messages"][:500], "errors": error_lines(out["messages"])}
+            if "scoring_preview" in out:
+                logged["scoring_preview"] = {k: out["scoring_preview"].get(k) for k in
+                                             ("checker", "counted_language", "offending", "description_size", "size_budget",
+                                              "within_budget", "error")}
             if out["timed_out"]:
                 logged["timed_out"] = True
             showed = surfaces.matches(text, self.surface().get("forbidden") or [])
@@ -1533,7 +1559,11 @@ class Session:
                            "certificate the name carries its hash). Give the module's full `source`, or `edits` to the "
                            "module saved at `path`: each replaces its `old` text, which must occur exactly once, by its "
                            "`new` text, in order (no edits: compile the module as saved). Returns the compiler's messages "
-                           "(errors, goals, #eval output). Each call counts against the compile budget.",
+                           "(errors, goals, #eval output). With `checker`, the name of your checker D, a successful compile "
+                           "also returns a scoring preview: whether D uses only the counted language (the constants it is "
+                           "refused for, if not) and its description size against the budget, with its largest "
+                           "definitions, measured as the score step measures them. Each call counts against the compile "
+                           "budget.",
             "schema": {"type": "object", "properties": {
                 "path": {"type": "string", "description": "Candidate/<Name>.lean"},
                 "source": {"type": "string", "description": "the module's full source (or give edits instead)"},
@@ -1542,7 +1572,12 @@ class Session:
                                     "required": ["old", "new"]}},
                 "network": {"type": "string"},
                 "claimed_count": {"type": "integer"},
-                "certificate": {"type": "array", "items": {}, "description": "optional: numbers (integers, floats or [p, q]) for a scored proof"}},
+                "certificate": {"type": "array", "items": {}, "description": "optional: numbers (integers, floats or [p, q]) for a scored proof"},
+                "checker": {"type": "string", "description": "optional: your checker's name (e.g. Candidate.MyChecker.D), "
+                                                             "in this module or one it imports, for a scoring preview"},
+                "plan": {"type": "array", "items": {"type": "integer"},
+                         "description": "optional: the plan of a planned checker (natural numbers), as the scored block "
+                                        "will give it; the protected module then has it as `plan`"}},
                 "required": ["path", "network", "claimed_count"]},
         },
         "run_python": {
@@ -1587,7 +1622,8 @@ class Session:
                 "modules": {"type": "array", "items": {"type": "string"},
                             "description": "paths in your workspace (saved with lean_check or carried over); the "
                                            "workspace modules they import are added"},
-                "scored": {"type": "object", "description": "optional: {checker, sound, instance, certificate, claimed_bill}"},
+                "scored": {"type": "object", "description": "optional: {checker, sound, instance, certificate, claimed_bill}, "
+                                                          "and plan (natural numbers) for a planned checker D : List Nat → Checker"},
                 "kind": {"type": "string", "enum": ["performance", "auxiliary"],
                          "description": "performance (default): theorem proves Target; auxiliary: theorem is a lemma with any statement, accepted with no count and no score, listed to you in later rounds"}},
                 "required": ["network", "claimed_count", "theorem", "modules"]},

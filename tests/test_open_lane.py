@@ -265,8 +265,13 @@ def test_the_service_compiles_a_checker_on_the_interval_rule_and_the_agent_is_to
     assert said["clean"] is False and said["note"].startswith("not counted in this run")
     assert "Candidate.Uses.D mentions CompactCheck.Interp.interval" in said["note"] and "Candidate.Uses.fine" not in said["note"]
     clean = session.lean_check("Candidate/Fine.lean", source.replace("Uses", "Fine").split("def D")[0] +
-                               "def fine : Checker := fun I => pure I.nzero\n\nend Candidate.Fine\n", "max2_tiny-v8-s0", 64)
+                               "def fine : Checker := fun I => pure I.nzero\n\nend Candidate.Fine\n", "max2_tiny-v8-s0", 64,
+                               checker="Candidate.Fine.fine")
     assert clean["ok"] and "offered" not in clean, clean
+    # the scoring preview, from the real service: in the counted language, and far within the budget
+    p = clean["scoring_preview"]
+    assert p["counted_language"] == "ok" and p["offending"] == [] and p["within_budget"] is True, p
+    assert 0 < p["description_size"] < p["size_budget"] and p["checker"] == "Candidate.Fine.fine"
 
 
 def test_patience_counts_claims_not_files(tmp_path):
@@ -1542,3 +1547,72 @@ def test_only_plain_files_with_plain_names_are_taken_from_a_programs_folder(tmp_
     assert workspace_files(tmp_path / "nothing") == ({}, [])
     os.symlink(tmp_path, tmp_path / "py2")
     assert workspace_files(tmp_path / "py2") == ({}, [])
+
+
+def test_lean_check_previews_the_scoring_checks_of_a_named_checker(tmp_path, monkeypatch):
+    """With `checker`, lean_check asks the service's development compile for its scoring preview (accept.py compile
+    --checker) and returns it, with a note that it is not a verdict; the tools log keeps its numbers. Without it,
+    nothing changes. Run attn-min2-ptl-1 (12 November 2026) learnt of both scoring refusals only on submission."""
+    s = _plain_session(tmp_path)
+    calls = []
+    preview = {"checker": "Candidate.Far.D", "counted_language": "ok", "offending": [], "description_size": 14043,
+               "size_budget": 13376, "within_budget": False,
+               "largest_definitions": [{"name": "Candidate.Far.pre", "size": 5486}]}
+
+    def service(self, cmd, timeout_s):
+        calls.append(cmd)
+        out = {"ok": True, "messages": "", "module": "Candidate.Far"}
+        if "--checker" in cmd:
+            out["scoring_preview"] = dict(preview)
+        return out
+
+    monkeypatch.setattr(Session, "_service", service)
+    net = "max2_tiny-v8-s0"
+    out = s.lean_check(path="Candidate/Far.lean", source="def D := 1\n", network=net, claimed_count=64)
+    assert "--checker" not in calls[-1] and "scoring_preview" not in out
+    out = s.call("lean_check", {"path": "Candidate/Far.lean", "edits": [], "network": net, "claimed_count": 64,
+                                "checker": "Candidate.Far.D"})
+    assert calls[-1][calls[-1].index("--checker") + 1] == "Candidate.Far.D"
+    p = out["scoring_preview"]
+    assert p["description_size"] == 14043 and p["within_budget"] is False and "not a verdict" in p["note"].lower()
+    assert p["largest_definitions"][0]["name"] == "Candidate.Far.pre"
+    log = [json.loads(l) for l in (s.path / "tools.jsonl").read_text().splitlines()]
+    assert log[-1]["args"]["checker"] == "Candidate.Far.D"
+    assert log[-1]["outcome"]["scoring_preview"]["description_size"] == 14043
+    assert "largest_definitions" not in log[-1]["outcome"]["scoring_preview"]  # the log keeps the numbers
+    for bad in ("D", "Mathlib.foo", "Candidate.", "Candidate.Far.D; rm", 7):
+        with pytest.raises(ToolError, match="checker must be"):
+            s.lean_check(path="Candidate/Far.lean", edits=[], network=net, claimed_count=64, checker=bad)
+    assert "checker" in s.tools["lean_check"]["schema"]["properties"]
+    assert "scoring preview" in s.tools["lean_check"]["description"]
+
+
+def test_lean_check_gives_a_planned_checkers_plan_to_the_protected_module(tmp_path, monkeypatch):
+    """With `plan`, lean_check writes it beside the session and passes it to the development compile (accept.py
+    compile --plan), which builds the protected module with it as `plan`. The log keeps the plan's length, not the
+    plan. A plan that is not a list of natural numbers is refused before anything runs; submit_candidate's scored
+    block carries a plan to the manifest unchanged."""
+    s = _plain_session(tmp_path)
+    calls = []
+    monkeypatch.setattr(Session, "_service", lambda self, cmd, timeout_s: calls.append(list(cmd)) or {"ok": True, "messages": ""})
+    net = "max2_tiny-v8-s0"
+    plan = [0, 0, 0, 0] + [1] * 60
+    s.lean_check(path="Candidate/P.lean", source="def a := 1\n", network=net, claimed_count=60, plan=plan)
+    cmd = calls[-1]
+    assert json.loads(Path(cmd[cmd.index("--plan") + 1]).read_text()) == plan
+    log = [json.loads(l) for l in (s.path / "tools.jsonl").read_text().splitlines()]
+    assert log[-1]["args"]["plan_entries"] == 64 and "plan" not in log[-1]["args"]
+    s.lean_check(path="Candidate/P.lean", edits=[], network=net, claimed_count=60)
+    assert "--plan" not in calls[-1]
+    for bad in ([1, -1], [1.5], "1,2", [True], {"a": 1}):
+        with pytest.raises(ToolError, match="plan must be a list of natural numbers"):
+            s.lean_check(path="Candidate/P.lean", edits=[], network=net, claimed_count=60, plan=bad)
+    assert "plan" in s.tools["lean_check"]["schema"]["properties"]
+    assert "plan" in s.tools["submit_candidate"]["schema"]["properties"]["scored"]["description"]
+    monkeypatch.setattr(Session, "_service", lambda self, cmd, timeout_s: {"status": "rejected", "reason": "stand-in"})
+    scored = {"checker": "Candidate.P.D", "sound": "Candidate.P.D_sound", "instance": "Candidate.P.D_instance",
+              "certificate": [], "plan": plan, "claimed_bill": 3780}
+    s.submit_candidate(network=net, claimed_count=60, theorem="Candidate.P.performance", modules=["Candidate/P.lean"],
+                       scored=scored)
+    sent = json.loads(next((s.path / "submissions").glob("*/manifest.json")).read_text())
+    assert sent["scored"]["plan"] == plan

@@ -44,7 +44,10 @@ response:
 - The tools (`core/open_lane/session.py`): `lean_check` saves a module in the session's workspace and
   compiles it through the service against the protected module of a network and claim (its full source, or
   since 11 November 2026 `edits` to the module saved at that path: each replaces an `old` text that must
-  occur exactly once, in order, and no edits compile the module as saved);
+  occur exactly once, in order, and no edits compile the module as saved; since 13 November 2026 `checker`,
+  the name of the agent's checker, adds a scoring preview: the counted-language closure and the description
+  size against the budget, measured as the score step measures them, with the largest definitions; and `plan`
+  builds the protected module with a planned checker's plan);
   `run_python` runs code in the recipe sandbox with the network's weights, in a folder that holds the
   model's code, the harness and the weights and nothing of the fixed rules (no `helpers.py`, which names
   them; the check before a run scans the folder's text files), and the agent's Python workspace `py/`
