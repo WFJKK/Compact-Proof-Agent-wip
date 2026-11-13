@@ -1,0 +1,15 @@
+# The linear max-of-2 pilot in the python_then_lean workflow, cut to one day (13 November 2026): round 1 is
+# discovery, rounds 2 to 4 formalization, sessions of 90 minutes, no seed check and no scaling question, so the
+# run ends after about six hours. The full pilot (linear-max2-python-then-lean.yaml: four discovery rounds, three
+# formalization rounds, three-hour sessions, then the seed check and the scaling question) takes about a day
+# and a half. Budget: at most $25 a round, $100 for the run (Claude Code's own count, spend.jsonl), when the run
+# is billed to an API key (--auth api_key).
+extends: linear-max2-python-then-lean.yaml
+run_id: linear-max2-ptl-day
+rounds_max: 4
+api_budget: {run_usd: 100, round_usd: 25}
+open_lane:
+  discovery_rounds: 1
+  worker_seconds: 5400
+  seed_check: null
+  scaling: false
