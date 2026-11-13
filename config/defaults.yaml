@@ -189,7 +189,7 @@ open_lane:
   #                     Lean results). A fixed schedule: patience does not apply; the phases choose their own
   #                     prompt templates. The seed check and the scaling question follow as before.
   workflow_mode: interleaved
-  discovery_rounds: 0         # python_then_lean: at least 1 and less than rounds_max
+  discovery_rounds: 0         # python_then_lean: at least 1 (0 in a continuation) and less than rounds_max
   # The discovery phase's Lean allowance, totals over the whole phase (not per round). A discovery call must name
   # a candidate and the question it settles. All zero: no Lean in discovery.
   probe_compile_calls: 3
@@ -198,3 +198,14 @@ open_lane:
   # The research folder (Research/) of a python_then_lean run: its size, and how many files it holds.
   research_workspace_mb: 50
   research_workspace_files: 500
+  # A run that goes on with an earlier open-lane run's work (docs/OPEN_LANE.md, "Continuing an earlier run";
+  # core/open_lane/continuation.py): that run's id under runs_dir, or the path of its folder. The earlier run must
+  # be of the same model and networks. When the run starts it copies the earlier run's proof rounds (accepted
+  # modules, the last session's unfinished modules and Python files, notes, receipts) and its research folder;
+  # the agent goes on from them, and nothing of the earlier run counts in this one. With it, a python_then_lean
+  # run may have discovery_rounds 0: formalization from round 1.
+  continue_from: null
+  # Shown to the agent with the earlier run's submissions, for what the person starting the continuation knows
+  # about them (a rejection that was a fault of the service fixed since, say). Facts about the service and the
+  # earlier receipts only: never what a proof of the network looks like.
+  continue_note: ""

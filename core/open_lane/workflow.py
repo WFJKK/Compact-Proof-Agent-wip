@@ -261,13 +261,17 @@ def lines(run, records: list[dict] | None = None, markdown: bool = False) -> lis
     out = h("Workflow (python_then_lean)")
     for p, rng in ((DISCOVERY, sched["discovery_rounds"]), (FORMALIZATION, sched["formalization_rounds"])):
         u = usage[p]
+        if rng[1] < rng[0]:  # a continuation that goes straight on with formalization
+            out.append(f"{ind}- {p}: no rounds in this run")
+            continue
         tools = ", ".join(f"{t} {n}" for t, n in sorted(u["tools"].items())) or "no tool calls"
         out.append(f"{ind}- {p}: rounds {rng[0]} to {rng[1]} configured, {len(u['rounds'])} done "
                    f"({', '.join(map(str, u['rounds'])) or 'none'}); {u['seconds']:,.0f} s of sessions; {tools}")
     lim, used = sched["probe"], probe_usage(run.path)
-    out.append(f"{ind}- discovery's Lean allowance: {used['compile_calls']} of {lim['compile_calls']} compiles, "
-               f"{used['auxiliary_submissions']} of {lim['auxiliary_submissions']} auxiliary submissions, "
-               f"{used['seconds']:,.0f} of {lim['seconds']:,.0f} s")
+    if sched["discovery_rounds"][1] >= sched["discovery_rounds"][0]:
+        out.append(f"{ind}- discovery's Lean allowance: {used['compile_calls']} of {lim['compile_calls']} compiles, "
+                   f"{used['auxiliary_submissions']} of {lim['auxiliary_submissions']} auxiliary submissions, "
+                   f"{used['seconds']:,.0f} of {lim['seconds']:,.0f} s")
     for e in probe_entries(run.path):
         what = e.get("outcome") or "unsettled (counted whole)"
         out.append(f"{ind}  - round {e.get('round')}: {e['kind']} for {e.get('candidate_id')}: {what}; "

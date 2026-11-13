@@ -260,6 +260,37 @@ ordinary record (with `phase`, never `stage`) and enters the frontier and the sc
 show the mode, the rounds, time and tool calls of each phase, the Lean checks and their outcomes, the
 candidates with their estimates, and the accepted proofs that name each candidate.
 
+## Continuing an earlier run
+
+A run keeps the Lean service it started with, so a run whose service has changed since cannot be resumed. To go
+on with its work anyway, start a new run that continues it: `open_lane.continue_from` names the earlier run (its
+id under `runs_dir`, or the path of its folder), which must be an open-lane run of the same model and networks
+with at least one complete proof round (core/open_lane/continuation.py). For example
+
+    python3 -m core.loop run --config config/pilot/attn-min2-ptl-continue.yaml --sandbox seatbelt --auth api_key
+
+When it starts, the run copies, once and read-only, into <run>/inherited/: the earlier run's config, versions,
+archive and stages record; for each complete proof round its meta, the agent's answers, each session's state and
+tool log, and every submission (manifest, receipt, the pipeline's notes beside them and the submitted modules);
+for the last of those rounds also the session's workspace modules, drafts and Python files; and its research
+folder. `inherited/record.json` lists every copied file with its sha256. The research folder is also copied into
+the run's own, each file's index entry naming the run it came from. The earlier run's folder is only read; its
+incomplete rounds and its sessions after the proof rounds are not copied.
+
+Round k of the continuation starts as round K + k of the earlier run would have (K its last proof round): the
+modules the service accepted there are carried into the workspace and compiled before the agent begins, the last
+session's unfinished modules and Python files go on as drafts, and until the run has notes of its own the latest
+notes are the earlier run's, named as such. The earlier run's submissions are listed apart under the run's own,
+with whether the same acceptance service answered them; `open_lane.continue_note` is shown with them, for what
+the person starting the continuation knows about them (a rejection that was a fault of the service, fixed since):
+facts about the service and the receipts only, never what a proof of the network looks like.
+
+Nothing of the earlier run counts in the continuation: its archive, frontier, score and budgets are its own. In
+the python_then_lean workflow a continuation may set `discovery_rounds: 0` and formalise from round 1; the
+transition then records the research folder as the earlier run left it, with its shortlist. A continuation can
+itself be continued: its copy goes along (inherited/inherited/), and the carried modules are the latest accepted
+version of each path across all of them.
+
 ## After the proof rounds
 
 A pilot run is about one network and has two more sessions after its proof rounds

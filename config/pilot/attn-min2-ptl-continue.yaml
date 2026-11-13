@@ -1,0 +1,24 @@
+# Continues run attn-min2-ptl-1 (12 November 2026: one discovery round and two formalization rounds of
+# config/pilot/attn-min2-quick.yaml in the python_then_lean workflow, on attn-min2-v64d8-s1) in a new run, with
+# the Lean service of today, which that run cannot resume with: three formalization rounds of 90 minutes, from
+# its accepted modules, drafts, Python files, notes and research folder (docs/OPEN_LANE.md, "Continuing an
+# earlier run"). Budget, when billed to an API key (--auth api_key): at most $40 a round and $120 for the run.
+# The clock, not the money, should end a session, or it ends mid-work and leaves no notes (round 3 of
+# attn-min2-ptl-1 hit its $20 cap after 54 minutes): that run cost $0.35 to $0.39 a minute, so 90 minutes cost
+# at most about $36. The earlier run must be in runs_dir; otherwise give its folder's path in
+# open_lane.continue_from.
+extends: attn-min2-quick.yaml
+run_id: attn-min2-ptl-2
+rounds_max: 3
+api_budget: {run_usd: 120, round_usd: 40}
+open_lane:
+  workflow_mode: python_then_lean
+  discovery_rounds: 0
+  continue_from: attn-min2-ptl-1
+  continue_note: |
+    Round 3 of the earlier run was rejected because a module redeclared
+    CompactCheck.Tensor.get.eq_1. That was a fault of the acceptance
+    service, fixed since: a module may generate an equation lemma that a
+    trusted module also has. Checked again with the service as it is now,
+    the same submission is accepted (672 inputs) and not scored: its
+    checker's description size is 14,043 against the budget of 13,376.

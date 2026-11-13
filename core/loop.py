@@ -285,6 +285,10 @@ def open_context(run: RunDir, cfg: dict, log=print, surface_checked: bool = Fals
             workflow.check_resume(run.path, cfg)  # the schedule the run started with, or none (interleaved)
         except workflow.WorkflowError as exc:
             raise LoopError(f"run {run.run_id}: {exc}") from exc
+        from .open_lane import continuation
+
+        if continuation.setting(cfg) and continuation.record(run.path) is None:
+            inherit(run, cfg, log)  # a start interrupted before its copy of the earlier run was made
     entries = select_networks(folder, cfg)
     if cfg.get("open_lane", {}).get("enabled") and not surface_checked:
         # a resumed run: what it shows the agent is checked again, and must be what it showed when it started
@@ -343,6 +347,12 @@ def preflight(cfg: dict, folder, log=print) -> dict:
         if planned(cfg):
             check_inspection(project)
         found["surface"] = check_surface(cfg, folder, entries, log)
+        from .open_lane import continuation
+
+        if continuation.setting(cfg):  # the earlier run must be one this run can go on from, before anything is made
+            errors = continuation.check_parent(cfg, resolve(cfg["runs_dir"]) / cfg["run_id"])
+            if errors:
+                raise LoopError("; ".join(errors))
     if cfg["backend"] in ("api", "claude_code"):
         g = git_state()
         if g["commit"] is None or g["dirty"]:
@@ -512,12 +522,14 @@ def start(config_path: str | Path, log=print, run_id: str | None = None, overrid
             versions["surface"] = found["surface"]  # what the run shows the agent, kept for the whole run
     write_json(run.path / "versions.json", {**versions, "git": git_state(), "created": now(),
                                             "config_file": str(config_path), "set_on_command_line": overrides or {}})
-    from .open_lane import workflow
+    from .open_lane import continuation, workflow
 
     if workflow.is_phased(cfg):  # the schedule, fixed now for the run's whole life
         sched = workflow.record(run.path, cfg)["schedule"]
         log(f"workflow python_then_lean: discovery rounds {sched['discovery_rounds'][0]} to {sched['discovery_rounds'][1]}, "
             f"formalization rounds {sched['formalization_rounds'][0]} to {sched['formalization_rounds'][1]}")
+    if continuation.setting(cfg):  # the earlier run's work, copied once (core/open_lane/continuation.py); a resume
+        inherit(run, cfg, log)     # makes the copy if this start is interrupted before it is done
     log(f"run {cfg['run_id']} at {run.path}")
     if cfg["backend"] == "claude_code" and cfg.get("auth") == "api_key":
         b = cfg["api_budget"]
@@ -526,6 +538,17 @@ def start(config_path: str | Path, log=print, run_id: str | None = None, overrid
     if overrides:
         log("set on the command line: " + ", ".join(f"{k}={v}" for k, v in overrides.items()))
     return open_context(run, run.config(), log, surface_checked=True)
+
+
+def inherit(run: RunDir, cfg: dict, log=print) -> dict:
+    """A continuation's copy of the earlier run (core/open_lane/continuation.py), made once: at the start, or on
+    a resume when the start was interrupted before it was done."""
+    from .open_lane import continuation
+
+    try:
+        return continuation.inherit(run.path, cfg, log)
+    except continuation.ContinuationError as exc:
+        raise LoopError(f"run {run.run_id}: {exc}") from exc
 
 
 def resume(run_path: str | Path, log=print, budget_usd: float | None = None) -> Context:
@@ -669,9 +692,13 @@ def status_text(run: RunDir, diagnostics: bool = False) -> str:
                 f"shortest full-accuracy proof {full}"
             )
     if (cfg.get("open_lane") or {}).get("enabled"):
-        from .open_lane import workflow
+        from .open_lane import continuation, workflow
         from .open_lane.stages import status_lines
 
+        rec = continuation.record(run.path)
+        if rec:
+            lines.append(f"continues run {rec['run_id']} ({rec['path']}): its rounds {', '.join(map(str, rec['rounds']))} copied "
+                         f"{rec['copied']}; none of its records counts here")
         lines += workflow.lines(run, records)
         lines += status_lines(run)
     return "\n".join(lines)

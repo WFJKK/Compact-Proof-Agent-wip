@@ -26,6 +26,7 @@ file before a run starts.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -34,7 +35,8 @@ from ..archive import RunDir
 from ..model_folder import ModelFolder
 from ..scoring import (brute_force_line, finishing_detail, finishing_ratio, frontier, line_certified, run_cost_of_finishing,
                        summarize)
-from ..util import REPO_ROOT
+from ..util import REPO_ROOT, read_json
+from . import continuation
 from . import research
 from . import surface as surfaces
 from . import workflow
@@ -495,6 +497,29 @@ def receipts_text(records: list[dict], entries: list[dict] | None = None, metric
     return "\n".join(lines) if lines else "none yet"
 
 
+def earlier_receipts(run: RunDir, cfg: dict, entries: list[dict]) -> str:
+    """In a run that continues an earlier one (core.open_lane.continuation): that run's submissions, listed apart
+    and never counted here, with whether the same acceptance service answered them, and what the person running
+    the continuation noted about them (open_lane.continue_note). Empty for any other run."""
+    bases = continuation.roots(run.path)
+    if not bases:
+        return ""
+    here = (read_json(run.path / "versions.json") if (run.path / "versions.json").is_file() else {}).get("lean_checker") or {}
+    parts = []
+    for i, base in enumerate(reversed(bases)):
+        then = continuation.lean_checker_of(base) or {}
+        same = bool(then) and all(then.get(x) == here.get(x) for x in ("commit", "policy"))
+        service = ("the acceptance service that answered them is this run's" if same else
+                   "another version of the acceptance service answered them, and this run's may answer the same "
+                   "submission differently")
+        records = [r for r in continuation.records_of(base) if not r.get("stage")]
+        parts.append(f"{'Before this run' if i == 0 else 'Before that'}, in the earlier run {continuation.run_id_of(base)}, "
+                     f"whose work this run goes on with ({service}; they count there, not here):\n"
+                     + receipts_text(records, entries, cfg["metric"], None))
+    note = str((cfg.get("open_lane") or {}).get("continue_note") or "").strip()
+    return "\n\n".join(parts + ([note] if note else []))
+
+
 def accepted_sources(run: RunDir, records: list[dict], n: int, max_chars: int) -> str:
     accepted = [r for r in records if r.get("lane") == "open" and r["status"] in ("ok", "verified", "lemma")]
     accepted.sort(key=lambda r: (r["round"], r["attempt"], r.get("submission") or 0), reverse=True)
@@ -538,12 +563,22 @@ PYTHON_HEAD = (
 )
 
 
+def saved_text(saved_round, from_run) -> str | None:
+    """When a draft or a Python file was last saved: a round of this run or of the earlier run it continues."""
+    if saved_round and from_run:
+        return f"last saved in round {saved_round} of the earlier run {from_run}"
+    if saved_round:
+        return f"last saved in round {saved_round}"
+    return f"from the earlier run {from_run}" if from_run else None
+
+
 def draft_line(d: dict) -> str:
     """One draft, for part 2: where it is, its size, when it was last saved and whether it compiled then."""
     where = f"drafts/{d['path']}" if d.get("set_apart") else d["path"]
     facts = [f"{d.get('lines')} lines"]
-    if d.get("saved_round"):
-        facts.append(f"last saved in round {d['saved_round']}")
+    when = saved_text(d.get("saved_round"), d.get("from_run"))
+    if when:
+        facts.append(when)
     compiled = d.get("compiled")
     if compiled is True:
         facts.append("it compiled then")
@@ -555,7 +590,7 @@ def draft_line(d: dict) -> str:
 
 
 def python_line(path: str, f: dict) -> str:
-    when = f"last saved in round {f['saved_round']}" if f.get("saved_round") else "carried from an earlier round"
+    when = saved_text(f.get("saved_round"), f.get("from_run")) or "carried from an earlier round"
     return f"- py/{path} ({f.get('bytes', 0):,} bytes, {when})"
 
 
@@ -575,10 +610,11 @@ def workspace_text(carried, drafts=None, python=None) -> str:
             else:
                 what = f"verified proof ({m.get('certified')} inputs)"
             state = "compiled" if m.get("compiled") else "did not compile here: " + " | ".join(m.get("errors") or [])[:MAX_REASON]
-            lines.append(f"- {m['path']} ({m.get('lines')} lines; round {m['round']}, submission {m['submission']}, {what}): {state}")
+            where = f"round {m['round']}" + (f" of the earlier run {m['from_run']}" if m.get("from_run") else "")
+            lines.append(f"- {m['path']} ({m.get('lines')} lines; {where}, submission {m['submission']}, {what}): {state}")
         parts.append("\n".join(lines))
     if drafts and isinstance(drafts, list):
-        ds = sorted(drafts, key=lambda d: (-(d.get("saved_round") or 0), d["path"]))
+        ds = sorted(drafts, key=lambda d: (bool(d.get("from_run")), -(d.get("saved_round") or 0), d["path"]))  # this run's first
         lines = [DRAFTS_HEAD] + [draft_line(d) for d in ds[:MAX_DRAFTS_LISTED]]
         if len(ds) > MAX_DRAFTS_LISTED:
             rest = ds[MAX_DRAFTS_LISTED:]
@@ -586,7 +622,7 @@ def workspace_text(carried, drafts=None, python=None) -> str:
                 (f"drafts/{d['path']}" if d.get("set_apart") else d["path"]) for d in rest))
         parts.append("\n".join(lines))
     if python and isinstance(python, dict):
-        files = sorted(python.items(), key=lambda kv: (-(kv[1].get("saved_round") or 0), kv[0]))
+        files = sorted(python.items(), key=lambda kv: (bool(kv[1].get("from_run")), -(kv[1].get("saved_round") or 0), kv[0]))
         lines = [PYTHON_HEAD] + [python_line(p, f) for p, f in files[:MAX_DRAFTS_LISTED]]
         if len(files) > MAX_DRAFTS_LISTED:
             lines.append(f"- and {len(files) - MAX_DRAFTS_LISTED} more, saved earlier: "
@@ -600,30 +636,50 @@ NO_ANSWER = re.compile(r"^\(the session (ran out of time|reached its turn limit)
 
 
 def latest_notes(run: RunDir, k: int, max_chars: int) -> str:
-    """The notes of the latest round whose sessions left any. A round whose sessions ended without the agent's
-    answer (out of time) is named, so the agent knows these notes are older than its last round."""
-    without = []
-    for kk in range(k - 1, 0, -1):
-        j = 0
-        texts = []
-        while (run.round_path(kk) / f"attempt_{j}").is_dir():
-            t = run.read(kk, f"attempt_{j}/response.md")
-            if t:
-                m = re.search(r"NOTES:(.*)\Z", t, re.S)
-                if m or not NO_ANSWER.match(t.strip()):
-                    texts.append((m.group(1) if m else t).strip())
-            j += 1
-        if texts:
-            out = "\n".join(texts)
-            out = out[:max_chars] + ("\n(cut)" if len(out) > max_chars else "")
-            return (_without_notes(without) + f" These are the notes of round {kk}.\n" if without else "") + out
-        if j:
-            without.append(kk)
+    """The notes of the latest round whose sessions left any: of this run's rounds before k, then, in a run that
+    continues an earlier one (core.open_lane.continuation), of that run's proof rounds, named as the earlier
+    run's. A round whose sessions ended without the agent's answer (out of time) is named, so the agent knows
+    these notes are older than its last round."""
+    sources = [(run.path, list(range(k - 1, 0, -1)), None)]
+    sources += [(base, sorted(continuation.rounds_of(base), reverse=True), continuation.run_id_of(base))
+                for base in reversed(continuation.roots(run.path))]
+    without: list[tuple[int, str | None]] = []
+    for base, rounds, from_run in sources:
+        for kk in rounds:
+            rdir = Path(base) / f"round_{kk:03d}"
+            j = 0
+            texts = []
+            while (rdir / f"attempt_{j}").is_dir():
+                f = rdir / f"attempt_{j}" / "response.md"
+                t = f.read_text() if f.is_file() else None
+                if t:
+                    m = re.search(r"NOTES:(.*)\Z", t, re.S)
+                    if m or not (NO_ANSWER.match(t.strip()) or _stopped_on_budget(rdir / f"attempt_{j}")):
+                        texts.append((m.group(1) if m else t).strip())
+                j += 1
+            if texts:
+                out = "\n".join(texts)
+                out = out[:max_chars] + ("\n(cut)" if len(out) > max_chars else "")
+                head = _without_notes(without) + " " if without else ""
+                if without or from_run:
+                    head += f"These are the notes of round {kk}" + (f" of the earlier run {from_run}" if from_run else "") + ".\n"
+                return head + out
+            if j:
+                without.append((kk, from_run))
     return _without_notes(without) if without else "none yet"
 
 
-def _without_notes(rounds: list[int]) -> str:
-    named = ", ".join(map(str, sorted(rounds)))
+def _stopped_on_budget(attempt: Path) -> bool:
+    """A session its spending cap stopped (core/open_lane/backends.py): its response is what it had said so far,
+    not its answer, so it left no notes."""
+    try:
+        return (json.loads((attempt / "response_meta.json").read_text()) or {}).get("stop_reason") == "budget"
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _without_notes(rounds: list[tuple[int, str | None]]) -> str:
+    named = ", ".join(f"{kk}" + (f" of the earlier run {r}" if r else "") for kk, r in rounds[::-1])
     return (f"Round{'s' if len(rounds) > 1 else ''} {named} ended without notes: the session ended before your answer. "
             "Its unfinished modules are in your workspace.")
 
@@ -691,9 +747,14 @@ def research_text(run_dir: Path, max_files: int = 40) -> str:
     lines += [candidate_line(c) for c in cands]
     total, count = research.usage(run_dir)
     lines.append(f"Files ({count}, {total:,} bytes; read them with read_file):")
-    newest = sorted(files, key=lambda f: (-(f.get("round") or 0), f["path"]))[:max_files]
-    lines += [f"- {f['path']} ({f['bytes']:,} bytes" + (f", round {f['round']}" if f.get("round") else "") + ")"
-              for f in sorted(newest, key=lambda f: f["path"])]
+    newest = sorted(files, key=lambda f: (bool(f.get("from_run")), -(f.get("round") or 0), f["path"]))[:max_files]
+
+    def when(f: dict) -> str:
+        if f.get("from_run"):
+            return (f", round {f['round']}" if f.get("round") else "") + f" of the earlier run {f['from_run']}"
+        return f", round {f['round']}" if f.get("round") else ""
+
+    lines += [f"- {f['path']} ({f['bytes']:,} bytes{when(f)})" for f in sorted(newest, key=lambda f: f["path"])]
     if len(files) > max_files:
         lines.append(f"... and {len(files) - max_files} more (research_list lists them all)")
     return "\n".join(lines)
@@ -776,13 +837,14 @@ def build_open_lane_prompt(cfg: dict, folder: ModelFolder, entries: list[dict], 
     ready = (lock_readiness(run, records, lean_project(cfg), unread)
              if cfg["open_lane"].get("seed_check") and phase != workflow.DISCOVERY else None)
     nudge = not_ready_line(records, entries, ready)
+    earlier = earlier_receipts(run, cfg, entries)  # a continuation's earlier run, listed apart
     if phase:
         values = phase_values(cfg, run, records, entries, k, session, nudge)
-        values["RECEIPTS"] = receipts_text(records, entries, cfg["metric"], ready)
+        values["RECEIPTS"] = receipts_text(records, entries, cfg["metric"], ready) + (f"\n\n{earlier}" if earlier else "")
     else:
         values = {
             "SCOREBOARD": scoreboard(records, entries, cfg.get("budget_ratio"), cfg["metric"]),
-            "RECEIPTS": receipts_text(records, entries, cfg["metric"], ready),
+            "RECEIPTS": receipts_text(records, entries, cfg["metric"], ready) + (f"\n\n{earlier}" if earlier else ""),
             "AIM": aim(records, entries, cfg, k) + ("\n" + nudge if nudge else ""),
             "WORKSPACE": workspace_text(session.state.get("carried"), session.state.get("drafts"), session.state.get("py_files")),
         }

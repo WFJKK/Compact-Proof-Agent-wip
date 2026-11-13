@@ -241,7 +241,8 @@ def listing(run_dir: Path, prefix: str = PREFIX) -> list[dict]:
             continue
         full = f"{PREFIX}/{r}"
         meta = index.get(full) or {}
-        out.append({"path": full, "bytes": p.stat().st_size, "round": meta.get("round"), "via": meta.get("via")})
+        out.append({"path": full, "bytes": p.stat().st_size, "round": meta.get("round"), "via": meta.get("via"),
+                    **({"from_run": meta["from_run"]} if meta.get("from_run") else {})})
     return out
 
 
