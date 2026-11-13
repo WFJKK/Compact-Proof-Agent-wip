@@ -1,15 +1,18 @@
 # The linear max-of-2 pilot in the python_then_lean workflow, cut to one day (13 November 2026): round 1 is
-# discovery, rounds 2 to 4 formalization, sessions of 90 minutes, no seed check and no scaling question, so the
-# run ends after about six hours. The full pilot (linear-max2-python-then-lean.yaml: four discovery rounds, three
-# formalization rounds, three-hour sessions, then the seed check and the scaling question) takes about a day
-# and a half. Budget: at most $25 a round, $100 for the run (Claude Code's own count, spend.jsonl), when the run
-# is billed to an API key (--auth api_key).
+# discovery, rounds 2 to 4 formalization, sessions of 60 minutes (the last 10 kept for the notes), no seed check
+# and no scaling question, so the run ends after about five hours. The full pilot (linear-max2-python-then-lean.yaml:
+# four discovery rounds, three formalization rounds, three-hour sessions, then the seed check and the scaling
+# question) takes about a day and a half.
+# Budget, when the run is billed to an API key (--auth api_key): at most $30 a round and $120 for the run, by
+# Claude Code's own count (spend.jsonl). The clock, not the money, should end a session, or it ends mid-work and
+# leaves no notes: run attn-min2-ptl-1 cost $0.35 to $0.39 a minute (claude-fable-5-1 at xhigh), so 60 minutes
+# cost at most about $24, under the cap; a 90-minute session would need about $36.
 extends: linear-max2-python-then-lean.yaml
 run_id: linear-max2-ptl-day
 rounds_max: 4
-api_budget: {run_usd: 100, round_usd: 25}
+api_budget: {run_usd: 120, round_usd: 30}
 open_lane:
   discovery_rounds: 1
-  worker_seconds: 5400
+  worker_seconds: 3600
   seed_check: null
   scaling: false
