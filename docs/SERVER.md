@@ -22,7 +22,7 @@ Log in over ssh as a user with `sudo`, then
     curl -fsSL https://raw.githubusercontent.com/WFJKK/Compact-Proof-Agent-wip/main/scripts/server_setup.sh | bash
 
 The script (idempotent: run it again if interrupted) installs the system packages, Lean through elan, the Lean
-project at the commit the pipeline was tested with (e79a9a0; `LEAN_COMMIT=<commit>` before the command takes
+project at the commit the pipeline was tested with (bcc464e; `LEAN_COMMIT=<commit>` before the command takes
 another) with Mathlib's prebuilt cache and every module of its library but the tutorial (the rule on proofs
 asks Lean about all of them), `compactcheck`, `acceptcheck` and the tactic modules the agents' proofs import,
 the pipeline (Compact-Proof-Agent-wip) in a virtual environment with its pinned packages, tmux, and the Claude
