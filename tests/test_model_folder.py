@@ -75,10 +75,10 @@ def test_the_linear_ladder_has_three_vocabulary_sizes_too_large_for_a_copy_of_th
     """tests/max2_ladder (10 November 2026): the linear max-of-2 network at 24, 32 and 48 tokens, hidden width 8,
     four seeds each, two for development (all at full accuracy) and two held out, with cost-v4's B (E plus one
     forward pass per input). The sizes are chosen so that a checker cannot carry a copy of a network's weights:
-    written as the exporter writes them (integers over each tensor's common power-of-two exponent), at one unit
-    per bit, the least any encoding measures (the Lean project's scripts/test_accept.py, copy_bound), a
-    network's weights are over the Lean service's default description budget, 8192 + 4 E. On the tiny networks
-    they are not, which is why the linear ladder does not start there."""
+    the least a copy holds, each weight's sign and significant bits (the Lean service's weight_bits, in its
+    scripts/accept.py), is over the service's default description budget (policy v11: 8192 + 4 E, or half of
+    weight_bits where that is more, at most 16,384), by 8% at vocabulary size 24. On the tiny networks it is
+    not, which is why the linear ladder does not start there."""
     from fractions import Fraction
     from pathlib import Path
 
@@ -86,13 +86,16 @@ def test_the_linear_ladder_has_three_vocabulary_sizes_too_large_for_a_copy_of_th
 
     from core.zoo import load_weights, networks
 
-    def copy_bound(folder, entry) -> int:
-        bits = 0
+    def weight_bits(folder, entry) -> int:
+        held = 0
         for tensor in load_weights(folder, entry["id"], allow_held_out=True).values():  # maintenance, not the agent
-            fr = [Fraction(float(v)) for v in np.asarray(tensor, dtype=np.float64).reshape(-1)]
-            den = max(f.denominator for f in fr)
-            bits += sum(max(1, abs(int(f * den)).bit_length()) for f in fr)
-        return bits
+            for v in np.asarray(tensor, dtype=np.float64).reshape(-1):
+                m = abs(Fraction(float(v)).numerator)
+                held += 1 + (m >> ((m & -m).bit_length() - 1)).bit_length() if m else 1
+        return held
+
+    def budget(folder, entry) -> int:  # the service's size_budget, policy v11
+        return max(8192 + 4 * entry["E"], min(weight_bits(folder, entry) // 2, 16384))
 
     root = Path(__file__).resolve().parent
     ladder = load_model_folder(root / "max2_ladder")
@@ -107,9 +110,9 @@ def test_the_linear_ladder_has_three_vocabulary_sizes_too_large_for_a_copy_of_th
     assert all(n["real_correct"] == n["n_inputs"] for n in nets if n["split"] == "dev")
     assert all(n["real_correct"] >= n["n_inputs"] - 1 for n in nets)
     for n in nets:
-        assert copy_bound(ladder, n) > 8192 + 4 * n["E"], n["id"]
+        assert weight_bits(ladder, n) > budget(ladder, n), n["id"]
     tiny = load_model_folder(root / "max2_tiny")
-    assert all(copy_bound(tiny, n) < 8192 + 4 * n["E"] for n in networks(tiny, None))
+    assert all(weight_bits(tiny, n) < budget(tiny, n) for n in networks(tiny, None))
 
 
 def test_size_setting_that_does_not_build_is_refused(stub_path):

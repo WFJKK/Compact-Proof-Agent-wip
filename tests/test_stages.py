@@ -481,7 +481,7 @@ def test_a_run_proves_one_network_then_checks_a_second_seed_with_the_checker_loc
     assert "which read_file reads:\n  examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean" in p1
     assert "never leave it to the kernel to see that two\n  different `CostM.run` terms are equal by unfolding them" in p1 and "COUNTED.md" not in p1
     assert "another seed may compute\n  differently, or with smaller margins" in p1 and "certifies as much there" not in p1
-    assert "A real network's weights written out measure more." in p1
+    assert "or half the bits of its weights\n  (each weight's sign and significant bits)" in p1 and "A copy of the weights measures more." in p1
     assert not any("{" + name + "}" in p for p in (p2, p3) for name in ("LOCKED", "RENAME", "FREE", "NETWORK", "SEED_CHECK_RESULT"))
 
     # the score is the proof rounds' alone, and the run is over: a resume adds nothing
@@ -628,8 +628,9 @@ def test_the_seed_check_names_another_development_seed_of_the_same_size(tmp_path
 def test_the_pilot_on_the_linear_max_of_2_network_is_one_network_a_second_seed_and_a_size_no_copy_fits(tmp_path):
     """config/pilot/linear-max2.yaml: the shared base and four lines about the model. One network of vocabulary
     size 64 and width 8, cost of finishing as the score, template v5, the seed check on another development seed of
-    the same size, the scaling question on. At this size a copy of the weights is over the Lean service's
-    description budget (8192 + 4 E), which the choice of size rests on."""
+    the same size, the scaling question on. At this size a copy of the weights holds at least twice the Lean
+    service's description budget (policy v11: half of the least a copy holds, each weight's sign and
+    significant bits, and at least 8192 + 4 E), which the choice of size rests on."""
     from fractions import Fraction
 
     import numpy as np
@@ -658,12 +659,13 @@ def test_the_pilot_on_the_linear_max_of_2_network_is_one_network_a_second_seed_a
     sizes = folder.sizes(entries[0]["setting"])
     assert sizes == folder.sizes(other["setting"]) and sorted(sizes.values()) == [2, 8, 64]
     for e in (entries[0], other):
-        bits = 0
+        held = 0  # the Lean service's weight_bits (its scripts/accept.py): each weight's sign and significant bits
         for tensor in load_weights(folder, e["id"]).values():
-            fr = [Fraction(float(v)) for v in np.asarray(tensor, dtype=np.float64).reshape(-1)]
-            den = max(f.denominator for f in fr)
-            bits += sum(max(1, abs(int(f * den)).bit_length()) for f in fr)
-        assert bits > 2 * (8192 + 4 * e["E"]), e["id"]
+            for v in np.asarray(tensor, dtype=np.float64).reshape(-1):
+                m = abs(Fraction(float(v)).numerator)
+                held += 1 + (m >> ((m & -m).bit_length() - 1)).bit_length() if m else 1
+        budget = max(8192 + 4 * e["E"], min(held // 2, 16384))  # its size_budget, policy v11
+        assert held >= 2 * budget, e["id"]
         assert e["split"] == "dev" and e in networks(folder, "dev")
 
 

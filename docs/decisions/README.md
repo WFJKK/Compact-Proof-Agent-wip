@@ -42,3 +42,7 @@ working from the repositories can read them. Each is dated; later decisions supe
   show is recorded without a length, by Lean's account of the compiled modules. Not closed: the agent can
   ask Lean about the library, and an unconfined machine lets its code read files. Both are named, with what
   the Lean project has to change.
+- [size-budget-v11.md](size-budget-v11.md) (16 November 2026): the Lean service's description-size budget
+  follows the network: 8192 + 4E, or half of the least a copy of the weights holds (each weight's sign and
+  significant bits) where that is more, at most 16,384 (policy v11). attn-min2 v64d8-s1: 13,376 becomes 15,563.
+  Why half, why the cap, and what was considered and not done.

@@ -424,9 +424,13 @@ in its `config.yaml`: the worked example and the further Lean sources (`example`
 for the agent about the architecture in Lean's kernel (`notes`, shown by templates v4 and v5). A run config
 that sets one of these itself overrides the folder; a folder that states nothing leaves the defaults. So a
 pilot on another model (linear or attention; max or min of 2 or 4) is a model folder and a config of a few
-lines. Its size must be one at which a copy of the weights does not fit a checker: at least one unit per bit
-of the weights against the service's description budget of 8,192 + 4E (34,044 against 12,544 for the linear
-network at 64 tokens; on the tiny networks a copy fits).
+lines. Its size must be one at which a copy of the weights does not fit a checker. Since the service's policy
+v11 (16 November 2026) its description budget is 8,192 + 4E, or half of the least a copy holds (each weight's
+sign and significant bits) where that is more, at most 16,384; a copy holds at least twice the budget wherever
+the half decides it (26,020 against 13,010 for the linear network at 64 tokens, 31,127 against 15,563 for the
+attention network at width 8) and more than the budget elsewhere. On the tiny networks a copy fits. The
+reasons are in the Lean project's docs/COUNTED.md, "The size budget"; docs/decisions/size-budget-v11.md has
+the decision.
 
 `open_lane.split_example` (the pilot's base sets it) names a file of the Lean project where an instance is
 put together from small decided facts, which a long run needs: template v5 says where it is and `read_file`

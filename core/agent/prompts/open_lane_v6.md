@@ -118,8 +118,10 @@ Limits on the general layer (D, its soundness proof and what they
 depend on):
 - It may not reference the protected weights or certificate.
 - The description size of D and the definitions it uses (every node
-  counted, a numeral 1 per bit, a string 8 per byte) is at most
-  8192 + 4E. A real network's weights written out measure more.
+  counted, a numeral 1 per bit, a string 8 per byte) is at most the
+  network's size budget: 8192 + 4E, or half the bits of its weights
+  (each weight's sign and significant bits) where that is more, at
+  most 16,384. A copy of the weights measures more.
 - lean_check with `checker` (D's name) shows, before you submit, whether
   D stays in the counted language and its description size against
   the budget, with its largest definitions.
