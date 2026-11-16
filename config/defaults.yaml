@@ -127,6 +127,7 @@ open_lane:
   work_dir: null            # the service's work folder (networks, protected modules, receipts); default <run>/open_lane_work
   python: null              # the Python that runs the tools for the CLI; default the one running this
   compile_calls: 60         # lean_check calls per session
+  compile_seconds: 600      # one lean_check's time limit, unless the call asks for more with max_seconds (at most 3,600)
   python_calls: 40          # run_python calls per session
   submissions: 4            # submit_candidate calls per session
   max_turns: 200            # the CLI's agentic turns per session

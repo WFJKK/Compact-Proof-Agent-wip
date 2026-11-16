@@ -87,6 +87,15 @@ response:
   starts, and the program before it runs. Before this, a compile could take an hour while the session's own
   limit ran out (the first test run on the Mac, 11 November), and the session ended with no answer and so no
   notes.
+- A compile's own limit (since 16 November 2026). One lean_check is stopped after
+  `open_lane.compile_seconds` (600 by default, at most 3,600) unless the call asks for more with `max_seconds`
+  (at most 3,600), and never past the session's time; the answer gives the limit that applied (`limit_s`),
+  and a compile stopped at its own limit says how to ask for more. The prompt's budgets say the limit, and
+  the formalization templates (open_lane_v6, open_lane_formalization_v1) say that the kernel compares two
+  statements that differ in form by computing. Before this, one compile of a glue module ran 2,802 s, most of
+  a 90-minute session, with nothing learnt (attn-min2-ptl-2, round 1, 13 November). Lean prints a module's
+  messages only when it has finished it, so a stopped compile does not say where it was; the service's
+  per-command markers of the 13 November design (`stopped_in`, timings) are not built here.
 - Carried modules (since 27 October 2026): a round's session starts with the modules of every submission
   the service accepted in the run's earlier rounds (the latest accepted version of each module path) in its
   workspace, compiled there before the agent begins, in import order, through the same `accept.py compile` as

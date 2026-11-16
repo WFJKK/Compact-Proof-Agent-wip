@@ -1192,14 +1192,16 @@ def test_every_tool_call_is_bounded_by_the_time_the_session_has_left(tmp_path, m
     monkeypatch.setattr(Session, "_service", service)
     net = "max2_tiny-v8-s0"
     s.lean_check(path="Candidate/A.lean", source="def a := 1\n", network=net, claimed_count=64)
-    assert asked[-1] == ("compile", sess.COMPILE_TIMEOUT_S) and "seconds" not in s.remaining()  # no clock: the limits of old
+    assert asked[-1] == ("compile", sess.COMPILE_SECONDS) and "seconds" not in s.remaining()  # no clock: a compile's limit
     now, wall = [1000.0], [50_000.0]
     monkeypatch.setattr(sess, "_monotonic", lambda: now[0])
     monkeypatch.setattr(sess, "_wall", lambda: wall[0])
     s.start_clock(3000, 600)
     assert Session(s.path).seconds_left() == 2400  # kept in session.json, where the tools' server reads it
     out = s.lean_check(path="Candidate/A.lean", source="def a := 2\n", network=net, claimed_count=64)
-    assert asked[-1] == ("compile", 2400) and out["remaining"]["seconds"] == 2400
+    assert asked[-1] == ("compile", sess.COMPILE_SECONDS) and out["remaining"]["seconds"] == 2400  # the limit is shorter
+    out = s.lean_check(path="Candidate/A.lean", edits=[], network=net, claimed_count=64, max_seconds=3600)
+    assert asked[-1] == ("compile", 2400) and out["limit_s"] == 2400  # the session's time is shorter than what was asked
     assert s.read_file("Candidate/A.lean")["remaining"]["seconds"] == 2400
     now[0] += 2000
     wall[0] += 2000
@@ -1225,6 +1227,60 @@ def test_every_tool_call_is_bounded_by_the_time_the_session_has_left(tmp_path, m
         with pytest.raises(ToolError, match="time is up: its last 600 s are kept for your answer"):
             s.call(tool, args)
     assert s.state["used"] == used and len(asked) == n and (s.workspace / "Candidate/A.lean").read_text() == "def a := 2\n"
+
+
+def test_a_compile_has_its_own_time_limit_and_a_call_may_ask_for_more(tmp_path, monkeypatch):
+    """One compile of a glue module ran 2,802 s, most of a 90-minute session, and the agent learnt nothing from it
+    (attn-min2-ptl-2, round 1, 13 November 2026). A compile is stopped after open_lane.compile_seconds unless the
+    call asks for more with max_seconds (at most 3,600), never past the session's time, and the answer says which
+    limit applied. A stand-in service that never finishes, no Lean."""
+    project = tmp_path / "project"
+    (project / "scripts").mkdir(parents=True)
+    (project / "scripts" / "accept.py").write_text("import time\ntime.sleep(300)\n")
+    s = _plain_session(tmp_path, lean_project=str(project), compile_seconds=2)
+    net = "max2_tiny-v8-s0"
+    out = s.lean_check(path="Candidate/A.lean", source="def a := 1\n", network=net, claimed_count=64)
+    assert out["timed_out"] is True and out["limit_s"] == 2
+    assert out["messages"].startswith("The compile was stopped: it did not finish within a compile's limit, 2 s; a call "
+                                      "may ask for up to 3,600 s with max_seconds. The module is saved.")
+    assert "compile the module's parts in smaller modules" in out["messages"]
+    assert (s.workspace / "Candidate/A.lean").read_text() == "def a := 1\n"
+
+    from core.open_lane import session as sess
+    asked = []
+    monkeypatch.setattr(Session, "_service", lambda self, cmd, timeout_s: asked.append(timeout_s) or {"ok": True, "messages": ""})
+    out = s.lean_check(path="Candidate/A.lean", edits=[], network=net, claimed_count=64, max_seconds=1800)
+    assert asked[-1] == 1800 and out["limit_s"] == 1800
+    assert s.call("lean_check", {"path": "Candidate/A.lean", "edits": [], "network": net, "claimed_count": 64,
+                                 "max_seconds": 3600})["limit_s"] == 3600
+    for bad in (0, 3601, True, 2.5, "60"):
+        with pytest.raises(ToolError, match="max_seconds must be a whole number of seconds from 1 to 3,600"):
+            s.lean_check(path="Candidate/A.lean", edits=[], network=net, claimed_count=64, max_seconds=bad)
+    assert s.state["used"]["lean_check"] == 3  # a refused call is not charged
+    now = [0.0]
+    monkeypatch.setattr(sess, "_monotonic", lambda: now[0])
+    monkeypatch.setattr(sess, "_wall", lambda: now[0])
+    s.start_clock(1600, 600)
+    assert s.lean_check(path="Candidate/A.lean", edits=[], network=net, claimed_count=64, max_seconds=1800)["limit_s"] == 1000
+    log = [json.loads(l) for l in (s.path / "tools.jsonl").read_text().splitlines()]
+    assert log[-1]["args"]["max_seconds"] == 1800
+
+
+def test_a_compiles_limit_is_a_setting_and_the_prompt_says_it(tmp_path):
+    """open_lane.compile_seconds: positive, at most 3,600; the budgets line of every open-lane prompt says it."""
+    from core.open_lane.prompt import budgets_text
+    from core.run_config import RunConfigError
+
+    for value, msg in ((0, "compile_seconds must be positive"), (3601, "compile_seconds must be at most 3600"),
+                       ("600", "compile_seconds must be a number")):
+        with pytest.raises(RunConfigError, match=msg):
+            merge(base_config(tmp_path, [], open_lane={"enabled": False, "compile_seconds": value}))
+    cfg = merge(base_config(tmp_path, [], open_lane={"enabled": False}))
+    assert cfg["open_lane"]["compile_seconds"] == 600
+    cfg["open_lane"]["compile_seconds"] = 900
+    budgets = budgets_text(cfg["open_lane"])
+    assert budgets.endswith("One lean_check is stopped after 900 s unless the call asks for more with max_seconds "
+                            "(at most 3,600)")
 
 
 def test_a_stopped_call_stops_every_process_it_started_and_the_session_gets_an_answer(tmp_path, monkeypatch):

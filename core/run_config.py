@@ -278,8 +278,8 @@ def validate(cfg: dict, source: str = "run config") -> None:
         raise RunConfigError(f"{source}: " + "; ".join(errors))
 
 
-OPEN_LANE_KEYS = {"enabled", "lean_project", "work_dir", "python", "compile_calls", "python_calls", "submissions", "max_turns",
-                  "worker_seconds", "notes_reserve_seconds", "python_workspace_mb", "python_workspace_files", "stall_rounds", "fake_scripts", "example", "extra_sources", "knowledge", "second_example", "notes",
+OPEN_LANE_KEYS = {"enabled", "lean_project", "work_dir", "python", "compile_calls", "compile_seconds", "python_calls", "submissions",
+                  "max_turns", "worker_seconds", "notes_reserve_seconds", "python_workspace_mb", "python_workspace_files", "stall_rounds", "fake_scripts", "example", "extra_sources", "knowledge", "second_example", "notes",
                   "seed_check", "scaling", "split_example", "workflow_mode", "discovery_rounds", "probe_compile_calls",
                   "probe_auxiliary_submissions", "probe_seconds", "research_workspace_mb", "research_workspace_files",
                   "continue_from", "continue_note"}
@@ -326,6 +326,11 @@ def open_lane_errors(cfg: dict) -> list[str]:
     for key in ("compile_calls", "python_calls", "submissions", "max_turns", "stall_rounds"):
         _number(ol, key, errors, integer=True, minimum=1)
     _number(ol, "worker_seconds", errors, positive=True)
+    if ol.get("compile_seconds") is not None:  # one lean_check's limit; a call may ask for up to 3,600 s
+        _number(ol, "compile_seconds", errors, positive=True)
+        cs = ol["compile_seconds"]
+        if isinstance(cs, (int, float)) and not isinstance(cs, bool) and cs > 3600:
+            errors.append("open_lane.compile_seconds must be at most 3600")
     _number(ol, "notes_reserve_seconds", errors, minimum=0)
     _number(ol, "python_workspace_mb", errors, positive=True)
     _number(ol, "python_workspace_files", errors, positive=True, integer=True)

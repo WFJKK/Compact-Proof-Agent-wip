@@ -159,7 +159,8 @@ SCORING_PREVIEW_NOTE = ("What scoring checks without the kernel, measured as the
 PY_MODULE = re.compile(r"^py/[A-Za-z_][A-Za-z0-9_]*\.py$")  # run_python's save_as
 MIB = 1024 * 1024
 SUBMIT_TIMEOUT_S = 4 * 3600
-COMPILE_TIMEOUT_S = 3600
+COMPILE_TIMEOUT_S = 3600  # the most one lean_check may be given (its max_seconds)
+COMPILE_SECONDS = 600  # one lean_check's limit unless the call asks for more (open_lane.compile_seconds)
 EARLY_WORD_TIMEOUT_S = 180  # for Lean's word, at a compile, on what a module uses of the library; asked again at a submission
 LATE_QUESTION_S = 20  # with fewer seconds left after a compile or a submission, Lean's further questions wait for the session's end
 TIME_UP = ("this session's time is up: its last {reserve:.0f} s are kept for your answer. Call no more tools; end now with "
@@ -509,6 +510,7 @@ class Session:
             "networks": {e["id"]: {"setting": e["setting"], "n_inputs": e["n_inputs"]} for e in entries},
             "budgets": {"lean_check": int(ol["compile_calls"]), "submit_candidate": int(ol["submissions"]),
                         "run_python": int(ol["python_calls"])},
+            "compile_seconds": float(ol.get("compile_seconds") or COMPILE_SECONDS),
             "used": {"lean_check": 0, "submit_candidate": 0, "run_python": 0},
             "limits": {"time_limit_s": cfg["time_limit_s"], "memory_limit_mb": cfg["memory_limit_mb"],
                        "max_proof_mb": cfg["max_proof_mb"], "threads_per_recipe": cfg["threads_per_recipe"]},
@@ -826,6 +828,11 @@ class Session:
             left = wall
         return left - clock["reserve_s"]
 
+    def compile_seconds(self) -> float:
+        """One lean_check's limit unless the call asks for more (open_lane.compile_seconds; a session made
+        before the setting existed has the default)."""
+        return float(self.state.get("compile_seconds") or COMPILE_SECONDS)
+
     def _time_for_call(self) -> float | None:
         """The seconds a tool call may take: None without a clock; refused when none are left, before anything
         of the call is spent."""
@@ -907,11 +914,13 @@ class Session:
 
     def lean_check(self, path: str, source: str | None = None, network: str | None = None, claimed_count: int | None = None,
                    certificate: list | None = None, edits: list | None = None, candidate_id: str | None = None,
-                   question: str | None = None, checker: str | None = None, plan: list | None = None) -> dict:
+                   question: str | None = None, checker: str | None = None, plan: list | None = None,
+                   max_seconds: int | None = None) -> dict:
         t0 = time.monotonic()
         args = {"path": path, "network": network, "claimed_count": claimed_count, "certificate": certificate}
         args.update({k: v for k, v in (("source", source), ("edits", edits), ("candidate_id", candidate_id),
-                                       ("question", question), ("checker", checker)) if v is not None})
+                                       ("question", question), ("checker", checker), ("max_seconds", max_seconds))
+                     if v is not None})
         if plan is not None:
             args["plan_entries"] = len(plan) if isinstance(plan, list) else None  # the log keeps the size, not the plan
         probe, outcome, saved = None, "infrastructure_error", None
@@ -931,6 +940,10 @@ class Session:
             if plan is not None and (not isinstance(plan, list) or not all(isinstance(v, int) and not isinstance(v, bool)
                                                                             and 0 <= v for v in plan)):
                 raise ToolError("plan must be a list of natural numbers")
+            if max_seconds is not None and (isinstance(max_seconds, bool) or not isinstance(max_seconds, int)
+                                            or not 1 <= max_seconds <= COMPILE_TIMEOUT_S):
+                raise ToolError(f"max_seconds must be a whole number of seconds from 1 to {COMPILE_TIMEOUT_S:,}")
+            cap = float(max_seconds) if max_seconds is not None else self.compile_seconds()
             if path in ((self._lock() or {}).get("modules") or {}):
                 raise ToolError(f"{path} is locked: this session runs the accepted checker unchanged. Write in another "
                                 "module, which may import it.")
@@ -942,7 +955,7 @@ class Session:
             self._check_budget("lean_check")
             if discovery:
                 try:
-                    probe = self._probe("compile", COMPILE_TIMEOUT_S if left is None else min(COMPILE_TIMEOUT_S, left), {**tag, "path": path})
+                    probe = self._probe("compile", cap if left is None else min(cap, left), {**tag, "path": path})
                 except ToolError as exc:
                     src.parent.mkdir(parents=True, exist_ok=True)
                     src.write_text(source)  # the source is kept: it goes on to formalization as a draft
@@ -963,23 +976,36 @@ class Session:
                 ppath = self.path / "plan.json"
                 ppath.write_text(json.dumps(plan))
                 cmd += ["--plan", str(ppath)]
-            limit = COMPILE_TIMEOUT_S if left is None else min(COMPILE_TIMEOUT_S, left)
+            limit = cap if left is None else min(cap, left)
             deadline = None
             if probe is not None:
                 limit = min(limit, probe["reserved_s"])
                 deadline = time.monotonic() + probe["reserved_s"]
             res = self._service(cmd, limit)
             if res.get("status") == "timeout" and not res.get("messages"):  # stopped here, at the limit of the call
-                why = (f"the {limit:.0f} s left of the discovery phase's Lean allowance" if probe is not None and limit == probe["reserved_s"]
-                       else f"the {limit:.0f} s this session had left" if limit < COMPILE_TIMEOUT_S else f"the limit of a compile, {limit:.0f} s")
+                if probe is not None and limit == probe["reserved_s"]:
+                    why = f"the {limit:.0f} s left of the discovery phase's Lean allowance"
+                elif limit < cap:
+                    why = f"the {limit:.0f} s this session had left"
+                elif max_seconds is not None:
+                    why = f"the {limit:.0f} s this call asked for (max_seconds)"
+                else:
+                    why = (f"a compile's limit, {limit:.0f} s; a call may ask for up to {COMPILE_TIMEOUT_S:,} s with "
+                           "max_seconds")
                 res = {"ok": False, "timed_out": True, "module": module_name(path),
-                       "messages": f"The compile was stopped: it did not finish within {why}. The module is saved.", "seconds": round(limit)}
+                       "messages": f"The compile was stopped: it did not finish within {why}. The module is saved. "
+                                   "Lean prints a module's messages only when it has finished it, so nothing says where it "
+                                   "stopped: to find a slow command, compile the module's parts in smaller modules."
+                                   if limit >= cap else
+                                   f"The compile was stopped: it did not finish within {why}. The module is saved.",
+                       "seconds": round(limit)}
             if "error" in res and not res.get("messages"):
                 raise ToolError(str(res["error"]))
             text = shorten_paths((res.get("messages") or "").strip(), self.run_dir())
             out = {"ok": bool(res.get("ok")), "timed_out": bool(res.get("timed_out")), "module": res.get("module"),
                    "protected_module": res.get("protected_module"), "lines": saved["lines"],
-                   "messages": excerpt(text) if text else "(no messages)", "seconds": res.get("seconds")}
+                   "messages": excerpt(text) if text else "(no messages)", "seconds": res.get("seconds"),
+                   "limit_s": round(limit)}
             if isinstance(res.get("scoring_preview"), dict):
                 out["scoring_preview"] = {**res["scoring_preview"], "note": SCORING_PREVIEW_NOTE}
             outcome = "timeout" if out["timed_out"] else "compiled" if out["ok"] else "compiler_error"
@@ -1593,7 +1619,9 @@ class Session:
                            "also returns a scoring preview: whether D uses only the counted language (the constants it is "
                            "refused for, if not) and its description size against the budget, with its largest "
                            "definitions, measured as the score step measures them. Each call counts against the compile "
-                           "budget.",
+                           "budget. A call is stopped after a compile's limit (the session's prompt says it) unless it "
+                           "asks for more with `max_seconds` (at most 3,600), and never runs past the session's time; "
+                           "the answer gives the limit that applied (`limit_s`).",
             "schema": {"type": "object", "properties": {
                 "path": {"type": "string", "description": "Candidate/<Name>.lean"},
                 "source": {"type": "string", "description": "the module's full source (or give edits instead)"},
@@ -1607,7 +1635,10 @@ class Session:
                                                              "in this module or one it imports, for a scoring preview"},
                 "plan": {"type": "array", "items": {"type": "integer"},
                          "description": "optional: the plan of a planned checker (natural numbers), as the scored block "
-                                        "will give it; the protected module then has it as `plan`"}},
+                                        "will give it; the protected module then has it as `plan`"},
+                "max_seconds": {"type": "integer",
+                                "description": "optional: the seconds this compile may take, at most 3,600 (default: "
+                                               "a compile's limit, which the prompt says)"}},
                 "required": ["path", "network", "claimed_count"]},
         },
         "run_python": {

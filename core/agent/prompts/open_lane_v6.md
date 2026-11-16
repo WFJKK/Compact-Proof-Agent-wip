@@ -146,6 +146,10 @@ Getting the instance through the kernel:
   lemmas about the run (`CostM.run_bind`, `CostM.run_pure`). The
   statement stays the same: only its proof is put together from parts.
 {SPLIT_EXAMPLE}
+- Lean's kernel takes a proved fact for what is needed at once only
+  when the two statements match exactly. When they differ in form it
+  compares them by computing, and for a statement about a checker's
+  run that can mean running the checker again.
 - In the soundness proof, prove your lemmas for every list of inputs or
   indices and only then apply them to D's own list. A proof step about
   the concrete run (a `simp` or `split` on it) can make the kernel

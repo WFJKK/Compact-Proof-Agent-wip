@@ -313,6 +313,20 @@ def networks_text(entries: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def budgets_text(ol: dict) -> str:
+    """A session's budgets, as the prompt's {BUDGETS} says them."""
+    budgets = (f"{ol['compile_calls']} lean_check calls, {ol['python_calls']} run_python calls, "
+               f"{ol['submissions']} submissions, {ol['worker_seconds']:,} s of wall clock")
+    if ol.get("notes_reserve_seconds"):
+        budgets += (f", of which the last {ol['notes_reserve_seconds']:,} s are kept for your answer. Every tool's answer says "
+                    "how many seconds are left before them (`remaining.seconds`); no call runs past that (a compile, a "
+                    "program or a submission still running is stopped), and when none are left the tools refuse")
+    if ol.get("compile_seconds"):
+        budgets += (f". One lean_check is stopped after {int(ol['compile_seconds']):,} s unless the call asks for more "
+                    "with max_seconds (at most 3,600)")
+    return budgets
+
+
 def static_values(cfg: dict, folder: ModelFolder, entries: list[dict]) -> dict:
     project = lean_project(cfg)
     surface = surfaces.of_run(cfg)
@@ -321,12 +335,7 @@ def static_values(cfg: dict, folder: ModelFolder, entries: list[dict]) -> dict:
         f"{s}: " + ", ".join(f"{k}={v}" for k, v in folder.sizes(s).items()) + f" ({folder.n_inputs(s):,} inputs)" for s in settings
     )
     ol = cfg["open_lane"]
-    budgets = (f"{ol['compile_calls']} lean_check calls, {ol['python_calls']} run_python calls, "
-               f"{ol['submissions']} submissions, {ol['worker_seconds']:,} s of wall clock")
-    if ol.get("notes_reserve_seconds"):
-        budgets += (f", of which the last {ol['notes_reserve_seconds']:,} s are kept for your answer. Every tool's answer says "
-                    "how many seconds are left before them (`remaining.seconds`); no call runs past that (a compile, a "
-                    "program or a submission still running is stopped), and when none are left the tools refuse")
+    budgets = budgets_text(ol)
     return {
         "MODEL_SOURCE": "\n```python\n" + folder.source().rstrip() + "\n```",
         "TASK_DESCRIPTION": folder.task.DESCRIPTION,
