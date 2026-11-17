@@ -280,7 +280,7 @@ def validate(cfg: dict, source: str = "run config") -> None:
 
 OPEN_LANE_KEYS = {"enabled", "lean_project", "work_dir", "python", "compile_calls", "compile_seconds", "python_calls", "submissions",
                   "max_turns", "worker_seconds", "notes_reserve_seconds", "python_workspace_mb", "python_workspace_files", "stall_rounds", "fake_scripts", "example", "extra_sources", "knowledge", "second_example", "notes",
-                  "seed_check", "scaling", "split_example", "workflow_mode", "discovery_rounds", "probe_compile_calls",
+                  "seed_check", "scaling", "code_review", "split_example", "workflow_mode", "discovery_rounds", "probe_compile_calls",
                   "probe_auxiliary_submissions", "probe_seconds", "research_workspace_mb", "research_workspace_files",
                   "continue_from", "continue_note", "carried_replace"}
 KNOWLEDGE_CONDITIONS = ("minimal", "maximum")
@@ -376,6 +376,8 @@ def open_lane_errors(cfg: dict) -> list[str]:
         errors.append("open_lane.seed_check must be null or {network: <a development network of the model>}")
     if not isinstance(ol.get("scaling", False), bool):
         errors.append("open_lane.scaling must be true or false")
+    if not isinstance(ol.get("code_review", False), bool):
+        errors.append("open_lane.code_review must be true or false")
     if ol.get("knowledge") not in KNOWLEDGE_CONDITIONS:
         errors.append(f"open_lane.knowledge must be one of {', '.join(KNOWLEDGE_CONDITIONS)}")
     errors += workflow_errors(cfg, ol)

@@ -1,7 +1,8 @@
 # Continues run attn-min2-ptl-3 (16 November 2026: two formalization rounds, 1,889 of 4,096 inputs scored at
-# length 192,059 on attn-min2-v64d8-s1) with the Lean service of 17 November (policy v13: fast reads, the size
-# budget that follows the network, the plan's information bound, the network in a protected module of its own).
-# Three formalization rounds of 90 minutes, then the seed check on a second seed with the checker locked.
+# length 192,059 on attn-min2-v64d8-s1) with the Lean service of 17 November (policy v14: fast reads, the size
+# budget that follows the network, the plan's information bound, the network in a protected module of its own,
+# the last-bits test). Three formalization rounds of 90 minutes, then the seed check on a second seed with the
+# checker locked, and a reading of the locked checker.
 # Before starting it:
 #
 #     python3 -m core.open_lane.dry_start --config config/pilot/attn-min2-ptl-4.yaml --sandbox seatbelt --check
@@ -10,7 +11,7 @@
 # whether the carried proof compiles, is accepted and scored again, and can be locked for the seed check as
 # the earlier run compiled it.
 # Budget, when billed to an API key (--auth api_key): at most $40 a session and $200 for the run (three proof
-# rounds and the seed check; the earlier runs cost $0.35 to $0.39 a minute).
+# rounds, the seed check and the reading; the earlier runs cost $0.35 to $0.39 a minute).
 extends: attn-min2-quick.yaml
 run_id: attn-min2-ptl-4
 rounds_max: 3
@@ -28,6 +29,10 @@ open_lane:
   # The checker of the best scored proof, locked, on another development seed of the same size: a checker that
   # carries a copy of the first network's weights certifies nothing there.
   seed_check: {network: attn-min2-v64d8-s2}
+  # The locked checker is then read, in a session that proves and submits nothing, for numbers of the network
+  # written into its code: what the service's size budget and last-bits test cannot settle on a network of this
+  # size. A language model's reading: an alarm for a person in the report, never a score.
+  code_review: true
   # The library's reads changed (policy v10): the carried FarRun.lean proved two lemmas about a read by unfolding
   # its old definition. The replacement cites the library's lemmas for them; the statements are the same.
   carried_replace:
@@ -75,6 +80,11 @@ open_lane:
       modules fit together).
     - Two modules that each unfold the same definition no longer make
       a submission fail with "declares ... twice".
+    - A scored proof's checker is now run again on copies of the network
+      whose weights differ in their last bits, and must certify at
+      least 9/10 of its count there (the section on the limits of the
+      general layer says how). The earlier run's proof does: it
+      certifies 1,889 on every such copy.
     - CompactCheck/SemanticsKernel.lean is new: the specification's
       operations as the kernel evaluates them best (tensors built from
       lists, read through a tree), each proved equal to the

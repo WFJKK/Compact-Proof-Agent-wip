@@ -181,7 +181,12 @@ SECOND_EXAMPLE_TEXT = (
 # when the run has it.
 AFTER_HEAD = {0: "This run is about one network.",
               1: "This run is about one network. One thing comes after its rounds, and\nit says what a good proof is:",
-              2: "This run is about one network. Two things come after its rounds, and\nthey say what a good proof is:"}
+              2: "This run is about one network. Two things come after its rounds, and\nthey say what a good proof is:",
+              3: "This run is about one network. Three things come after its rounds, and\nthey say what a good proof is:"}
+AFTER_CODE_REVIEW = """- {when} the checker of your best scored proof is read: does its count come
+  from what it computes on the weights it is given, or from numbers of
+  this network written into its code? A checker's own code is not
+  charged, so its length means something only in the first case."""
 AFTER_SEED_CHECK = """- The seed check. The checker of your best scored proof that can be
   locked, and its soundness proof, are locked and run unchanged on a
   second network: the same architecture and sizes, trained from another
@@ -219,6 +224,9 @@ MODULES_WHY = {
     "scaling": """  The scaling question is asked of the first kind, locked. A proof kept
   in one module cannot be asked it.
 """,
+    "code_review": """  The reading after the rounds is of the first kind. A proof kept in one
+  module is not read.
+""",
 }
 
 
@@ -229,14 +237,17 @@ def after_rounds_text(ol: dict) -> str:
     if ol.get("seed_check"):
         parts.append(AFTER_SEED_CHECK)
     if ol.get("scaling"):
-        parts.append(AFTER_SCALING.format(when="Last," if parts else "Then"))
+        parts.append(AFTER_SCALING.format(when="Last," if parts and not ol.get("code_review") else "Then"))
+    if ol.get("code_review"):
+        parts.append(AFTER_CODE_REVIEW.format(when="Last," if parts else "Then"))
     return "\n".join([AFTER_HEAD[len(parts)]] + parts)
 
 
 def modules_rule_text(ol: dict) -> str:
     """The advice to keep the checker's modules apart from the instance's: only a run with a session after
     its proof rounds needs it."""
-    why = MODULES_WHY["seed_check"] if ol.get("seed_check") else MODULES_WHY["scaling"] if ol.get("scaling") else None
+    why = (MODULES_WHY["seed_check"] if ol.get("seed_check") else MODULES_WHY["scaling"] if ol.get("scaling") else
+           MODULES_WHY["code_review"] if ol.get("code_review") else None)
     return MODULES_RULE + why if why else ""
 
 

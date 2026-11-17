@@ -15,7 +15,7 @@ The tools:
   workspace (its full source, or edits to the module saved at that path, each of whose old texts must occur
   exactly once) and compile it against the protected modules of that network and claim (`accept.py compile` of
   the Lean project, in its box), returning the compiler's messages; with `checker`, also the scoring preview
-  (the counted-language closure and the description size against the budget); with `plan`, the claim's protected
+  (the counted-language closure, the description size against the budget and the last-bits test); with `plan`, the claim's protected
   module has that plan, for a planned checker. Counts against the compile budget.
 - run_python(code, network): run code in the recipe sandbox with that network's weights and info, returning
   what it printed. Same limits as a recipe.
@@ -161,7 +161,9 @@ MAX_SOURCE = 400_000  # characters of one module
 MODULE_PATH = re.compile(r"^Candidate/([A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\.lean$")
 CHECKER_NAME = re.compile(r"^Candidate(\.[A-Za-z_][A-Za-z0-9_]*)+$")  # as the service checks a manifest's names
 SCORING_PREVIEW_NOTE = ("What scoring checks without the kernel, measured as the score step measures it: whether the "
-                        "checker uses only the counted language, and its description size against the budget. Not a "
+                        "checker uses only the counted language, its description size against the budget, and the "
+                        "last-bits test (`last_bits`: what the compiled checker certifies on the network, with its bill, "
+                        "and on copies of the network whose weights differ in their last bits). Not a "
                         "verdict: a submission's score step also has the kernel check the soundness and instance theorems "
                         "and time the general layer.")
 PY_MODULE = re.compile(r"^py/[A-Za-z_][A-Za-z0-9_]*\.py$")  # run_python's save_as
@@ -1050,6 +1052,8 @@ class Session:
             if probe is not None:
                 limit = min(limit, probe["reserved_s"])
                 deadline = time.monotonic() + probe["reserved_s"]
+            if checker is not None:  # the preview's last-bits runs take no more than the call has left
+                cmd += ["--limit-s", f"{limit:.0f}"]
             res = self._service(cmd, limit)
             if res.get("status") == "timeout" and not res.get("messages"):  # stopped here, at the limit of the call
                 if probe is not None and limit == probe["reserved_s"]:
@@ -1086,6 +1090,12 @@ class Session:
                                               "within_budget", "plan_bits", "plan_bits_budget", "plan_within_budget", "error")
                                              if k in ("checker", "counted_language", "offending", "description_size", "size_budget",
                                                       "within_budget", "error") or k in out["scoring_preview"]}
+                if isinstance(out["scoring_preview"].get("last_bits"), dict):
+                    lb = out["scoring_preview"]["last_bits"]
+                    logged["scoring_preview"]["last_bits"] = {k: lb[k] for k in ("passes", "count", "bill", "holds_to",
+                                                                                   "least_count_on_copies") if k in lb}
+                    if lb.get("reason"):
+                        logged["scoring_preview"]["last_bits"]["reason"] = str(lb["reason"])[:200]
             if out["timed_out"]:
                 logged["timed_out"] = True
             showed = surfaces.matches(text, self.surface().get("forbidden") or [])
@@ -1485,6 +1495,8 @@ class Session:
                         raise ToolError(f"scored.{key} must be {lock[key]}: the seed check runs the locked checker")
             elif stage.get("name") == "scaling" and kind != "auxiliary":
                 raise ToolError("this session takes lemmas only (kind auxiliary): the proof rounds are over")
+            elif stage.get("name") == "code_review":
+                raise ToolError("this session reads the checker and answers: it takes no submission")
             tag = self._candidate(candidate_id, question, required=discovery) if self.phase() else {}
             applied = self._apply_lock(network, claimed_count, (scored or {}).get("certificate") if isinstance(scored, dict) else None,
                                        (scored or {}).get("plan") if isinstance(scored, dict) else None)
@@ -1692,8 +1704,10 @@ class Session:
                            "`new` text, in order (no edits: compile the module as saved). Returns the compiler's messages "
                            "(errors, goals, #eval output). With `checker`, the name of your checker D, a successful compile "
                            "also returns a scoring preview: whether D uses only the counted language (the constants it is "
-                           "refused for, if not) and its description size against the budget, with its largest "
-                           "definitions, measured as the score step measures them. Each call counts against the compile "
+                           "refused for, if not), its description size against the budget, with its largest "
+                           "definitions, and the last-bits test (what the compiled D certifies on the network, with its "
+                           "bill, and on copies whose weights differ in their last bits), measured as the score step "
+                           "measures them. Each call counts against the compile "
                            "budget. A call is stopped after a compile's limit (the session's prompt says it) unless it "
                            "asks for more with `max_seconds` (at most 3,600), and never runs past the session's time; "
                            "the answer gives the limit that applied (`limit_s`).",

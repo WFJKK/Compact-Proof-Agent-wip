@@ -150,11 +150,30 @@ depend on):
   counted, a numeral 1 per bit, a string 8 per byte) is at most the
   network's size budget: 8192 + 4E, or half the bits of its weights
   (each weight's sign and significant bits) where that is more, at
-  most 16,384. A copy of the weights measures more.
+  most 16,384; and never above 24,576, however large the network.
+  A copy of the weights measures more.
 - lean_check with `checker` (D's name) shows, before you submit, whether
   D stays in the counted language and its description size against
   the budget, with its largest definitions.
 - It must replay in the kernel within 120 s.
+- Its count must not go with the last bits of the weights. After the
+  kernel has scored a proof, the service runs D again, compiled, with
+  your certificate and plan, on copies of the network in which every
+  weight is moved by about 2^-20 or 2^-16 of itself. On each copy D
+  must certify at least 9/10 of what it certifies on the network. A
+  checker that computes on the weights it is given does; one that
+  compares the weights with numbers of this network held in its code
+  certifies nothing there. So leave room in what you compare: a
+  threshold or a certificate number a little inside what the weights
+  give, not exactly on it. A copy moves a sum of products of weights
+  by up to about 2^-16 of the sizes of its terms; several times that
+  is room enough. For that run D must be its own compiled
+  code: nothing `noncomputable` in D or what it uses, and no
+  `implemented_by`, `extern`, `export`, `csimp` or `initialize` in
+  your modules. lean_check with `checker` runs this test too
+  (`last_bits` in its preview: what the compiled D certifies on the
+  network, with its bill, and on each copy), so you see it before
+  you submit.
 A proof refused scoring stays verified.
 
 Getting the instance through the kernel:

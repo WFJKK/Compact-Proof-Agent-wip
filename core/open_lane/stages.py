@@ -13,6 +13,13 @@ sessions follow, each one round of the run, each resumable like any round:
   of the network, compares it with brute force's, and proves what it can of that as lemmas. Never scored.
   Each lemma is recorded with whether Lean found the locked checker in its submission.
 
+- code_review (`open_lane.code_review: true`): the locked checker is read, in a session that proves and
+  submits nothing: does its count come from what it computes on the weights, or from numbers of this network
+  written into its code? A checker computes for free on what its own code holds, the Lean service's size
+  budget cannot keep a copy of a small network's weights out, and its last-bits test sees a copy only where
+  it is compared exactly. The reader's answer (clean, suspect or unclear, and what it found) is an alarm for
+  a person. It never decides a score.
+
 Lean not answering (no Lean, no compiled modules) decides nothing: the run halts and a resume asks again.
 
 `stages.json` in the run folder records that the proof rounds are over, which proof was locked (or why none
@@ -34,7 +41,8 @@ from .prompt import static_values
 from .records import proof_records
 from .session import Session
 
-STAGES = ("seed_check", "scaling")
+STAGES = ("seed_check", "scaling", "code_review")
+VERDICTS = ("clean", "suspect", "unclear")
 STATE_FILE = "stages.json"
 
 
@@ -254,7 +262,7 @@ def build_stage_prompt(cfg: dict, folder, run: RunDir, k: int, name: str, state:
         "FROM_NETWORK": locked["network"], "FROM_RESULT": from_result(locked),
         "NETWORK": entry["id"], "LOCKED": locked_text(lock), "RENAME": rename_text(lock), "FREE": free_text(lock),
         "CHECKER": lock["checker"], "SOUND": lock["sound"],
-        "SEED_CHECK_RESULT": seed_check_line(state),
+        "SEED_CHECK_RESULT": seed_check_line(state), "GUARDS": guards_text(Path(locked["submission_dir"])),
         "N": f"{n:,}", "B": f"{entry['B']:,}", "PER_INPUT": _num((entry["B"] - entry["E"]) / n),
     }
     part2 = fill(path.read_text(), values)
@@ -322,6 +330,72 @@ def scaling_result(records: list[dict], k: int) -> dict:
     return {"lemmas": lemmas, "submissions": len([r for r in mine if r.get("status") != "no_submission"])}
 
 
+def guards_text(submission: Path) -> str:
+    """For the reader: what the Lean service's two checks said of the locked proof, from its receipt."""
+    try:
+        s = json.loads((submission / "receipt.json").read_text()).get("scoring") or {}
+    except (OSError, ValueError):
+        s = {}
+    lines = []
+    num = lambda key: f"{s[key]:,}" if isinstance(s.get(key), int) else None
+    if num("description_size"):
+        lines.append("- The size of the checker's code is limited. This one measures " + num("description_size") + " units"
+                     + (f" of the {num('size_budget')} allowed" if num("size_budget") else "") + ". A unit holds close to "
+                     "three bits" + (f", and this network's weights hold at least {num('weight_bits')} bits" if num("weight_bits") else "")
+                     + ": the limit says how much of a copy would fit, not that there is none.")
+    lb = s.get("last_bits") or {}
+    if lb.get("runs") and isinstance(lb.get("least_share"), (int, float)):
+        share = lb["least_share"]
+        held = lb.get("holds_to")
+        lines.append("- The checker was run again on copies of the network whose weights differ in their last bits (by 2^-20 and "
+                     f"2^-16 of each weight). It certified at least {share:.0%} of its count on every copy"
+                     + (f", and kept its count down to changes of 2^-{held}" if held else "") + ". So its count does not hang on "
+                     "comparing the weights with exact stored values. That says nothing about stored values compared "
+                     "with a tolerance.")
+    else:
+        lines.append("- The service's last-bits test (the checker run again on copies of the network whose weights differ in "
+                     "their last bits) was not run on this proof: it was accepted before the test existed.")
+    return "\n".join(lines)
+
+
+def code_review_result(run: RunDir, k: int) -> dict:
+    """The reader's answer, from the round's response: the verdict (the word after `VERDICT:`, None when the
+    answer has none of the three) and the sections FOUND and NOTES as the reader wrote them."""
+    text = run.read(k, "attempt_0/response.md") or ""
+    verdict = None
+    for line in text.splitlines():
+        if line.strip().upper().startswith("VERDICT:"):
+            word = line.split(":", 1)[1].strip().lower().split()
+            verdict = next((v for v in VERDICTS if word and word[0].strip(".,;:()*`") == v), None)
+    def section(name: str) -> str:
+        lines, on = [], False
+        for line in text.splitlines():
+            head = line.strip().split(":", 1)[0].upper()
+            if head == name and ":" in line:
+                on, line = True, line.split(":", 1)[1]
+            elif on and head in ("VERDICT", "FOUND", "NOTES"):
+                on = False
+            if on:
+                lines.append(line.rstrip())
+        return "\n".join(lines).strip()
+    return {"verdict": verdict, "found": section("FOUND")[:6000], "notes": section("NOTES")[:3000]}
+
+
+def code_review_line(state: dict) -> str:
+    st = (state.get("stages") or {}).get("code_review")
+    if not st:
+        return ""
+    res = st.get("result")
+    if res is None:
+        return f"the reading of the checker (round {st['round']}): not done yet"
+    word = {"clean": "clean: the reader found no numbers of the network in the checker's code",
+            "suspect": "SUSPECT: the reader found numbers of the network in the checker's code; read its answer before "
+                       "relying on the score",
+            "unclear": "unclear: the reader could not settle it; read its answer",
+            None: "no verdict: the reader's answer does not say clean, suspect or unclear; read it"}[res.get("verdict")]
+    return f"the reading of the checker (round {st['round']}, a language model's, an alarm and not a check): {word}"
+
+
 def status_lines(run: RunDir) -> list[str]:
     """For the run's status: what followed the proof rounds, in a few lines; empty for a run without stages."""
     state = read_state(run)
@@ -338,6 +412,8 @@ def status_lines(run: RunDir) -> list[str]:
         res = scaling.get("result")
         lines.append(f"  the scaling question (round {scaling['round']}): " +
                      ("not asked yet" if res is None else f"{len(res['lemmas'])} lemma(s) accepted; the answer is the round's response"))
+    if "code_review" in state["stages"]:
+        lines.append("  " + code_review_line(state))
     return lines
 
 
@@ -404,6 +480,22 @@ def report_lines(run: RunDir) -> list[str]:
                       for l in res["lemmas"]]
             if res["lemmas"]:
                 lines.append("")
+    review = state["stages"].get("code_review")
+    if review:
+        res = review.get("result")
+        lines += ["### The reading of the checker", ""]
+        if res is None:
+            lines += [f"Not done yet (round {review['round']}).", ""]
+        else:
+            lines += ["A session read the locked checker's code and was asked whether its count comes from what it computes "
+                      "on the weights or from numbers of this network written into the code. The reader is a language model: "
+                      "its answer is an alarm for a person, right or wrong, and changes no score. "
+                      f"The whole answer is `round_{review['round']:03d}/attempt_0/response.md`.", "",
+                      "**" + code_review_line(state).split("): ", 1)[1] + "**", ""]
+            if res.get("found"):
+                lines += ["What it found:", "", res["found"], ""]
+            if res.get("notes"):
+                lines += ["Its notes:", "", res["notes"], ""]
     return lines
 
 
@@ -457,7 +549,10 @@ def run_stages(ctx, backend, check_entry: dict | None, why: str, run_round) -> N
             ctx.log("  " + seed_check_line(state))
             if st["result"].get("outcome") == "certified" and not st["result"].get("lock_in_receipt"):
                 ctx.log("  note: the receipt did not carry the locked modules' hashes; the lock rests on the pipeline's own comparison")
-        else:
+        elif name == "scaling":
             st["result"] = scaling_result(records, k)
             ctx.log(f"  scaling: {len(st['result']['lemmas'])} lemma(s) accepted")
+        else:
+            st["result"] = code_review_result(run, k)
+            ctx.log("  " + code_review_line(state))
         write_state(run, state)

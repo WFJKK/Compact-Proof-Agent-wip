@@ -46,7 +46,10 @@ response:
   since 11 November 2026 `edits` to the module saved at that path: each replaces an `old` text that must
   occur exactly once, in order, and no edits compile the module as saved; since 13 November 2026 `checker`,
   the name of the agent's checker, adds a scoring preview: the counted-language closure and the description
-  size against the budget, measured as the score step measures them, with the largest definitions; and `plan`
+  size against the budget, measured as the score step measures them, with the largest definitions, and since
+  17 November 2026 the service's last-bits test, run on the compiled checker (`last_bits`: its count and bill on
+  the network and its count on each copy; the call tells the service how long it has, `--limit-s`, so that
+  these runs never push a finished compile past the call's limit); and `plan`
   builds the protected module with a planned checker's plan; since 17 November 2026 the answer names the
   protected modules the service built, `protected_modules`: the claim's and, beside it, the network's own,
   `Protected.N_<network>`, which no claim renames, so that a module importing it alone stays compiled when
@@ -366,6 +369,14 @@ A pilot run is about one network and has two more sessions after its proof round
   with the sizes, against brute force's, and submits what it can prove of that as lemmas. The session
   takes lemmas only, and nothing in it is scored. For each accepted lemma Lean is asked the seed check's
   question, and the report says whether the checker named in its statement is the locked one.
+- The reading (`open_lane.code_review: true`, since 17 November 2026). A session reads the locked checker's
+  code and answers one question: does its count come from what it computes on the weights it is given, or
+  from numbers of this network written into its code? A checker's own code is free, the Lean service's size
+  budget cannot keep a copy of a small network's weights out, and its last-bits test sees a copy only where
+  it is compared exactly (docs/decisions/weights-in-code-v14.md). The session has the locked modules to
+  read, `run_python` to compare what it finds with the weights, and no way to submit. Its answer ends with a
+  verdict, clean, suspect or unclear, and what it found; the status and the report carry it, marked as a
+  language model's reading. It is an alarm for a person and never moves a score.
 
 `stages.json` in the run folder records when and why the proof rounds ended, which proof was locked (and
 any better proof passed over because it could not be), each stage's round and what it found. Once it
@@ -454,8 +465,9 @@ network and the seed check's network:
   (`models/attn-min2`, size v64d8, added 12 November 2026), proof rounds on `attn-min2-v64d8-s1`, the seed
   check on `attn-min2-v64d8-s2`; `config/pilot/attn-min2-quick.yaml` is one round of 90 minutes of it,
   without the seed check and the scaling question. Not the zoo's width 32 (the paper's): there the protected
-  module exceeds Lean's default recursion depth, and the kernel's loops over a tensor cost the square of its
-  length (docs/decisions/attn-min2-width8.md). The minimal surface shows the exp bounds (Exp.lean and
+  module exceeded Lean's default recursion depth, and the kernel's loops over a tensor cost the square of its
+  length (docs/decisions/attn-min2-width8.md; both mended on 16 and 17 November 2026, policies v10 and v13 of
+  the Lean service, so width 32 is open to a run now). The minimal surface shows the exp bounds (Exp.lean and
   ExpSound.lean as excerpts) for every run.
 
 What an open-lane run needs to know about an architecture is the model folder's to state, under `open_lane`
@@ -471,8 +483,14 @@ attention network at width 8) and more than the budget elsewhere. On the tiny ne
 reasons are in the Lean project's docs/COUNTED.md, "The size budget"; docs/decisions/size-budget-v11.md has
 the decision. That budget stops a plain copy only: a table written with an alphabet of variables measures about
 a third of its bits (measured 17 November, policy v12), so on a network of this size no size budget keeps a
-determined copy out. What does is the seed check (above) with the plan bounded in information, a quarter of
-what a copy holds (policy v12): docs/decisions/no-wasted-runs-v12.md.
+determined copy out. Since policy v14 (17 November) no budget is above 24,576, and every scored proof's
+checker is run again on copies of the network whose weights differ in their last bits: one whose count rests
+on an exact stored copy certifies nothing there and is refused scoring. A copy that is rounded and compared
+with a tolerance passes that test; the reading (above) is the alarm for it, and nothing decides it
+(docs/decisions/weights-in-code-v14.md). The seed check (above), with the plan bounded in information, a
+quarter of what a copy holds (policy v12: docs/decisions/no-wasted-runs-v12.md), shows whether a checker
+carries over to another network. It is a measurement beside the score and no condition for it: a proof may
+rest on a circuit that only the first network has.
 
 `open_lane.split_example` (the pilot's base sets it) names a file of the Lean project where an instance is
 put together from small decided facts, which a long run needs: template v5 says where it is and `read_file`

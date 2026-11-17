@@ -200,6 +200,10 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
             rec.update(status="ok", length=int(scoring["length"]),
                        length_by_rule={"bill": scoring.get("bill"), "extract": scoring.get("extract"), "read": scoring.get("read")},
                        description_size=scoring.get("description_size"))
+            # the service's last-bits test (its policy v14): the least share of its count the checker kept on copies
+            # of the network whose weights differ in their last bits, and how far the count held
+            if isinstance(scoring.get("last_bits"), dict):
+                rec["last_bits"] = {key: scoring["last_bits"].get(key) for key in ("passed", "least_share", "holds_to")}
         else:
             # a proof the kernel verified and a budget then refused keeps its measurement (the service's policy v12):
             # shown and recorded, never a length of the frontier

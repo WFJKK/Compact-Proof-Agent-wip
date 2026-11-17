@@ -225,6 +225,11 @@ def check_best(session: Session, best: dict | None, manifest: dict, log, lock: b
         log(f"NOT READY: accepted, not scored: {scoring.get('reason')} ({size}; measured length {scoring.get('measured_length')})")
         return 1
     log(f"accepted and scored: {receipt.get('certified_count')} inputs, length {scoring.get('length'):,}; {size}")
+    last = scoring.get("last_bits") or {}
+    if last.get("runs"):  # the service's last-bits test (its policy v14)
+        fewest = min(r["count"] for r in last["runs"] if r["level"] in last["levels"])
+        log(f"  the last-bits test: at least {fewest:,} inputs on every copy of the network at 2^-{last['levels'][0]} and "
+            f"2^-{last['levels'][-1]}" + (f"; the count holds down to 2^-{last['holds_to']}" if last.get("holds_to") else ""))
     if best.get("length") and scoring.get("length") != best["length"]:
         log(f"  note: the earlier receipt's length was {best['length']:,}")
     if lock and project is not None:

@@ -175,6 +175,9 @@ def test_a_fake_session_submits_the_scored_example_and_the_receipt_becomes_a_rec
     records = ctx.run.read_archive()
     ok = [r for r in records if r["status"] == "ok"]
     assert len(ok) == 1 and ok[0]["lane"] == "open" and ok[0]["certified"] == 64 and ok[0]["length"] == 4112
+    # the service's last-bits test (its policy v14): on copies of the network whose weights differ in their last bits
+    # the brute-force checker certifies what it certifies on the network
+    assert ok[0]["last_bits"] == {"passed": True, "least_share": 1.0, "holds_to": 8}
     assert ok[0]["checked_by"] == "lean" and ok[0]["network"] == "max2_tiny-v8-s0" and ok[0]["round"] == 1
     assert "reference_warning" not in ok[0]
     lemma = [r for r in records if r["status"] == "lemma"]
@@ -1605,6 +1608,30 @@ def test_only_plain_files_with_plain_names_are_taken_from_a_programs_folder(tmp_
     assert workspace_files(tmp_path / "py2") == ({}, [])
 
 
+@pytest.mark.skipif(not (LEAN / "scripts" / "accept.py").is_file(), reason="needs the Lean project's scripts/accept.py")
+def test_the_prompts_state_the_size_cap_and_the_last_bits_rule_as_the_service_has_them():
+    """The prompts tell the agent the limits its proof is scored under, in words, and the numbers in those words
+    are the Lean service's (scripts/accept.py of the project this pipeline is locked to). A prompt that states
+    another cap, other levels of the last-bits test or another share to keep sends a run after the wrong rule;
+    this fails when the service's policy moves and the prompts do not."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("lean_accept_policy", LEAN / "scripts" / "accept.py")
+    accept = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(accept)
+    fine, coarse = accept.LAST_BITS_LEVELS
+    for name in ("open_lane_v6.md", "open_lane_formalization_v1.md", "open_lane_discovery_v1.md"):
+        text = " ".join((REPO_ROOT / "core" / "agent" / "prompts" / name).read_text().split())
+        assert f"{accept.SIZE_BUDGET_BASE} + {accept.SIZE_BUDGET_PER_PARAM}E" in text, name
+        assert f"at most {accept.SIZE_BUDGET_SHARE_CAP:,}; and never above {accept.SIZE_BUDGET_CAP:,}" in text, name
+        assert f"moved by about 2^-{fine} or 2^-{coarse} of itself" in text, name
+        assert f"at least {accept.LAST_BITS_KEEP} of what it certifies on the network" in text, name
+        assert f"by up to about 2^-{coarse} of the sizes of its terms" in text, name
+        assert f"within {accept.GENERAL_KERNEL_BUDGET_MS // 1000} s" in text, name
+        for word in ("noncomputable", "implemented_by", "extern", "export", "csimp", "initialize"):
+            assert f"`{word}`" in text, (name, word)
+
+
 def test_lean_check_previews_the_scoring_checks_of_a_named_checker(tmp_path, monkeypatch):
     """With `checker`, lean_check asks the service's development compile for its scoring preview (accept.py compile
     --checker) and returns it, with a note that it is not a verdict; the tools log keeps its numbers. Without it,
@@ -1613,7 +1640,9 @@ def test_lean_check_previews_the_scoring_checks_of_a_named_checker(tmp_path, mon
     calls = []
     preview = {"checker": "Candidate.Far.D", "counted_language": "ok", "offending": [], "description_size": 14043,
                "size_budget": 13376, "within_budget": False,
-               "largest_definitions": [{"name": "Candidate.Far.pre", "size": 5486}]}
+               "largest_definitions": [{"name": "Candidate.Far.pre", "size": 5486}],
+               "last_bits": {"count": 1889, "bill": 190761, "runs": [{"level": 20, "count": 1889}], "keep": "9/10",
+                             "least_count_on_copies": 1889, "holds_to": 12, "passes": True, "seconds": 9.5}}
 
     def service(self, cmd, timeout_s):
         calls.append(cmd)
@@ -1629,13 +1658,19 @@ def test_lean_check_previews_the_scoring_checks_of_a_named_checker(tmp_path, mon
     out = s.call("lean_check", {"path": "Candidate/Far.lean", "edits": [], "network": net, "claimed_count": 64,
                                 "checker": "Candidate.Far.D"})
     assert calls[-1][calls[-1].index("--checker") + 1] == "Candidate.Far.D"
+    # the service is told how long the call has, so that the preview's last-bits runs never push a finished
+    # compile past the point where the call is stopped
+    assert calls[-1][calls[-1].index("--limit-s") + 1] == str(out["limit_s"]) and "--limit-s" not in calls[0]
     p = out["scoring_preview"]
     assert p["description_size"] == 14043 and p["within_budget"] is False and "not a verdict" in p["note"].lower()
     assert p["largest_definitions"][0]["name"] == "Candidate.Far.pre"
+    assert p["last_bits"]["passes"] is True and p["last_bits"]["runs"] and "last-bits test" in p["note"]
     log = [json.loads(l) for l in (s.path / "tools.jsonl").read_text().splitlines()]
     assert log[-1]["args"]["checker"] == "Candidate.Far.D"
     assert log[-1]["outcome"]["scoring_preview"]["description_size"] == 14043
     assert "largest_definitions" not in log[-1]["outcome"]["scoring_preview"]  # the log keeps the numbers
+    assert log[-1]["outcome"]["scoring_preview"]["last_bits"] == {"passes": True, "count": 1889, "bill": 190761,
+                                                                  "holds_to": 12, "least_count_on_copies": 1889}
     for bad in ("D", "Mathlib.foo", "Candidate.", "Candidate.Far.D; rm", 7):
         with pytest.raises(ToolError, match="checker must be"):
             s.lean_check(path="Candidate/Far.lean", edits=[], network=net, claimed_count=64, checker=bad)

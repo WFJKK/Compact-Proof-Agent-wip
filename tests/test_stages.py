@@ -549,6 +549,61 @@ def test_a_run_proves_one_network_then_checks_a_second_seed_with_the_checker_loc
     assert len(ctx2.run.read_archive()) == len(records) and ctx2.run.done_rounds() == [0, 1, 2, 3]
 
 
+READING = {"calls": [
+    call("read_file", path="Candidate/Col.lean"),
+    call("submit_candidate", network=A, claimed_count=576, theorem="Candidate.ColRun.performance", modules=["Candidate/ColRun.lean"], scored=SCORED),
+], "response": "I read the checker.\n\nVERDICT: suspect\nFOUND: `Candidate.Col.table` (Candidate/Col.lean, line 12): 448 numerals;\n"
+               "447 of them are the embedding's entries times 2^32.\nNOTES: look at `table` first."}
+
+
+def test_the_locked_checker_is_read_and_the_readers_answer_is_an_alarm_and_no_more(tmp_path, monkeypatch):
+    """open_lane.code_review: after the proof rounds a session reads the locked checker and says whether its
+    count comes from what it computes on the weights or from numbers of the network written into its code (what
+    the Lean service's size budget and last-bits test cannot settle on a small network). It proves and submits
+    nothing. Its verdict goes into the run's state, status and report, marked as a language model's reading; the
+    run's score is what it was."""
+    from core.open_lane.prompt import after_rounds_text, modules_rule_text
+    from core.scoring import run_cost_of_finishing, summarize
+
+    lines = []
+    ctx = loop.start(pilot_run(tmp_path, monkeypatch, [ROUND_1, SEED_CHECK, READING], scaling=False, code_review=True), log=lines.append)
+    loop.drive(ctx)
+    run = ctx.run
+    assert run.done_rounds() == [0, 1, 2, 3]
+    state = stages.read_state(run)
+    assert list(state["stages"]) == ["seed_check", "code_review"] and state["stages"]["code_review"]["round"] == 3
+    res = state["stages"]["code_review"]["result"]
+    assert res["verdict"] == "suspect" and res["found"].startswith("`Candidate.Col.table`") and "447 of them" in res["found"]
+    assert res["notes"] == "look at `table` first."
+    # the session read the locked module and could submit nothing
+    tools = [json.loads(l) for l in (run.round_path(3) / "attempt_0" / "open_lane" / "tools.jsonl").read_text().splitlines()]
+    assert tools[0]["tool"] == "read_file" and "error" not in tools[0]["outcome"]
+    assert "it takes no submission" in tools[1]["outcome"]["error"]
+    assert not [r for r in run.read_archive() if r.get("round") == 3 and r.get("status") in ("ok", "lemma")]
+    # what it was asked, and what it was told of the service's two checks on this proof
+    p1, p3 = run.read(1, "prompt.md"), run.read(3, "prompt.md")
+    assert "THIS SESSION: READ THE CHECKER" in p3 and "does its count come from\nwhat it computes on the network's weights" in p3
+    assert "This one measures 900 units." in p3 and "was not run on this proof" in p3 and "- Candidate/Col.lean (" in p3
+    assert "VERDICT: one word." in p3 and not any("{" + n + "}" in p3 for n in ("GUARDS", "LOCKED", "CHECKER", "FREE"))
+    assert "Two things come after its rounds" in p1 and "the checker of your best scored proof is read" in p1
+    # the alarm: in the log, the status and the report, as a language model's reading
+    assert any("SUSPECT: the reader found numbers of the network" in str(l) for l in lines)
+    status = "\n".join(stages.status_lines(run))
+    assert "the reading of the checker (round 3, a language model's, an alarm and not a check): SUSPECT" in status
+    report = "\n".join(stages.report_lines(run))
+    assert "### The reading of the checker" in report and "changes no score" in report and "447 of them" in report
+    assert run_cost_of_finishing(summarize(run.read_archive(), ctx.entries, None)) == pytest.approx(170368 / 15448)
+    # an answer without one of the three words has no verdict, and says so
+    (run.round_path(3) / "attempt_0" / "response.md").write_text("It looks fine to me.\nFOUND: nothing.\n")
+    assert stages.code_review_result(run, 3) == {"verdict": None, "found": "nothing.", "notes": ""}
+    (run.round_path(3) / "attempt_0" / "response.md").write_text("VERDICT: **clean**.\nFOUND: one table of sizes.\nNOTES: none.")
+    assert stages.code_review_result(run, 3)["verdict"] == "clean"
+    # the proof rounds' prompt names the reading when the run has it, last
+    both = after_rounds_text({"scaling": True, "code_review": True})
+    assert "- The scaling question. Then you are asked" in both and "- Last, the checker of your best scored proof is read" in both
+    assert "A proof kept in one\n  module is not read." in modules_rule_text({"code_review": True})
+
+
 def test_the_receipts_say_which_proofs_can_go_to_the_seed_check_and_a_run_without_one_is_told_nothing(tmp_path, monkeypatch):
     """During the proof rounds the agent reads, per scored proof, whether it can be taken to the seed check.
     With two proof rounds and scripts for both, the seed check waits for the round limit; when the backend
