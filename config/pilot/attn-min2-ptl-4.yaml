@@ -1,0 +1,46 @@
+# Continues run attn-min2-ptl-3 (16 November 2026: two formalization rounds, 1,889 of 4,096 inputs scored at
+# length 192,059 on attn-min2-v64d8-s1) with the Lean service of 17 November (policy v12: fast reads, the size
+# budget that follows the network, the plan's information bound). Three formalization rounds of 90 minutes, then
+# the seed check on a second seed with the checker locked. Before starting it:
+#
+#     python3 -m core.open_lane.dry_start --config config/pilot/attn-min2-ptl-4.yaml --sandbox seatbelt --check
+#
+# which makes the first round's workspace as the run would (no agent, no API call) and says READY or NOT READY.
+# Budget, when billed to an API key (--auth api_key): at most $40 a session and $200 for the run (three proof
+# rounds and the seed check; the earlier runs cost $0.35 to $0.39 a minute).
+extends: attn-min2-quick.yaml
+run_id: attn-min2-ptl-4
+rounds_max: 3
+api_budget: {run_usd: 200, round_usd: 40}
+open_lane:
+  workflow_mode: python_then_lean
+  discovery_rounds: 0
+  continue_from: attn-min2-ptl-3
+  # A change of the claimed count or of the plan renames the protected module, and every module that imports it
+  # is then edited and compiled again, one lean_check each (about 20 calls in round 2 of attn-min2-ptl-3). Until
+  # the protected module is split, a round gets more calls.
+  compile_calls: 120
+  # The checker of the best scored proof, locked, on another development seed of the same size: a checker that
+  # carries a copy of the first network's weights certifies nothing there.
+  seed_check: {network: attn-min2-v64d8-s2}
+  # The library's reads changed (policy v10): the carried FarRun.lean proved two lemmas about a read by unfolding
+  # its old definition. The replacement cites the library's lemmas for them; the statements are the same.
+  carried_replace:
+    - path: Candidate/FarRun.lean
+      with: config/pilot/carried/attn-min2-ptl-3/FarRun.lean
+      replaces_sha256: 32e7268dec53b1a884d1efa7b0ff770c964c35121a41ec67ead289b4613f60a3
+      note: >-
+        Its lemmas weight_run and cert_run now cite the library's CostM.weight_run_get and CostM.cert_run_get
+        (same statements); the library's reads changed, and the old proofs unfolded their definition.
+  continue_note: |
+    The Lean service has changed since the earlier run.
+    - Reads are faster in the kernel: I.weight and I.cert go through a
+      balanced tree, about log2 n steps a read instead of walking the
+      list. The numbers and charges are the same. The modules of the
+      earlier run's fact files check several times faster. A proof that
+      unfolded CostM.weight or CostM.cert no longer goes through: use
+      CostM.weight_run_get, CostM.cert_run_get, CostM.weight_spec,
+      CostM.cert_spec (CompactCheck/Counted.lean).
+    - The size budget of this network is now 15,563 (it was 13,376); the
+      earlier run's checker measures 11,156.
+    - A plan is bounded in bits as well (7,781 on this network).

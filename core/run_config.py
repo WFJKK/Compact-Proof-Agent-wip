@@ -282,7 +282,7 @@ OPEN_LANE_KEYS = {"enabled", "lean_project", "work_dir", "python", "compile_call
                   "max_turns", "worker_seconds", "notes_reserve_seconds", "python_workspace_mb", "python_workspace_files", "stall_rounds", "fake_scripts", "example", "extra_sources", "knowledge", "second_example", "notes",
                   "seed_check", "scaling", "split_example", "workflow_mode", "discovery_rounds", "probe_compile_calls",
                   "probe_auxiliary_submissions", "probe_seconds", "research_workspace_mb", "research_workspace_files",
-                  "continue_from", "continue_note"}
+                  "continue_from", "continue_note", "carried_replace"}
 KNOWLEDGE_CONDITIONS = ("minimal", "maximum")
 WORKFLOW_MODES = ("interleaved", "python_then_lean")
 
@@ -360,6 +360,17 @@ def open_lane_errors(cfg: dict) -> list[str]:
         errors.append("open_lane.continue_note must be text")
     elif ol.get("continue_note") and not ol.get("continue_from"):
         errors.append("open_lane.continue_note is shown with an earlier run's submissions: it needs open_lane.continue_from")
+    swaps = ol.get("carried_replace") or []
+    if not isinstance(swaps, list) or not all(
+            isinstance(r, dict) and set(r) <= {"path", "with", "replaces_sha256", "note"}
+            and isinstance(r.get("path"), str) and re.fullmatch(r"Candidate/([A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\.lean", r["path"])
+            and isinstance(r.get("with"), str) and r["with"].strip()
+            and isinstance(r.get("replaces_sha256"), str) and re.fullmatch(r"[0-9a-fA-F]{64}", r["replaces_sha256"])
+            and isinstance(r.get("note") or "", str) for r in swaps):
+        errors.append("open_lane.carried_replace must be a list of {path: Candidate/<Name>.lean, with: <file>, "
+                      "replaces_sha256: <the sha256 of the carried version it replaces>, note: <text, optional>}")
+    elif len({r["path"] for r in swaps}) != len(swaps):
+        errors.append("open_lane.carried_replace names a module twice")
     check = ol.get("seed_check")
     if check is not None and not (isinstance(check, dict) and set(check) == {"network"} and isinstance(check["network"], str)):
         errors.append("open_lane.seed_check must be null or {network: <a development network of the model>}")

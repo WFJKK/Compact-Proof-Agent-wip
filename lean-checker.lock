@@ -1,6 +1,6 @@
 {
  "repository": "https://github.com/WFJKK/Compact-Proof-Checker",
- "commit": "00bb137a6daacc284a617c083ca10f0a2fd83a69",
+ "commit": "69ead771b0b99fd5f0ff3568889a17b9311d5649",
  "receipt_schema": "open-lane-receipt-v1",
  "candidate_schema": "open-lane-candidate-v1",
  "note": "The Lean checker this pipeline version expects. preflight compares the project's HEAD with commit; update it with a commit that changes core/open_lane or the Lean project's protocol."

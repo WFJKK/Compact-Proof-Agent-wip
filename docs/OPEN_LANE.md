@@ -300,6 +300,40 @@ transition then records the research folder as the earlier run left it, with its
 itself be continued: its copy goes along (inherited/inherited/), and the carried modules are the latest accepted
 version of each path across all of them.
 
+### Before the run: a dry start, and carried modules under a changed library (17 November 2026)
+
+A continuation usually runs with a newer Lean service than the earlier run did, and a carried module may no
+longer compile with it. Then nothing that imports it compiles either, and the agent has to find out why, mend
+it and compile the rest again, one lean_check a module, on the round's time. In run attn-min2-ptl-3 that is
+FarRun.lean and the four modules that import it, the soundness proofs and the instance. Two things keep that
+out of a run.
+
+    python3 -m core.open_lane.dry_start --config <run config> --sandbox seatbelt --check
+
+makes the first round's session as the run would, in a folder of its own (`<runs_dir>/_dry_start/<run_id>`,
+removed afterwards), with no agent and no API call: it copies the earlier run, puts the carried modules into
+a workspace, has the service compile them, and says which compiled and how long each took. With `--check` it
+submits the best carried scored proof again from that workspace: whether the service as it is now accepts and
+scores it, its description size against the budget, and how long the check takes on this machine. It ends
+with READY or NOT READY and why (core/open_lane/dry_start.py). It goes by the modules of that proof's
+submission. Other carried modules, of an earlier proof written for another claimed count, usually no longer
+compile beside the newer versions of what they import (five of attn-min2-ptl-3's 31); they are named, and
+the agent is told the same in its prompt.
+
+`open_lane.carried_replace` gives a carried module in a version adapted to the library:
+
+    carried_replace:
+      - path: Candidate/FarRun.lean
+        with: config/pilot/carried/attn-min2-ptl-3/FarRun.lean
+        replaces_sha256: <the sha256 of the carried version>
+        note: <one or two sentences, shown to the agent with the module>
+
+The workspace gets the replacement where the carried module is the version it was made for; a later accepted
+version of the path is carried as it is. The session's record names both digests, and the agent is told that
+the workspace holds an adapted version. A replacement that fits no carried module in the run's first round
+stops the run before the round begins. It is for a change of the library alone (a proof that unfolded a
+definition the library has since changed): the statements stay, and nothing about the network is added.
+
 ## After the proof rounds
 
 A pilot run is about one network and has two more sessions after its proof rounds
@@ -430,7 +464,10 @@ sign and significant bits) where that is more, at most 16,384; a copy holds at l
 the half decides it (26,020 against 13,010 for the linear network at 64 tokens, 31,127 against 15,563 for the
 attention network at width 8) and more than the budget elsewhere. On the tiny networks a copy fits. The
 reasons are in the Lean project's docs/COUNTED.md, "The size budget"; docs/decisions/size-budget-v11.md has
-the decision.
+the decision. That budget stops a plain copy only: a table written with an alphabet of variables measures about
+a third of its bits (measured 17 November, policy v12), so on a network of this size no size budget keeps a
+determined copy out. What does is the seed check (above) with the plan bounded in information, a quarter of
+what a copy holds (policy v12): docs/decisions/no-wasted-runs-v12.md.
 
 `open_lane.split_example` (the pilot's base sets it) names a file of the Lean project where an instance is
 put together from small decided facts, which a long run needs: template v5 says where it is and `read_file`

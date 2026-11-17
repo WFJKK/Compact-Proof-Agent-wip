@@ -201,8 +201,14 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
                        length_by_rule={"bill": scoring.get("bill"), "extract": scoring.get("extract"), "read": scoring.get("read")},
                        description_size=scoring.get("description_size"))
         else:
+            # a proof the kernel verified and a budget then refused keeps its measurement (the service's policy v12):
+            # shown and recorded, never a length of the frontier
+            measured = scoring.get("measured_length")
             rec.update(status="verified", error=("not scored: " + (shorten_paths(scoring.get("reason"), ctx.run.path)
-                                                                   or "no scored block in the manifest")))
+                                                                   or "no scored block in the manifest")
+                                                 + (f"; measured length {int(measured):,}" if isinstance(measured, int) else "")))
+            if isinstance(measured, int):
+                rec["measured_length"] = measured
         out.append(rec)
     if not out:
         out.append({**base, "record_id": record_id(ctx.run.run_id, k, j), "network": None, "setting": None, "knob": None,

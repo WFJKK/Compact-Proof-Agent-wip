@@ -1508,7 +1508,7 @@ def test_a_session_whose_cli_loads_more_than_the_runs_tools_is_stopped_at_its_in
     with pytest.raises(EarlyStop, match="tools mcp__claude-in-chrome__navigate") as exc:
         _run_cli([sys.executable, "-c", code], "the prompt", dict(os.environ), str(tmp_path), 120, early=_init_problem)
     assert time.monotonic() - t0 < 60 and '"subtype": "init"' in exc.value.output
-    if pids.exists():
+    if pids.exists() and pids.read_text().strip():  # the stand-in may be stopped between opening the file and writing it
         assert not psutil_alive(int(pids.read_text()))
     assert _init_problem(json.dumps(cli_init_event())) is None and _init_problem('{"type": "autocompact_state"}') is None
     # the backend keeps the verdict and stops the run

@@ -210,3 +210,11 @@ open_lane:
   # about them (a rejection that was a fault of the service fixed since, say). Facts about the service and the
   # earlier receipts only: never what a proof of the network looks like.
   continue_note: ""
+  # Carried modules replaced by a version adapted to the Lean library as it is now (core/open_lane/session.py):
+  # a list of {path: Candidate/<Name>.lean, with: <file, a path of this repository or any path>,
+  # replaces_sha256: <the sha256 of the carried version the file replaces>, note: <shown to the agent>}. Used
+  # only where the carried module is that version; a run whose first round would use none of an entry does not
+  # start. For a change of the library alone (a lemma's proof that unfolded a definition the library has since
+  # changed), never for the network: `python3 -m core.open_lane.dry_start --config <config>` shows what the
+  # carried modules need.
+  carried_replace: []

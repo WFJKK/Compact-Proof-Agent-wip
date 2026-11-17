@@ -33,9 +33,17 @@ Carried modules: a new session's workspace starts with the modules of every subm
 in the run's earlier rounds (the latest accepted version of each module), compiled there before the agent
 begins, through the same `accept.py compile` as lean_check and without charge to the budgets. The agent
 imports them instead of pasting their code again; whatever it submits is compiled and checked afresh by the
-service, as every submission is. session.json's `carried` says what was carried and whether it compiled. In a run
-that continues an earlier one (core.open_lane.continuation), the earlier run's accepted modules come first, round
-1 starts from that run's last session (its drafts and Python files), and each entry names the run (`from_run`).
+service, as every submission is. session.json's `carried` says what was carried, whether it compiled and how long
+that took. In a run that continues an earlier one (core.open_lane.continuation), the earlier run's accepted
+modules come first, round 1 starts from that run's last session (its drafts and Python files), and each entry
+names the run (`from_run`).
+
+Replaced carried modules (open_lane.carried_replace): when the Lean library has changed since a module was
+accepted, the person running the run may give a version adapted to it. The workspace then gets that file in
+place of the carried one, wherever the carried one is still the version the replacement was made for (its
+sha256); a later accepted version of the path is carried as it is. The entry's `replaced` says so, with both
+digests and the note shown to the agent. core.open_lane.dry_start shows, before a run, whether the carried
+modules compile and how long they take.
 
 Drafts: the agent's unfinished work goes on with it. A new session of a proof round also gets the modules
 that the workspace of the latest earlier round's session held when that session ended and that are not the
@@ -368,10 +376,14 @@ def draft_modules(run_path: Path, k: int, carried: list[dict]) -> list[dict]:
         return []
     held = {m["path"]: Path(m["source"]).read_bytes() for m in carried}
     try:
-        before = {d["path"]: d for d in json.loads((src / "session.json").read_text()).get("drafts") or []
+        state = json.loads((src / "session.json").read_text())
+        before = {d["path"]: d for d in state.get("drafts") or []
                   if isinstance(d, dict) and isinstance(d.get("path"), str)}
+        # a carried module that session held in a replaced version (open_lane.carried_replace): still the carried one
+        swapped = {m["path"]: m["replaced"].get("sha256") for m in state.get("carried") or []
+                   if isinstance(m, dict) and isinstance(m.get("replaced"), dict)}
     except (OSError, ValueError, AttributeError):
-        before = {}
+        before, swapped = {}, {}
     saved = last_compiles(src)
     earlier = continuation.origin(src, Path(run_path))  # a session of an earlier run this one continues
     here_from = {"from_run": earlier} if earlier else {}
@@ -404,8 +416,8 @@ def draft_modules(run_path: Path, k: int, carried: list[dict]) -> list[dict]:
         found[rel] = (f.read_bytes(), {**here_from, **meta} if "from_run" not in meta else meta)
     out = []
     for rel, (data, meta) in sorted(found.items()):
-        if held.get(rel) == data:
-            continue  # the accepted version, carried
+        if held.get(rel) == data or (rel in held and rel in swapped and swapped[rel] == hashlib.sha256(data).hexdigest()):
+            continue  # the accepted version, carried (or the replacement the earlier session held for it)
         out.append({"path": rel, "text": data, "set_apart": rel in held, "lines": len(data.decode("utf-8", "replace").splitlines()),
                     "sha256": _sha(data), **meta, **({"held_sha256": _sha(held[rel])} if rel in held else {})})
     return out
@@ -468,6 +480,35 @@ def service_box(sandbox: str | None) -> str:
     return "seatbelt" if sandbox == "seatbelt" else "hardened"
 
 
+def replacements(cfg: dict) -> list[dict]:
+    """open_lane.carried_replace, read: each entry's file found (a path of this repository, or any path) and
+    hashed. core.run_config has checked its shape."""
+    out = []
+    for r in (cfg.get("open_lane") or {}).get("carried_replace") or []:
+        with_ = Path(str(r["with"])).expanduser()
+        with_ = with_ if with_.is_absolute() else REPO_ROOT / with_
+        if with_.is_symlink() or not with_.is_file():
+            raise ToolError(f"open_lane.carried_replace: {r['with']} (for {r['path']}) is not a file")
+        out.append({"path": r["path"], "with": str(with_.resolve()), "replaces_sha256": str(r["replaces_sha256"]).lower(),
+                    "note": str(r.get("note") or "").strip()})
+    return out
+
+
+def unused_replacements(swaps: list[dict], carried: list[dict]) -> None:
+    """In a run's first round every replacement must be taken: a carried module of that path, in the version the
+    replacement was made for. Otherwise the config is about another state of the earlier run, and the run does not
+    start. (In a later round the path may have a newer accepted version, which is carried as it is.)"""
+    by_path = {m["path"]: m for m in carried}
+    for r in swaps:
+        m = by_path.get(r["path"])
+        if m is None:
+            raise ToolError(f"open_lane.carried_replace: no carried module {r['path']}")
+        have = hashlib.sha256(Path(m["source"]).read_bytes()).hexdigest()
+        if have != r["replaces_sha256"]:
+            raise ToolError(f"open_lane.carried_replace: the carried {r['path']} has sha256 {have}, and the replacement "
+                            f"was made for {r['replaces_sha256']}")
+
+
 class Session:
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -480,8 +521,10 @@ class Session:
 
     # creation ------------------------------------------------------------------------------
     @classmethod
-    def create(cls, path: Path, cfg: dict, model: str, entries: list[dict], run_path: Path, stage: dict | None = None) -> "Session":
-        """Make (or reopen) the session folder of an attempt. Budgets carry over if it exists.
+    def create(cls, path: Path, cfg: dict, model: str, entries: list[dict], run_path: Path, stage: dict | None = None,
+               log=None) -> "Session":
+        """Make (or reopen) the session folder of an attempt. Budgets carry over if it exists. `log`, when given,
+        gets a line per carried module as it is compiled.
 
         `stage` makes it a session after the proof rounds (core.open_lane.stages): its name (seed_check or
         scaling), the lock of the proof it is about (core.open_lane.lock) and that proof's submission folder.
@@ -498,7 +541,7 @@ class Session:
             if session.state.get("drafts") == "pending":
                 session._place_drafts(draft_modules(Path(run_path), k, carried_modules(Path(run_path), k)))
             if session.state.get("carried") == "pending":  # interrupted while compiling them: do it again
-                session._carry(carried_modules(Path(run_path), k))
+                session._carry(carried_modules(Path(run_path), k), log)
             return session
         ol = cfg["open_lane"]
         work = ol["work_dir"] or str(run_path / "open_lane_work")
@@ -522,6 +565,9 @@ class Session:
         }
         k = round_of(path)
         carried = carried_modules(Path(run_path), k) if k and not stage else []
+        state["carried_replace"] = replacements(cfg) if carried else []
+        if k == 1 and carried:
+            unused_replacements(state["carried_replace"], carried)  # a replacement no carried module takes: refused
         drafts = draft_modules(Path(run_path), k, carried) if k and not stage else []
         python = python_workspace_from(Path(run_path), k) if k and not stage else []
         state["carried"] = "pending" if carried else []
@@ -546,7 +592,7 @@ class Session:
             if drafts:
                 session._place_drafts(drafts)
             if carried:
-                session._carry(carried)
+                session._carry(carried, log)
         return session
 
     def surface(self) -> dict:
@@ -733,14 +779,25 @@ class Session:
         self.state["drafts"] = [{k: v for k, v in d.items() if k != "text"} for d in drafts]
         self._save()
 
-    def _carry(self, carried: list[dict]) -> None:
-        """Put the carried modules in the workspace and compile them there, in import order (not charged)."""
+    def _carry(self, carried: list[dict], log=None) -> None:
+        """Put the carried modules in the workspace and compile them there, in import order (not charged). A
+        module the run's config replaces (open_lane.carried_replace) is put there as the replacement, where the
+        carried version is the one the replacement was made for."""
+        swaps = {r["path"]: r for r in self.state.get("carried_replace") or []}
+        replaced = {}
         for m in carried:
             dst = self.workspace / m["path"]
             dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(Path(m["source"]).read_bytes())
+            data = Path(m["source"]).read_bytes()
+            r = swaps.get(m["path"])
+            if r and hashlib.sha256(data).hexdigest() == r["replaces_sha256"]:
+                data = Path(r["with"]).read_bytes()
+                replaced[m["path"]] = {"replaces_sha256": r["replaces_sha256"], "sha256": hashlib.sha256(data).hexdigest(),
+                                       "note": r.get("note") or ""}
+            dst.write_bytes(data)
         out = []
         for m in carried:
+            t0 = time.monotonic()
             cmd = ["compile", str(self.workspace), m["path"], "--model", self.state["model"], "--network", m["network"],
                    "--claimed", str(m["claimed_count"])]
             if m["certificate"]:
@@ -754,8 +811,16 @@ class Session:
             text = (res.get("messages") or res.get("error") or "").strip()
             entry = {k: v for k, v in m.items() if k not in ("source", "certificate")}
             entry.update(lines=len((self.workspace / m["path"]).read_text().splitlines()), compiled=bool(res.get("ok")),
-                         errors=[] if res.get("ok") else (error_lines(text, 3) or [text[:300]]))
+                         errors=[] if res.get("ok") else (error_lines(text, 3) or [text[:300]]),
+                         seconds=round(time.monotonic() - t0, 1))
+            if m["path"] in replaced:
+                entry["replaced"] = replaced[m["path"]]
             out.append(entry)
+            if log:
+                why = shorten_paths(" | ".join(entry["errors"]), self.run_dir())[:300]
+                log(f"carried {m['path']}: " + (f"compiled in {entry['seconds']:.0f} s" if entry["compiled"]
+                                                else f"did not compile ({entry['seconds']:.0f} s): {why}")
+                    + (" (replaced)" if m["path"] in replaced else ""))
         self.state["carried"] = out
         self._save()
 
@@ -1013,7 +1078,9 @@ class Session:
             if "scoring_preview" in out:
                 logged["scoring_preview"] = {k: out["scoring_preview"].get(k) for k in
                                              ("checker", "counted_language", "offending", "description_size", "size_budget",
-                                              "within_budget", "error")}
+                                              "within_budget", "plan_bits", "plan_bits_budget", "plan_within_budget", "error")
+                                             if k in ("checker", "counted_language", "offending", "description_size", "size_budget",
+                                                      "within_budget", "error") or k in out["scoring_preview"]}
             if out["timed_out"]:
                 logged["timed_out"] = True
             showed = surfaces.matches(text, self.surface().get("forbidden") or [])

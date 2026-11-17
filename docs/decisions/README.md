@@ -46,3 +46,8 @@ working from the repositories can read them. Each is dated; later decisions supe
   follows the network: 8192 + 4E, or half of the least a copy of the weights holds (each weight's sign and
   significant bits) where that is more, at most 16,384 (policy v11). attn-min2 v64d8-s1: 13,376 becomes 15,563.
   Why half, why the cap, and what was considered and not done.
+- [no-wasted-runs-v12.md](no-wasted-runs-v12.md) (17 November 2026): what guards a run against a copy and
+  against lost work. The size budget cannot hold a copy out on a network of attn-min2 v64d8's size (32,768
+  random bits measure 11,536 when written with an alphabet of variables); the seed check with the plan bounded
+  in information does (policy v12). A dry start before a run, replaced carried modules, and the measured
+  length of a proof refused scoring.

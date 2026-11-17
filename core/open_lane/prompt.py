@@ -40,7 +40,7 @@ from . import continuation
 from . import research
 from . import surface as surfaces
 from . import workflow
-from .session import Session
+from .session import Session, ToolError
 
 MAX_LEMMA_CHARS = 12000
 MAX_NOTES_CHARS = 6000
@@ -621,6 +621,11 @@ def workspace_text(carried, drafts=None, python=None) -> str:
             state = "compiled" if m.get("compiled") else "did not compile here: " + " | ".join(m.get("errors") or [])[:MAX_REASON]
             where = f"round {m['round']}" + (f" of the earlier run {m['from_run']}" if m.get("from_run") else "")
             lines.append(f"- {m['path']} ({m.get('lines')} lines; {where}, submission {m['submission']}, {what}): {state}")
+            if isinstance(m.get("replaced"), dict):
+                # the person running the run adapted it to the Lean library as it is now (open_lane.carried_replace)
+                note = str(m["replaced"].get("note") or "").strip()
+                lines.append("  The workspace holds a version of it adapted to the Lean library as it is now, not the "
+                             "accepted text" + (f": {note}" if note else "."))
         parts.append("\n".join(lines))
     if drafts and isinstance(drafts, list):
         ds = sorted(drafts, key=lambda d: (bool(d.get("from_run")), -(d.get("saved_round") or 0), d["path"]))  # this run's first
@@ -841,7 +846,10 @@ def build_open_lane_prompt(cfg: dict, folder: ModelFolder, entries: list[dict], 
     trimmed = []
     # the round's first session, made now so that the prompt can say what was carried into its workspace and
     # whether it compiled; the backend opens the same session (Session.create returns an existing one)
-    session = Session.create(run.round_path(k) / "attempt_0" / "open_lane", cfg, cfg["model"], entries, run.path)
+    try:
+        session = Session.create(run.round_path(k) / "attempt_0" / "open_lane", cfg, cfg["model"], entries, run.path)
+    except ToolError as exc:  # a carried module's replacement that fits no carried module (open_lane.carried_replace)
+        raise PromptError(f"the round's session cannot be made: {exc}") from exc
     unread: list[str] = []
     ready = (lock_readiness(run, records, lean_project(cfg), unread)
              if cfg["open_lane"].get("seed_check") and phase != workflow.DISCOVERY else None)

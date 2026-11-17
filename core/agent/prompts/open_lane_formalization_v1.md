@@ -81,7 +81,12 @@ A PLAN steers a checker for free. If your checker needs data you
 computed offline that says WHERE to look (which inputs go into which
 group, where a loop stops), give it as a plan: natural numbers in the
 scored block ("plan": [...]), below 2^32, at most 4 per input plus
-10,000. The checker is then `D : List Nat → Checker` and reads the plan
+10,000, and small: a plan says where to look and holds no copy of the
+weights. Its length in a prefix code (an entry v costs
+2 x bitlength(v + 1) - 1 bits: 0 costs 1, 63 costs 13) is at most a
+quarter of the bits of the network's weights; lean_check with `checker`
+and the plan shows both numbers. The checker is then
+`D : List Nat → Checker` and reads the plan
 as ordinary Lean data, with no charge; turning an entry into a number
 for arithmetic goes through `I.lit`, charged 1. A plan is not trusted:
 the soundness theorem must hold for every plan,

@@ -14,7 +14,7 @@ import yaml
 from core import loop
 from core.archive import RunDir
 from core.open_lane import continuation, research, workflow
-from core.open_lane.session import Session, carried_modules
+from core.open_lane.session import Session, carried_modules, draft_modules
 from core.run_config import RunConfigError, load_run_config
 from tests.test_python_then_lean import CANDIDATE, ptl_run, read_only
 from tests.test_stages import A, GENERAL, INSTANCE, SCORED, call, fake_service, stand_in_inspect
@@ -283,3 +283,153 @@ def test_a_session_stopped_by_its_spending_cap_left_no_notes(tmp_path):
     # a session of a backend without the NOTES format, which ended as it should, still gives its whole answer
     (run.round_path(3) / "attempt_0" / "response_meta.json").write_text(json.dumps({"stop_reason": "end_turn"}))
     assert latest_notes(run, 4, 6000) == "I'll start by reading the plan.Run lemmas compile."
+
+
+# ---- carried modules under a changed library: replacements, and the dry start ------------------------------
+ADAPTED = GENERAL + "\n-- adapted: the read lemma cites the library\n"
+ADAPT_NOTE = "Its read lemma now cites the library's; nothing else changed."
+
+
+def changed_library_service(extract: int):
+    """The service after a change of the Lean library: Candidate/Col.lean as the earlier run had it no longer
+    compiles; anything else as fake_service."""
+    base = fake_service(extract)
+
+    def service(self, args, timeout_s):
+        if args[0] == "compile" and args[2] == "Candidate/Col.lean" and (Path(args[1]) / args[2]).read_text() == GENERAL:
+            return {"ok": False, "messages": "Candidate/Col.lean:3:2: error: unsolved goals"}
+        return base(self, args, timeout_s)
+    return service
+
+
+def replacement(tmp_path: Path, sha: str | None = None) -> list[dict]:
+    f = tmp_path / "ColAdapted.lean"
+    f.write_text(ADAPTED)
+    return [{"path": "Candidate/Col.lean", "with": str(f), "note": ADAPT_NOTE,
+             "replaces_sha256": sha or hashlib.sha256(GENERAL.encode()).hexdigest()}]
+
+
+def test_a_carried_module_is_replaced_by_the_version_the_config_gives_for_it(tmp_path, monkeypatch):
+    """open_lane.carried_replace: the library changed, the carried lemma no longer compiles, and the run is given
+    a version adapted to it. The workspace gets that version where the carried one is the version it was made
+    for; the prompt and session.json say so; a later accepted version of the path is carried as it is; a
+    replacement that fits no carried module stops the run before its first round spends anything."""
+    parent = parent_run(tmp_path, monkeypatch)
+    before = tree_hash(parent.path)
+    monkeypatch.setattr(Session, "_service", changed_library_service(448))
+    # without a replacement the carried lemma does not compile, and the agent is told
+    ctx = loop.start(child_config(tmp_path, "ptl-plain", CHILD[1:], "ptl", 1), log=lambda *a: None)
+    loop.drive(ctx)
+    assert "accepted lemma Candidate.Col.D_sound): did not compile here: Candidate/Col.lean:3:2: error: unsolved goals" in ctx.run.read(1, "prompt.md")
+
+    ctx = loop.start(child_config(tmp_path, "ptl-2", CHILD, "ptl", 2, carried_replace=replacement(tmp_path)), log=lambda *a: None)
+    loop.drive(ctx)
+    run = ctx.run
+    s1 = session_state(run, 1)
+    (col,) = s1["carried"]
+    assert col["path"] == "Candidate/Col.lean" and col["compiled"] is True and col["seconds"] >= 0
+    assert col["replaced"] == {"replaces_sha256": hashlib.sha256(GENERAL.encode()).hexdigest(),
+                               "sha256": hashlib.sha256(ADAPTED.encode()).hexdigest(), "note": ADAPT_NOTE}
+    ws = run.round_path(1) / "attempt_0" / "open_lane" / "workspace"
+    assert (ws / "Candidate" / "Col.lean").read_text() == ADAPTED
+    p1 = run.read(1, "prompt.md")
+    assert "accepted lemma Candidate.Col.D_sound): compiled\n  The workspace holds a version of it adapted to the Lean library as it is now, not the accepted text: " + ADAPT_NOTE in p1
+    # round 1's scored proof took the adapted Col.lean along: that accepted version is carried into round 2 as it is
+    s2 = session_state(run, 2)
+    assert {m["path"]: ("replaced" in m, m["compiled"]) for m in s2["carried"]} == {"Candidate/Col.lean": (False, True),
+                                                                                  "Candidate/ColRun.lean": (False, True)}
+    assert (run.round_path(2) / "attempt_0" / "open_lane" / "workspace" / "Candidate" / "Col.lean").read_text() == ADAPTED
+    assert tree_hash(parent.path) == before
+
+    # a round that leaves the module alone: the next round would be given the replacement again, and it is no draft
+    idle = {"calls": [], "response": "CLAIM: none.\nWHY IT HELPS: -\nNOTES: none."}
+    ctx = loop.start(child_config(tmp_path, "ptl-idle", [idle], "ptl", 1, carried_replace=replacement(tmp_path)), log=lambda *a: None)
+    loop.drive(ctx)
+    again = carried_modules(ctx.run.path, 2)
+    assert [(m["path"], m["from_run"]) for m in again] == [("Candidate/Col.lean", "ptl")]
+    assert "Candidate/Col.lean" not in {d["path"] for d in draft_modules(ctx.run.path, 2, again)}
+
+    # made for another version of the module, or for a module that is not carried: the run does not start its round
+    for name, swaps, why in (("ptl-wrong", replacement(tmp_path, "0" * 64), "the replacement was made for " + "0" * 64),
+                             ("ptl-none", [{**replacement(tmp_path)[0], "path": "Candidate/Other.lean"}], "no carried module Candidate/Other.lean")):
+        ctx = loop.start(child_config(tmp_path, name, CHILD, "ptl", 2, carried_replace=swaps), log=lambda *a: None)
+        with pytest.raises(Exception) as exc:
+            loop.drive(ctx)
+        assert why in str(exc.value) and "the round's session cannot be made" in str(exc.value)
+        assert not (ctx.run.round_path(1) / "attempt_0" / "open_lane" / "session.json").exists()
+    with pytest.raises(RunConfigError) as exc:
+        load_run_config(child_config(tmp_path, "ptl-shape", CHILD, "ptl", 2, carried_replace=[{"path": "Col.lean", "with": "x", "replaces_sha256": "0" * 64}]))
+    assert "open_lane.carried_replace must be a list of" in str(exc.value)
+
+
+def test_a_dry_start_shows_what_the_first_round_would_begin_with_and_leaves_nothing(tmp_path, monkeypatch):
+    """core.open_lane.dry_start: the earlier run is copied and the first round's session made as a run would, in
+    a folder of its own, with no agent and no backend. It says which carried modules compile and how long they
+    take, takes the config's replacements, submits the best carried scored proof again (--check), and leaves
+    neither the run's folder nor its own."""
+    from core.open_lane import dry_start
+
+    parent = parent_run(tmp_path, monkeypatch)
+    monkeypatch.setattr(Session, "_service", fake_service(448))
+    loop.drive(loop.start(child_config(tmp_path, "ptl-2", CHILD, "ptl", 2), log=lambda *a: None))  # a scored proof to carry
+    before = (tree_hash(parent.path), tree_hash(tmp_path / "runs" / "ptl-2"))
+    monkeypatch.setattr(Session, "_service", changed_library_service(448))
+    end = {"calls": [], "response": "CLAIM: none.\nWHY IT HELPS: -\nNOTES: none."}
+
+    def dry(name: str, check: bool, **open_lane) -> tuple[int, list[str]]:
+        lines: list[str] = []
+        cfg = load_run_config(child_config(tmp_path, name, [end], "ptl-2", 1, **open_lane))
+        return dry_start.run(cfg, check, False, lines.append), lines
+
+    # the library changed under the carried lemma: not ready, and why
+    status, lines = dry("ptl-3", False)
+    text = "\n".join(lines)
+    assert status == 1 and "continues run ptl-2: rounds 1, 2 copied" in text
+    assert "carried Candidate/Col.lean: did not compile" in text and "carried Candidate/ColRun.lean: compiled in" in text
+    assert "carried modules: 2, compiled 1" in text and "NOT READY: 1 carried module(s) of the proof to go on from do not compile" in text
+    assert "the best carried scored proof: Candidate.ColRun.performance (576 inputs" in text and "2 modules, 1 compiled" in text
+    # with the replacement: ready, and with --check the scored proof is submitted again from that workspace
+    status, lines = dry("ptl-3", True, carried_replace=replacement(tmp_path))
+    text = "\n".join(lines)
+    assert status == 0, text
+    assert "carried Candidate/Col.lean: compiled in" in text and "(replaced)" in text and "replaced: Candidate/Col.lean" in text
+    assert "round 1 of ptl-2, submission 0): 2 modules, 2 compiled" in text
+    assert "submitting it again: Candidate.ColRun.performance, as the agent would" in text
+    assert "accepted and scored: 576 inputs" in text and "READY: the proof to go on from compiles in the first round's workspace, and is accepted and scored" in text
+    # nothing is left: no run folder for ptl-3, no dry-start folder, the earlier runs as they were
+    assert not (tmp_path / "runs" / "ptl-3").exists() and not (tmp_path / "runs" / dry_start.FOLDER).exists()
+    assert (tree_hash(parent.path), tree_hash(tmp_path / "runs" / "ptl-2")) == before
+    # a replacement that fits nothing is reported, not raised
+    assert dry_start.main(["--config", str(child_config(tmp_path, "ptl-3", [end], "ptl-2", 1, carried_replace=replacement(tmp_path, "1" * 64)))]) == 1
+
+
+def test_a_dry_start_goes_by_the_best_proof_and_names_older_modules_that_no_longer_compile(tmp_path, monkeypatch):
+    """Run attn-min2-ptl-3 would carry 31 modules into a continuation: the 26 of its best proof and 5 of the
+    proof before it, written for another claimed count, which no longer compile beside the newer versions of what
+    they import. The dry start is ready when the best proof's modules compile, and names the others."""
+    from core.open_lane import dry_start
+
+    parent_run(tmp_path, monkeypatch)
+    monkeypatch.setattr(Session, "_service", fake_service(448))
+    more = {"calls": CHILD[0]["calls"] + [  # a second accepted submission: a lemma in a module of its own
+        call("lean_check", path="Candidate/Draft.lean", edits=[], network=A, claimed_count=576),
+        call("submit_candidate", network=A, claimed_count=576, theorem="Candidate.Draft.t", modules=["Candidate/Draft.lean"],
+             kind="auxiliary")], "response": CHILD[0]["response"]}
+    loop.drive(loop.start(child_config(tmp_path, "ptl-2", [more, CHILD[1]], "ptl", 2), log=lambda *a: None))
+    base = fake_service(448)
+
+    def stale(self, args, timeout_s):  # the lemma's module was compiled against a protected module that is gone
+        if args[0] == "compile" and args[2] == "Candidate/Draft.lean":
+            return {"ok": False, "messages": "Candidate/Draft.lean:1:0: error: object file '/w/Protected/N_old.olean' of module "
+                                             "Protected.N_old does not exist"}
+        return base(self, args, timeout_s)
+    monkeypatch.setattr(Session, "_service", stale)
+    end = {"calls": [], "response": "CLAIM: none.\nWHY IT HELPS: -\nNOTES: none."}
+    lines: list[str] = []
+    status = dry_start.run(load_run_config(child_config(tmp_path, "ptl-3", [end], "ptl-2", 1)), True, False, lines.append)
+    text = "\n".join(lines)
+    assert status == 0, text
+    assert "carried modules: 3, compiled 2" in text
+    assert "the best carried scored proof: Candidate.ColRun.performance (576 inputs" in text and "2 modules, 2 compiled" in text
+    assert "not of that proof, 1 do not compile (the agent is told): Draft" in text
+    assert "accepted and scored: 576 inputs" in text and "READY: the proof to go on from compiles" in text
