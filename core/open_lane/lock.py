@@ -21,10 +21,13 @@ the protected graph and task they reach. The text is what keeps a session from e
 fingerprints are what establishes, afterwards, that the checker a seed-check submission was accepted with
 is the locked one (`same_checker`). A result counts only with that.
 
-A locked module may import the protected module of the network it was written for (the checker reads that
-module's `graph` and `task`). On another network the protected module has another name, so the locked text
-is taken over with that one name replaced and nothing else: `renamed`. The name of a network's protected
-module is the Lean project's to give (scripts/make_protected.py), and it is asked for there.
+A locked module may import a protected module of the network it was written for (the checker reads the
+network's `graph` and `task`): the network's own module (`Protected.N_<network>`, since the service's policy
+v13), or the module of a claim, which has the network's constants under its own name. On another network these
+modules have other names, so the locked text is taken over with those names replaced and nothing else:
+`renamed`. The names are the Lean project's to give (scripts/make_protected.py), and they are asked for there:
+the network's, the claim's (network, claimed count, certificate and plan of the call), and the certificate's
+and the plan's own modules when the call has any.
 """
 
 from __future__ import annotations
@@ -109,6 +112,7 @@ def read_lock(submission: Path, lean_project: Path) -> dict:
     if outside:  # cannot happen for modules that compiled: what a definition uses, its module imports
         raise LockError(f"the checker depends on {', '.join(names[m] for m in outside)}, which its module does not import")
     protected = info.get("protected")
+    roles = protected_roles(protected, info.get("network_module"), info["modules"])
     modules = {names[name]: (submission / names[name]).read_text() for name in sorted(locked)}
     digest = hashlib.sha256(json.dumps(modules, sort_keys=True).encode()).hexdigest()
     return {
@@ -116,6 +120,7 @@ def read_lock(submission: Path, lean_project: Path) -> dict:
         "home": {key: names[home[key]] for key in ("checker", "sound")},
         "network": manifest.get("network"), "claimed_count": manifest.get("claimed_count"),
         "protected": protected[len("Protected."):] if protected else None,
+        "protected_modules": roles,
         "modules": modules,
         "free": sorted(rel for name, rel in names.items() if name not in locked),
         "fingerprints": prints,
@@ -206,27 +211,79 @@ def same_checker(lock: dict, submission: Path, lean_project: Path, scored: bool 
     return out
 
 
-def renamed(text: str, old: str | None, new: str) -> str:
-    """A locked module's text for another network: the protected module's name replaced wherever it stands
-    as a whole identifier, and nothing else."""
-    if not old or old == new:
+ROLES = ("claim", "network", "certificate", "plan")
+
+
+def protected_roles(claim: str | None, network: str | None, modules) -> dict:
+    """The protected modules of a submission by what they hold, without the `Protected.` they all begin with:
+    the claim's, the network's (None in a submission of the service before its policy v13), and the
+    certificate's and the plan's when the submission has any (`<network's>_h<hash>`, `<network's>_p<hash>`)."""
+    short = lambda name: name[len("Protected."):] if name else None
+    roles = {"claim": short(claim), "network": short(network), "certificate": None, "plan": None}
+    for m in modules if network else ():
+        for role, mark in (("certificate", "_h"), ("plan", "_p")):
+            if m.startswith(network + mark) and re.fullmatch(r"[0-9a-f]{16}", m[len(network) + 2:]):
+                roles[role] = short(m)
+    return roles
+
+
+def lock_roles(lock: dict) -> dict:
+    """The protected modules a lock was read with, by role. A lock read before the network had a module of its
+    own names the claim's alone."""
+    return lock.get("protected_modules") or {"claim": lock.get("protected"), "network": None, "certificate": None, "plan": None}
+
+
+def renames(lock: dict, now: dict) -> dict[str, str]:
+    """Which names a locked module's text gets for a call on another network (`now`: that call's protected
+    modules by role, `protected_names`): each protected module the lock was read with becomes the module of
+    the same role. A role one of the two lacks is left as it is."""
+    was = lock_roles(lock)
+    return {was[role]: now[role] for role in ROLES if was.get(role) and now.get(role) and was[role] != now[role]}
+
+
+def renamed(text: str, old: str | dict | None, new: str | None = None) -> str:
+    """A locked module's text for another network: the protected modules' names replaced wherever they stand
+    as whole identifiers, and nothing else. `old` is one name, with `new` to replace it, or a mapping of
+    names (`renames`); all are replaced in one pass, so no replacement is replaced again."""
+    pairs = {k: v for k, v in (old if isinstance(old, dict) else {old: new}).items() if k and v and k != v}
+    if not pairs:
         return text
-    return re.sub(rf"(?<![A-Za-z0-9_]){re.escape(old)}(?![A-Za-z0-9_])", new, text)
+    names = "|".join(re.escape(k) for k in sorted(pairs, key=len, reverse=True))
+    return re.sub(rf"(?<![A-Za-z0-9_])(?:{names})(?![A-Za-z0-9_])", lambda m: pairs[m.group(0)], text)
 
 
-def protected_name(lean_project: Path, network: str, claimed: int, certificate: list | None = None) -> str:
-    """The name of the protected module the Lean service builds for a network, a claimed count and a
-    certificate (`N_<network>_c<claimed>`, with the certificate's hash when there is one), asked of the Lean
-    project's own scripts/make_protected.py."""
+def protected_names(lean_project: Path, network: str, claimed: int, certificate: list | None = None,
+                    plan: list | None = None) -> dict:
+    """The names of the protected modules the Lean service builds for a call (a network, a claimed count, a
+    certificate and a plan), by role and without `Protected.`: the claim's (`N_<network>_c<claimed>`, with the
+    certificate's and the plan's hash when there are any), the network's (`N_<network>`), and the certificate's
+    and the plan's own, None where the call has none. Asked of the Lean project's own scripts/make_protected.py;
+    one before the service's policy v13 names the claim's module alone."""
     code = ("import json, sys; sys.path.insert(0, sys.argv[1]); import make_protected as m; a = json.loads(sys.argv[2]); "
-            "print(m.module_name(a['network'], a['claimed'], m.canonical_cert(a['certificate'])))")
-    args = json.dumps({"network": network, "claimed": int(claimed), "certificate": list(certificate or [])})
+            "c = m.canonical_cert(a['certificate']); p = None if a['plan'] is None else m.canonical_plan(a['plan']); "
+            "split = hasattr(m, 'network_module_name'); "
+            "print(json.dumps({'claim': m.module_name(a['network'], a['claimed'], c, p), "
+            "'network': m.network_module_name(a['network']) if split else None, "
+            "'certificate': m.cert_module_name(a['network'], c) if split else None, "
+            "'plan': m.plan_module_name(a['network'], p) if split else None}))")
+    args = json.dumps({"network": network, "claimed": int(claimed), "certificate": list(certificate or []),
+                       "plan": None if plan is None else list(plan)})
     try:
         r = subprocess.run([sys.executable, "-B", "-c", code, str(Path(lean_project) / "scripts"), args],
                            capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise LockError(f"the Lean project did not name the protected module: {exc}")
-    name = r.stdout.strip()
-    if r.returncode != 0 or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name):
-        raise LockError(f"the Lean project did not name the protected module: {(r.stderr or r.stdout)[-300:]}")
-    return name
+        raise LockError(f"the Lean project did not name the protected modules: {exc}")
+    try:
+        names = json.loads(r.stdout.strip().splitlines()[-1]) if r.returncode == 0 else None
+    except (ValueError, IndexError):
+        names = None
+    if not isinstance(names, dict) or not all(names.get(role) is None or (isinstance(names[role], str) and re.fullmatch(
+            r"[A-Za-z][A-Za-z0-9_]*", names[role])) for role in ROLES) or not names.get("claim"):
+        raise LockError(f"the Lean project did not name the protected modules: {(r.stderr or r.stdout)[-300:]}")
+    return {role: names.get(role) for role in ROLES}
+
+
+def protected_name(lean_project: Path, network: str, claimed: int, certificate: list | None = None,
+                   plan: list | None = None) -> str:
+    """The name of the claim's protected module among `protected_names`."""
+    return protected_names(lean_project, network, claimed, certificate, plan)["claim"]

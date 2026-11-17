@@ -1,8 +1,9 @@
 # What a minimal-knowledge run shows the agent of the Lean project (core/open_lane/surface.py).
 #
 # The agent is told nothing about what works on a network (docs/decisions/agent-told-nothing.md): it gets the
-# specification, the network's semantics and the counted language with the single-input rule. No docs, no
-# README, none of the fixed rules' sources, no earlier proof.
+# specification, the network's semantics (and the same semantics as the kernel evaluates it best, with the
+# proof that the two are one: SemanticsKernel.lean) and the counted language with the single-input rule. No
+# docs, no README, none of the fixed rules' sources, no earlier proof.
 
 # Files of the Lean project it may read and search as they are.
 whole:
@@ -12,6 +13,7 @@ whole:
   - CompactCheck/Network.lean
   - CompactCheck/Eval.lean
   - CompactCheck/Semantics.lean
+  - CompactCheck/SemanticsKernel.lean
   - lean-toolchain
 
 # Files it sees as an excerpt: the file of the same path in this folder. Every line of an excerpt is a line

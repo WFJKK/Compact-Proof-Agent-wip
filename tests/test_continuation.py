@@ -403,6 +403,44 @@ def test_a_dry_start_shows_what_the_first_round_would_begin_with_and_leaves_noth
     assert dry_start.main(["--config", str(child_config(tmp_path, "ptl-3", [end], "ptl-2", 1, carried_replace=replacement(tmp_path, "1" * 64)))]) == 1
 
 
+def test_a_dry_start_compares_the_carried_proofs_lock_as_compiled_then_and_now(tmp_path, monkeypatch):
+    """A run with a seed check that continues an earlier run locks the carried proof if nothing scores better:
+    as the earlier run's service compiled it. The seed check's submissions are compiled by the service as it is
+    now. The dry start reads the lock both ways and says when the two are not the same checker, when the
+    carried proof cannot be locked, and when the earlier run's compiled modules are gone: each would leave a
+    seed check on the carried proof halted or unverified, found only after the proof rounds."""
+    from core.open_lane import dry_start, lock
+
+    prints = {"checker": "a", "sound_statement": "b", "context": "c"}
+    then, now = tmp_path / "then", tmp_path / "now"
+    answers: dict = {}
+    monkeypatch.setattr(lock, "read_lock", lambda folder, project: answers[Path(folder)]())
+
+    def lock_of(**changed):
+        return lambda: {"fingerprints": {**prints, **changed}, "modules": {"Candidate/Col.lean": ""}, "free": ["Candidate/ColRun.lean"]}
+
+    def raising(exc):
+        def go():
+            raise exc
+        return go
+
+    def check() -> tuple[int, str]:
+        lines: list[str] = []
+        return dry_start.check_lock(then, now, tmp_path, lines.append), "\n".join(lines)
+
+    answers.update({then: lock_of(), now: lock_of()})
+    assert check() == (0, "the lock: the carried proof can be locked (1 locked modules, 1 free), and its checker is the same compiled then and now")
+    answers[now] = lock_of(checker="other", context="other")
+    status, text = check()
+    assert status == 1 and "NOT READY for the seed check" in text and "differs in: checker, context" in text
+    answers[then] = raising(lock.LockUnread("compiled modules are missing: /w/out/Candidate/Col.olean"))
+    status, text = check()
+    assert status == 1 and "the earlier run's submission" in text and "cannot be read for the lock" in text and "the run halts" in text
+    answers[then] = raising(lock.LockError("the instance theorem is in a module the checker imports"))
+    status, text = check()
+    assert status == 1 and "the carried proof cannot be locked (the earlier run's submission): the instance theorem" in text
+
+
 def test_a_dry_start_goes_by_the_best_proof_and_names_older_modules_that_no_longer_compile(tmp_path, monkeypatch):
     """Run attn-min2-ptl-3 would carry 31 modules into a continuation: the 26 of its best proof and 5 of the
     proof before it, written for another claimed count, which no longer compile beside the newer versions of what

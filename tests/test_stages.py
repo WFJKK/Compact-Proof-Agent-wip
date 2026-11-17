@@ -21,7 +21,7 @@ import yaml
 from core import loop
 from core.open_lane import stages
 from core.open_lane import inspect
-from core.open_lane.lock import LockError, lockable, protected_name, read_lock, renamed, same_checker
+from core.open_lane.lock import LockError, lockable, protected_name, protected_names, read_lock, renamed, renames, same_checker
 from core.open_lane.session import Session
 from core.run_config import RunConfigError, load_run_config, read_run_config_file
 from core.util import REPO_ROOT
@@ -80,10 +80,32 @@ def canonical_cert(cert):
     return list(cert)
 
 
-def module_name(network_id, claimed, cert=None):
-    name = "N_" + re.sub(r"[^A-Za-z0-9]", "_", network_id) + f"_c{claimed}"
+def canonical_plan(plan):
+    return list(plan)
+
+
+def _digest(x):
+    return hashlib.sha256(json.dumps(x).encode()).hexdigest()[:16]
+
+
+def network_module_name(network_id):
+    return "N_" + re.sub(r"[^A-Za-z0-9]", "_", network_id)
+
+
+def cert_module_name(network_id, cert):
+    return network_module_name(network_id) + "_h" + _digest(cert) if cert else None
+
+
+def plan_module_name(network_id, plan):
+    return None if plan is None else network_module_name(network_id) + "_p" + _digest(plan)
+
+
+def module_name(network_id, claimed, cert=None, plan=None):
+    name = network_module_name(network_id) + f"_c{claimed}"
     if cert:
-        name += "_h" + hashlib.sha256(json.dumps(cert).encode()).hexdigest()[:16]
+        name += "_h" + _digest(cert)
+    if plan is not None:
+        name += "_p" + _digest(plan)
     return name
 '''
 
@@ -288,6 +310,38 @@ def test_a_locked_module_changes_in_the_protected_modules_name_and_nowhere_else(
     assert protected_name(tmp_path, B, 570, [1, 2]).startswith(new + "_h")
     with pytest.raises(LockError, match="did not name"):
         protected_name(tmp_path / "nowhere", B, 570)
+
+
+def test_a_locked_module_follows_every_protected_module_it_names_to_the_second_network(tmp_path):
+    """Since the Lean service's policy v13 the network's graph, weights and task are a protected module of their
+    own (N_<network>), which a checker and its facts import so that a new claim does not rename what they
+    import; the claim's module, a certificate's and a plan's are others. Under the lock each name a locked
+    module holds becomes the name of the module that holds the same for the call: the network's by network,
+    the claim's by network, claimed count, certificate and plan (the plan was left out of the name until 17
+    November, so a planned checker's locked module was given a module the service does not build)."""
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "make_protected.py").write_text(MAKE_PROTECTED)
+    now = protected_names(tmp_path, B, 570, [1, 2], [3, 4])
+    net = "N_max2_ladder_n2v24d8_s3"
+    assert now["network"] == net and now["claim"].startswith(net + "_c570_h") and "_p" in now["claim"]
+    assert now["certificate"].startswith(net + "_h") and now["plan"].startswith(net + "_p")
+    assert protected_names(tmp_path, B, 570) == {"claim": net + "_c570", "network": net, "certificate": None, "plan": None}
+    assert protected_name(tmp_path, B, 570, None, [3, 4]) == protected_names(tmp_path, B, 570, None, [3, 4])["claim"] != net + "_c570"
+    was = {"claim": "N_a_s0_c9_p0123456789abcdef", "network": "N_a_s0", "certificate": None, "plan": "N_a_s0_p0123456789abcdef"}
+    lock = {"protected": was["claim"], "protected_modules": was}
+    pairs = renames(lock, now)
+    assert pairs == {was["claim"]: now["claim"], "N_a_s0": net, was["plan"]: now["plan"]}
+    text = ("import Protected.N_a_s0\nimport Protected.N_a_s0_c9_p0123456789abcdef\nimport Protected.N_a_s0_p0123456789abcdef\n"
+            "open Protected.N_a_s0 in\ndef x := Protected.N_a_s0.graph  -- not N_a_s0_c9, not XN_a_s0\n")
+    out = renamed(text, pairs)
+    assert out == (f"import Protected.{net}\nimport Protected.{now['claim']}\nimport Protected.{now['plan']}\n"
+                   f"open Protected.{net} in\ndef x := Protected.{net}.graph  -- not N_a_s0_c9, not XN_a_s0\n")
+    # a lock read before the network had a module of its own names the claim's module alone
+    assert renames({"protected": "N_a_s0_c9"}, now) == {"N_a_s0_c9": now["claim"]}
+    # a role one side lacks is left alone: the call has no certificate, the locked text's name of one stays
+    assert renames({"protected": "c", "protected_modules": {"claim": "c", "network": "n", "certificate": "h", "plan": None}},
+                   {"claim": "c2", "network": "n", "certificate": None, "plan": "p2"}) == {"c": "c2"}
+    assert renamed(text, {}) == text and renamed(text, None, "x") == text
 
 
 # a whole run ---------------------------------------------------------------------------------------

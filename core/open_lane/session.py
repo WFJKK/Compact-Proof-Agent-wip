@@ -13,9 +13,9 @@ The tools:
 
 - lean_check(path, source or edits, network, claimed_count, certificate, checker, plan): save a module in the
   workspace (its full source, or edits to the module saved at that path, each of whose old texts must occur
-  exactly once) and compile it against the protected module of that network and claim (`accept.py compile` of
+  exactly once) and compile it against the protected modules of that network and claim (`accept.py compile` of
   the Lean project, in its box), returning the compiler's messages; with `checker`, also the scoring preview
-  (the counted-language closure and the description size against the budget); with `plan`, the protected
+  (the counted-language closure and the description size against the budget); with `plan`, the claim's protected
   module has that plan, for a planned checker. Counts against the compile budget.
 - run_python(code, network): run code in the recipe sandbox with that network's weights and info, returning
   what it printed. Same limits as a recipe.
@@ -673,27 +673,31 @@ class Session:
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 dst.write_bytes(src.read_bytes())
 
-    def _apply_lock(self, network: str, claimed_count: int, certificate: list | None) -> dict | None:
+    def _apply_lock(self, network: str, claimed_count: int, certificate: list | None, plan: list | None = None) -> dict | None:
         """Before anything is compiled or submitted in a session with a lock: every locked module is written
-        into the workspace again from the lock, for this network (the protected module's name replaced,
+        into the workspace again from the lock, for this call (the names of the protected modules it was
+        written against replaced by those of this call's network, claimed count, certificate and plan, and
         nothing else). So what the service sees of the checker is the locked text whatever the session did.
         Returns what was applied, for the submission's record."""
         lock = self._lock()
         if not lock:
             return None
-        from .lock import LockError, protected_name, renamed
+        from .lock import LockError, protected_names, renamed, renames
 
-        new = None
+        new, pairs = None, {}
         if lock["protected"]:
             try:
-                new = protected_name(self.lean_project, network, claimed_count, certificate)
+                now = protected_names(self.lean_project, network, claimed_count, certificate,
+                                      plan if isinstance(plan, list) else None)
             except LockError as exc:
                 raise ToolError(str(exc))
+            new, pairs = now["claim"], renames(lock, now)
         for rel, text in lock["modules"].items():
             dst = self.workspace / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_text(renamed(text, lock["protected"], new) if new else text)
-        return {"digest": lock["digest"], "protected_from": lock["protected"], "protected_to": new, "modules": sorted(lock["modules"])}
+            dst.write_text(renamed(text, pairs))
+        return {"digest": lock["digest"], "protected_from": lock["protected"], "protected_to": new, "renames": pairs,
+                "modules": sorted(lock["modules"])}
 
     def _place_python(self, files: list[dict]) -> None:
         """Put the Python workspace a new session starts with in place (python_workspace_from), within the
@@ -1029,7 +1033,7 @@ class Session:
             src.parent.mkdir(parents=True, exist_ok=True)
             src.write_text(source)  # saved before anything runs: a compile that is stopped loses nothing
             saved = {"lines": len(source.splitlines()), "sha256": hashlib.sha256(source.encode()).hexdigest()[:16]}
-            self._apply_lock(network, claimed_count, certificate)
+            self._apply_lock(network, claimed_count, certificate, plan)
             cmd = ["compile", str(self.workspace), path, "--model", self.state["model"], "--network", network, "--claimed", str(claimed_count)]
             if certificate:
                 cpath = self.path / "certificate.json"
@@ -1068,7 +1072,8 @@ class Session:
                 raise ToolError(str(res["error"]))
             text = shorten_paths((res.get("messages") or "").strip(), self.run_dir())
             out = {"ok": bool(res.get("ok")), "timed_out": bool(res.get("timed_out")), "module": res.get("module"),
-                   "protected_module": res.get("protected_module"), "lines": saved["lines"],
+                   "protected_module": res.get("protected_module"), "protected_modules": res.get("protected_modules"),
+                   "lines": saved["lines"],
                    "messages": excerpt(text) if text else "(no messages)", "seconds": res.get("seconds"),
                    "limit_s": round(limit)}
             if isinstance(res.get("scoring_preview"), dict):
@@ -1481,7 +1486,8 @@ class Session:
             elif stage.get("name") == "scaling" and kind != "auxiliary":
                 raise ToolError("this session takes lemmas only (kind auxiliary): the proof rounds are over")
             tag = self._candidate(candidate_id, question, required=discovery) if self.phase() else {}
-            applied = self._apply_lock(network, claimed_count, (scored or {}).get("certificate") if isinstance(scored, dict) else None)
+            applied = self._apply_lock(network, claimed_count, (scored or {}).get("certificate") if isinstance(scored, dict) else None,
+                                       (scored or {}).get("plan") if isinstance(scored, dict) else None)
             if lock:  # the locked modules always go along, so the constants the manifest names are the locked ones
                 modules = list(dict.fromkeys(list(modules) + list(lock["modules"])))
             modules = self.with_imports(modules)
@@ -1530,8 +1536,7 @@ class Session:
 
                 unasked = None
                 seen = (receipt.get("digests") or {}).get("modules") or {}
-                expected = {rel: renamed(text, lock["protected"], applied["protected_to"]) if applied["protected_to"] else text
-                            for rel, text in lock["modules"].items()}
+                expected = {rel: renamed(text, applied["renames"]) for rel, text in lock["modules"].items()}
                 applied["intact"] = all((cdir / rel).is_file() and (cdir / rel).read_text() == text for rel, text in expected.items())
                 applied["in_receipt"] = bool(seen) and all(
                     seen.get(module_name(rel)) == hashlib.sha256(text.encode()).hexdigest() for rel, text in expected.items())
@@ -1677,9 +1682,12 @@ class Session:
     # the tool table -------------------------------------------------------------------------
     TOOLS = {
         "lean_check": {
-            "description": "Save a Lean module in your workspace and compile it against the protected module of a network "
-                           "and a claimed count (Protected.N_<network>_c<claimed>, which the service builds; with a "
-                           "certificate the name carries its hash). Give the module's full `source`, or `edits` to the "
+            "description": "Save a Lean module in your workspace and compile it against the protected modules of a network "
+                           "and a claimed count, which the service builds: the claim's (Protected.N_<network>_c<claimed>; "
+                           "with a certificate or a plan the name carries their hashes) and the network's "
+                           "(Protected.N_<network>, the same graph, weights and task). A module that imports the network's "
+                           "module alone is compiled once and stays compiled whatever the claimed count of later calls. "
+                           "The answer names the modules (`protected_modules`). Give the module's full `source`, or `edits` to the "
                            "module saved at `path`: each replaces its `old` text, which must occur exactly once, by its "
                            "`new` text, in order (no edits: compile the module as saved). Returns the compiler's messages "
                            "(errors, goals, #eval output). With `checker`, the name of your checker D, a successful compile "

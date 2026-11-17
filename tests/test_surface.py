@@ -242,7 +242,8 @@ def test_the_minimal_surface_fits_the_lean_project_and_shows_no_method(tmp_path)
     s = surface.of_run(cfg)
     assert set(s["files"]) == {
         "CompactCheck/Spec.lean", "CompactCheck/Counted.lean", "CompactCheck/Tensor.lean", "CompactCheck/Network.lean",
-        "CompactCheck/Eval.lean", "CompactCheck/Semantics.lean", "lean-toolchain", "CompactCheck/CountedOps.lean",
+        "CompactCheck/Eval.lean", "CompactCheck/Semantics.lean", "CompactCheck/SemanticsKernel.lean", "lean-toolchain",
+        "CompactCheck/CountedOps.lean",
         "CompactCheck/Task.lean", "CompactCheck/Walk.lean", "CompactCheck/LinAlg.lean", "CompactCheck/Check.lean",
         "CompactCheck/CountedCheck.lean", "CompactCheck/CountedGeneral.lean", "CompactCheck/CountedGeneralSound.lean",
         "CompactCheck/Soundness.lean", "accept/allowlist.txt", "CompactCheck/Exp.lean", "CompactCheck/ExpSound.lean",

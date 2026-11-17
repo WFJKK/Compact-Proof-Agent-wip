@@ -282,14 +282,20 @@ def extra_sources_text(project: Path, rels: list[str], surface: dict) -> str:
 
 def protected_interface() -> str:
     return lean_block(
-        "namespace Protected.N_<network>_c<claimed>   -- for example Protected.N_max2_v64_s0_c4095\n"
+        "namespace Protected.N_<network>_c<claimed>  -- the claim; for example Protected.N_max2_v64_s0_c4095\n"
         "def graph : Graph := ...            -- the network's graph, operation by operation\n"
         "def weights : Weights ℚ := ...      -- every weight, an exact dyadic rational\n"
         "def task : Task := ...              -- the task: input space and label function\n"
         "def cert : Cert := #[...]           -- the certificate of a scored submission (empty otherwise)\n"
         "def claimedCount : Nat := <claimed>\n"
         "def Target : Prop := claimedCount ≤ numCorrect graph weights task\n"
-        "end Protected.N_<network>_c<claimed>"
+        "end Protected.N_<network>_c<claimed>\n"
+        "\n"
+        "namespace Protected.N_<network>             -- the network alone; for example Protected.N_max2_v64_s0\n"
+        "def graph : Graph := ...            -- the same three definitions, term for term\n"
+        "def weights : Weights ℚ := ...\n"
+        "def task : Task := ...\n"
+        "end Protected.N_<network>"
     )
 
 

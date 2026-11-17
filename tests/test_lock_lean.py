@@ -27,7 +27,7 @@ import pytest
 from core.loop import LEAN_LOCK
 from core.loop import check_inspection as the_real_check  # the whole-run test puts it back where a helper replaces it
 from core.open_lane import inspect
-from core.open_lane.lock import LockError, lockable, read_lock, renamed, same_checker
+from core.open_lane.lock import LockError, lockable, read_lock, renamed, renames, same_checker
 from core.util import REPO_ROOT
 
 
@@ -125,10 +125,27 @@ class Service:
             self.protected_done[short] = source
         return ws / "out"
 
-    def accept(self, short: str, source: str, modules: dict[str, str], scored: dict | None = SCORED) -> Path:
+    def protect_split(self, short: str, network: str, sources: tuple[str, str]) -> Path:
+        """The protected modules as the service builds them since its policy v13: the network's module and the
+        claim's, each with its own definitions, compiled into the claim's folder."""
+        ws = self.work / "protected" / short
+        if self.protected_done.get(short) != "\n".join(sources):
+            assert short not in self.protected_done, f"{short} is already another protected module"
+            (ws / "Protected").mkdir(parents=True)
+            for name, source in zip((network, short), sources):
+                (ws / "Protected" / f"{name}.lean").write_text(source)
+                self.compile(ws, f"Protected/{name}.lean", [ws / "out"])
+            self.protected_done[short] = "\n".join(sources)
+        return ws / "out"
+
+    def accept(self, short: str, source: str | tuple[str, str], modules: dict[str, str], scored: dict | None = SCORED,
+               network: str | None = None, named: bool = True) -> Path:
         """Compile `modules` (path to text, every module after the ones it imports) against the protected
-        module `short` and return the submission's folder, as core.open_lane.session leaves it."""
-        prot = self.protect(short, source)
+        module `short` and return the submission's folder, as core.open_lane.session leaves it. With `network`,
+        `source` is the pair of the network's module and the claim's (`split`), and the receipt names the
+        network's module as the service's does (not with `named` False: a receipt written before policy v13,
+        of a claim the service has built again since)."""
+        prot = self.protect(short, source) if network is None else self.protect_split(short, network, source)
         self.count += 1
         stem = f"attempt_0-s{self.count:03d}-1762780000"
         ws = self.work / "submissions" / stem
@@ -146,7 +163,10 @@ class Service:
         (cdir / "manifest.json").write_text(json.dumps(manifest))
         receipts = self.work / "receipts"
         receipts.mkdir(parents=True, exist_ok=True)
-        receipt = {"status": "accepted", "steps": [{"step": "protected", "module": f"Protected.{short}", "cached": False}],
+        step = {"step": "protected", "module": f"Protected.{short}", "cached": False}
+        if network is not None and named:
+            step["network_module"] = f"Protected.{network}"
+        receipt = {"status": "accepted", "steps": [step],
                    "scoring": {"status": "scored"}, "receipt_path": str(receipts / f"{stem}.json")}
         (receipts / f"{stem}.json").write_text(json.dumps(receipt))
         (cdir / "receipt.json").write_text(json.dumps(receipt))
@@ -242,6 +262,122 @@ def test_another_graph_is_not_the_network_the_checker_was_locked_on(service, fir
     other = same_checker(lock, service.accept(short, protected(short, graph="[2, 8, 5]"), modules), PROJECT)
     assert other["verified"] is False and other["fingerprints"]["checker"] == lock["fingerprints"]["checker"]
     assert "the network's graph or task, as the checker uses them, differ from the first network's (changed: Protected._.graph)" in other["why"]
+
+
+# ---- the network in a protected module of its own (the Lean service's policy v13) -------------------
+NA, NB = "N_toy_s0", "N_toy_s1"  # the network modules of the two networks; PA and PB are claims on them
+
+
+def split(network: str, short: str, graph: str = "[2, 8, 4]", weights: str = "[1, 2, 3]", claimed: int = 3) -> tuple[str, str]:
+    """The two protected modules as scripts/make_protected.py writes them: the claim's module as it always was,
+    and the network's constants once more, with the same definitions, in a module of their own."""
+    net = f"""namespace Protected.{network}
+def graph : List Nat := {graph}
+def task : Nat := 2
+def weights : List Nat := {weights}
+end Protected.{network}
+"""
+    return net, protected(short, graph, weights, claimed)
+
+
+# the checker written against the network's module, which no claim renames
+COL_NET = COL.replace(f"Protected.{PA}", f"Protected.{NA}")
+RUN_NET = f"""import Candidate.Col
+import Protected.{PA}
+namespace Candidate.ColRun
+theorem D_instance : Candidate.Col.D Protected.{PA}.weights = 10 := by decide
+theorem performance : Protected.{PA}.Target := by unfold Protected.{PA}.Target Protected.{PA}.claimedCount; decide
+end Candidate.ColRun
+"""
+
+
+def test_a_checker_has_the_same_digests_whichever_protected_module_it_names(tmp_path, first):
+    """One checker, two ways to reach the network's graph and task: the claim's protected module, as always
+    (`first`, and again in a folder that also holds the network's module), and the network's module itself
+    (policy v13), which defines the same constants under a name no claim changes. Lean's account writes the
+    two names the same and lists the constant once, so the fingerprints are the same. That is what lets a
+    checker import the network's module, and what lets a proof compiled before the network had a module be
+    locked and checked against submissions compiled after (a run that continues an earlier one)."""
+    lock = read_lock(first, PROJECT)
+    service = Service(tmp_path)
+    modules = {"Candidate/Helpers.lean": HELPERS, "Candidate/Col.lean": COL, "Candidate/ColRun.lean": RUN}
+    by_claim = read_lock(service.accept(PA, split(NA, PA), modules, network=NA), PROJECT)
+    assert by_claim["fingerprints"] == lock["fingerprints"] and by_claim["constants"] == lock["constants"]
+    assert by_claim["protected"] == PA and lock["protected_modules"] == {"claim": PA, "network": None, "certificate": None, "plan": None}
+    assert by_claim["protected_modules"] == {"claim": PA, "network": NA, "certificate": None, "plan": None}
+    by_network = read_lock(service.accept(PA, split(NA, PA), {**modules, "Candidate/Col.lean": COL_NET, "Candidate/ColRun.lean": RUN_NET},
+                                          network=NA), PROJECT)
+    assert by_network["fingerprints"] == lock["fingerprints"]
+    assert sorted(by_network["constants"]["context"]) == ["Protected._.graph", "Protected._.task"]
+    # a receipt written before policy v13, of a claim the service has built again since: the folder holds the
+    # network's module, and it is read
+    old_receipt = Service(tmp_path / "again")
+    again = read_lock(old_receipt.accept(PA, split(NA, PA), modules, network=NA, named=False), PROJECT)
+    assert again["fingerprints"] == lock["fingerprints"] and again["protected_modules"]["network"] == NA
+
+
+def test_a_checker_that_names_the_networks_module_goes_to_the_second_network_by_that_name(tmp_path):
+    """The seed check on a proof written the new way: the locked checker imports the network's module, the
+    instance the claim's. For the second network each name becomes the name of the module that holds the same
+    there, and Lean finds the locked checker in what was compiled. Another graph under the network's name is
+    another context, as before."""
+    service = Service(tmp_path)
+    modules = {"Candidate/Helpers.lean": HELPERS, "Candidate/Col.lean": COL_NET, "Candidate/ColRun.lean": RUN_NET}
+    lock = read_lock(service.accept(PA, split(NA, PA), modules, network=NA), PROJECT)
+    assert sorted(lock["modules"]) == ["Candidate/Col.lean", "Candidate/Helpers.lean"]
+    pairs = renames(lock, {"claim": PB, "network": NB, "certificate": None, "plan": None})
+    assert pairs == {PA: PB, NA: NB}
+    second = {rel: renamed(text, pairs) for rel, text in modules.items()}
+    assert f"import Protected.{NB} -- the protected module" in second["Candidate/Col.lean"] and NA not in "".join(second.values())
+    sent = service.accept(PB, split(NB, PB, weights="[4, 5]", claimed=2), second, network=NB)
+    same = same_checker(lock, sent, PROJECT)
+    assert same["verified"] is True and same["fingerprints"] == lock["fingerprints"]
+    short, net = "N_toy_s2_c3", "N_toy_s2"
+    third = {rel: renamed(text, {PA: short, NA: net}) for rel, text in modules.items()}
+    other = same_checker(lock, service.accept(short, split(net, short, graph="[2, 8, 5]"), third, network=net), PROJECT)
+    assert other["verified"] is False and other["fingerprints"]["checker"] == lock["fingerprints"]["checker"]
+    assert "differ from the first network's (changed: Protected._.graph)" in other["why"]
+
+
+def test_a_claims_module_that_does_not_define_what_the_networks_does_is_not_read(tmp_path):
+    """The claim's `graph` and the network's are written the same in Lean's account because they are the same
+    term. Modules in which they are not are not the service's: nothing is read from them."""
+    service = Service(tmp_path)
+    net, claim = split(NA, PA)
+    forged = net.replace("def graph : List Nat := [2, 8, 4]", "def graph : List Nat := [9, 9, 9]")
+    assert forged != net
+    sent = service.accept(PA, (forged, claim), {"Candidate/Helpers.lean": HELPERS, "Candidate/Col.lean": COL, "Candidate/ColRun.lean": RUN},
+                          network=NA)
+    with pytest.raises(inspect.InspectError, match="not modules the acceptance service wrote"):
+        inspect.inspect_submission(PROJECT, sent, closure=["Candidate.Col.D"])
+
+
+ROWS = "namespace Candidate.Rows\ndef rows : List Nat → Nat\n  | [] => 0\n  | x :: xs => x + rows xs\nend Candidate.Rows\n"
+
+
+def rows_user(name: str, xs: str, total: int) -> str:
+    return (f"import Candidate.Rows\nnamespace Candidate.{name}\ntheorem t : Candidate.Rows.rows {xs} = {total} := by\n"
+            f"  simp [Candidate.Rows.rows]\nend Candidate.{name}\n")
+
+
+def test_a_theorem_two_modules_hold_with_one_statement_is_one_theorem(service, first):
+    """Lean derives a definition's equation lemmas in the module that first unfolds it, under the definition's
+    name: two modules that unfold `rows` and do not import each other each hold `Candidate.Rows.rows.eq_1`.
+    Lean imports both as one theorem and the acceptance service accepts such a proof (policy v13; it refused
+    one in run attn-min2-ptl-3). So it is no duplicate here either, and the proof can be locked. One name with
+    two statements still is."""
+    modules = {"Candidate/Helpers.lean": HELPERS, "Candidate/Col.lean": COL, "Candidate/ColRun.lean": RUN, "Candidate/Rows.lean": ROWS,
+               "Candidate/RowsA.lean": rows_user("RowsA", "[1, 2]", 3), "Candidate/RowsB.lean": rows_user("RowsB", "[2, 2]", 4)}
+    sent = service.accept(PA, protected(PA), modules)
+    info = inspect.inspect_submission(PROJECT, sent, where=["Candidate.Rows.rows"])
+    held = [m for m in ("Candidate.RowsA", "Candidate.RowsB")]
+    oleans, _, _ = inspect.submission_oleans(sent)
+    copies = inspect.inspect_oleans(LEAN, oleans, where=["Candidate.Rows.rows.eq_1", "Candidate.Rows.rows.eq_2"])["where"]
+    assert any(set(held) <= set(homes) for homes in copies.values()), copies  # both modules hold a copy of an equation lemma
+    assert info["duplicates"] == [] and lockable(sent, PROJECT) is None
+    assert read_lock(sent, PROJECT)["fingerprints"] == read_lock(first, PROJECT)["fingerprints"]
+    two = {**modules, "Candidate/RowsB.lean": "namespace Candidate.RowsA\ntheorem t : 2 + 2 = 4 := rfl\nend Candidate.RowsA\n"}
+    assert "Candidate.RowsA.t is declared by more than one module" in lockable(service.accept(PA, protected(PA), two), PROJECT)
 
 
 # A file named like the checker that declares nothing of it: its string reads like the declarations. The

@@ -1,11 +1,14 @@
 # Continues run attn-min2-ptl-3 (16 November 2026: two formalization rounds, 1,889 of 4,096 inputs scored at
-# length 192,059 on attn-min2-v64d8-s1) with the Lean service of 17 November (policy v12: fast reads, the size
-# budget that follows the network, the plan's information bound). Three formalization rounds of 90 minutes, then
-# the seed check on a second seed with the checker locked. Before starting it:
+# length 192,059 on attn-min2-v64d8-s1) with the Lean service of 17 November (policy v13: fast reads, the size
+# budget that follows the network, the plan's information bound, the network in a protected module of its own).
+# Three formalization rounds of 90 minutes, then the seed check on a second seed with the checker locked.
+# Before starting it:
 #
 #     python3 -m core.open_lane.dry_start --config config/pilot/attn-min2-ptl-4.yaml --sandbox seatbelt --check
 #
-# which makes the first round's workspace as the run would (no agent, no API call) and says READY or NOT READY.
+# which makes the first round's workspace as the run would (no agent, no API call) and says READY or NOT READY:
+# whether the carried proof compiles, is accepted and scored again, and can be locked for the seed check as
+# the earlier run compiled it.
 # Budget, when billed to an API key (--auth api_key): at most $40 a session and $200 for the run (three proof
 # rounds and the seed check; the earlier runs cost $0.35 to $0.39 a minute).
 extends: attn-min2-quick.yaml
@@ -16,9 +19,11 @@ open_lane:
   workflow_mode: python_then_lean
   discovery_rounds: 0
   continue_from: attn-min2-ptl-3
-  # A change of the claimed count or of the plan renames the protected module, and every module that imports it
-  # is then edited and compiled again, one lean_check each (about 20 calls in round 2 of attn-min2-ptl-3). Until
-  # the protected module is split, a round gets more calls.
+  # A change of the claimed count, the certificate or the plan renames the claim's protected module, and every
+  # module that imports it is then edited and compiled again, one lean_check each (about 20 calls in round 2 of
+  # attn-min2-ptl-3). The carried modules all import it. Since policy v13 a module can import the network's own
+  # module instead, which no claim renames: the next change of the claim still costs those calls (the agent is
+  # told to move the imports then), later ones do not. The first round gets the calls for it.
   compile_calls: 120
   # The checker of the best scored proof, locked, on another development seed of the same size: a checker that
   # carries a copy of the first network's weights certifies nothing there.
@@ -32,6 +37,18 @@ open_lane:
       note: >-
         Its lemmas weight_run and cert_run now cite the library's CostM.weight_run_get and CostM.cert_run_get
         (same statements); the library's reads changed, and the old proofs unfolded their definition.
+    # The three theorems in which the kernel runs the graph, st0, stA and stB, with `rw [semOps_eqK]` before
+    # `decide +kernel` (CompactCheck/SemanticsKernel.lean, new in the service): the same statements, decided on
+    # the semantics as the kernel evaluates it best. As submitted the module needs more memory than a 6 GB
+    # machine has (st0 alone was killed at 5.8 GB); so adapted it compiles there in 34 s, at 3.9 GB. Every
+    # submission of the run compiles it again. With it the whole carried proof was checked on that machine
+    # (17 November: 26 modules compiled, accepted and scored, 1,889 inputs at length 192,059).
+    - path: Candidate/SymRun2.lean
+      with: config/pilot/carried/attn-min2-ptl-3/SymRun2.lean
+      replaces_sha256: 7619631a5eb542adec0b0374fdea265f76724a758b162d00917f1738f5a529bd
+      note: >-
+        Its theorems st0, stA and stB now rewrite with semOps_eqK (CompactCheck/SemanticsKernel.lean) before
+        decide +kernel: the same statements, and the kernel takes a fraction of the memory and time.
   continue_note: |
     The Lean service has changed since the earlier run.
     - Reads are faster in the kernel: I.weight and I.cert go through a
@@ -44,3 +61,22 @@ open_lane:
     - The size budget of this network is now 15,563 (it was 13,376); the
       earlier run's checker measures 11,156.
     - A plan is bounded in bits as well (7,781 on this network).
+    - The network has a protected module of its own,
+      Protected.N_attn_min2_v64d8_s1, with the same graph, weights and
+      task as the module of a claim. Your carried modules import the
+      claim's module of the earlier run and compile as they are. Every
+      new claimed count or certificate renames that module, and then
+      each module that imports it is edited and compiled again. A
+      module that imports Protected.N_attn_min2_v64d8_s1 instead stays
+      compiled. So the first time a new claim makes you edit the
+      imports, give the checker, its soundness proof and the fact
+      files that import: it is the same edit and the same compile,
+      and the last time (the section WHAT A PROOF IS says how the
+      modules fit together).
+    - Two modules that each unfold the same definition no longer make
+      a submission fail with "declares ... twice".
+    - CompactCheck/SemanticsKernel.lean is new: the specification's
+      operations as the kernel evaluates them best (tensors built from
+      lists, read through a tree), each proved equal to the
+      specification's. `rw [semOps_eqK]` before `decide +kernel` on a
+      run of `semOps` cuts its memory and time several times.

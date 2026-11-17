@@ -151,6 +151,7 @@ def begin(run: RunDir, cfg: dict, entries: list[dict], check_entry: dict | None,
                 "digest": lock["digest"], "fingerprints": lock["fingerprints"], "modules": sorted(lock["modules"]),
                 "free": lock["free"],
                 "checker": lock["checker"], "sound": lock["sound"], "protected": lock["protected"],
+                "protected_modules": lock["protected_modules"],
             }
     k = state["proof_rounds_ended"]["after_round"]
     for name in planned(cfg):
@@ -186,9 +187,13 @@ def locked_text(lock: dict) -> str:
 def rename_text(lock: dict) -> str:
     if not lock["protected"]:
         return ""
-    return (f" One change is made for you: where they name the protected module of the network they were written "
-            f"for ({lock['protected']}), they get the name of the protected module of the network, claimed count and "
-            "certificate of that call.")
+    from .lock import lock_roles
+
+    roles = lock_roles(lock)
+    was = ", ".join(name for name in (roles.get(role) for role in ("network", "claim", "certificate", "plan")) if name)
+    return (f" One change is made for you: where they name a protected module of the network they were written "
+            f"for ({was}), they get the name of the module that holds the same for that call: its network's, and "
+            "the one of its network, claimed count, certificate and plan.")
 
 
 def free_text(lock: dict) -> str:

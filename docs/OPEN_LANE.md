@@ -47,7 +47,10 @@ response:
   occur exactly once, in order, and no edits compile the module as saved; since 13 November 2026 `checker`,
   the name of the agent's checker, adds a scoring preview: the counted-language closure and the description
   size against the budget, measured as the score step measures them, with the largest definitions; and `plan`
-  builds the protected module with a planned checker's plan);
+  builds the protected module with a planned checker's plan; since 17 November 2026 the answer names the
+  protected modules the service built, `protected_modules`: the claim's and, beside it, the network's own,
+  `Protected.N_<network>`, which no claim renames, so that a module importing it alone stays compiled when
+  the claim changes, docs/decisions/network-module-v13.md);
   `run_python` runs code in the recipe sandbox with the network's weights, in a folder that holds the
   model's code, the harness and the weights and nothing of the fixed rules (no `helpers.py`, which names
   them; the check before a run scans the folder's text files), and the agent's Python workspace `py/`
@@ -347,8 +350,10 @@ A pilot run is about one network and has two more sessions after its proof round
   Which module declares a constant and what a module imports is asked of Lean, never read off the source:
   a Lean program (`core/open_lane/inspect_oleans.lean`, run with the service's Lean) reads the `.olean`
   files the service compiled. In the session the locked modules cannot be saved over, they are written
-  into the workspace again from the lock before every compile and submission (with the protected module's
-  name replaced by the second network's, and nothing else), and the submission must name the locked
+  into the workspace again from the lock before every compile and submission (with the names of the
+  protected modules they were written against replaced by those of the call: the network's own module by
+  the second network's, the claim's by the one of that network, claimed count, certificate and plan; nothing
+  else), and the submission must name the locked
   checker and soundness theorem. When a scored proof is accepted, Lean is asked whether its checker is the
   locked one: the kernel terms of the checker and of everything of the candidate's it depends on, the
   soundness statement, and the graph and task they reach must be the lock's (`lock.verified` in the

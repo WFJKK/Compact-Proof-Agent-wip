@@ -23,6 +23,13 @@ For an open-lane run, with the same code a run uses:
    agent would submit it: whether the service as it is now accepts and scores it, its description size against
    the budget, and how long the check takes on this machine. That is the time every later submission of the
    run takes at least.
+5. With --check, in a run with sessions after its proof rounds (a seed check): the lock. If no proof of the run
+   scores better than the carried one, that one is locked, as the earlier run's service compiled it, and what
+   the seed check's session submits is compiled by the service as it is now. So the lock is read both ways,
+   from the earlier submission and from the one just made, and the two must name the same checker: the same
+   digests of its kernel terms, of the soundness statement and of the graph and task they reach. If the
+   earlier one cannot be read (the service's work folder of that run is gone) or the digests differ, a seed
+   check on the carried proof would halt or come out unverified: said here, before the run.
 
 Nothing here is scored or recorded in a run, and the folder is removed afterwards (--keep leaves it). Exit
 status 0 when the modules of the best carried proof compiled (and, with --check, it was accepted and scored), 1
@@ -43,6 +50,7 @@ from ..model_folder import load_model_folder
 from ..run_config import RunConfigError, load_run_config, parse_overrides, resolve
 from . import continuation
 from .session import Session, ToolError, carried_modules
+from .stages import planned
 
 FOLDER = "_dry_start"
 
@@ -109,8 +117,6 @@ def run(cfg: dict, check: bool, keep: bool, log=print) -> int:
         raise LoopError(f"the Lean project at {project} has no built acceptcheck (lake build acceptcheck there first)")
     loop.check_lean_lock(project)  # at the commit lean-checker.lock names, with no uncommitted change
     loop.seed_check_entry(cfg, folder, entries)  # a seed check on the wrong network fails here, as at a run's start
-    from .stages import planned
-
     if planned(cfg):  # the sessions after the proof rounds lock a checker: Lean must answer about compiled modules
         loop.check_inspection(project)
     ident = loop.lean_identity(project, knowledge=ol.get("knowledge", "minimal"))
@@ -146,7 +152,7 @@ def run(cfg: dict, check: bool, keep: bool, log=print) -> int:
         if check and bad:
             log("not submitted again: its modules do not all compile")
         elif check:
-            status = max(status, check_best(session, best, manifest, log))
+            status = max(status, check_best(session, best, manifest, log, lock=bool(planned(cfg)), project=project))
         if status == 0:
             log("READY: the proof to go on from compiles in the first round's workspace" + (", and is accepted and scored" if check else "")
                 if carried else "READY: nothing is carried, and the service answers")
@@ -161,8 +167,39 @@ def run(cfg: dict, check: bool, keep: bool, log=print) -> int:
     return status
 
 
-def check_best(session: Session, best: dict | None, manifest: dict, log) -> int:
-    """Submit the best carried scored proof again, from the session's workspace. 0 when it is accepted and scored."""
+def check_lock(earlier: Path, now: Path, project: Path, log) -> int:
+    """The lock of the carried proof, read from the submission of the earlier run (as that run's service compiled
+    it) and from the submission just made (as the service compiles it now). 0 when both can be read and name the
+    same checker."""
+    from .lock import LockError, LockUnread, read_lock
+
+    locks = {}
+    for what, folder in (("the earlier run's submission", earlier), ("the submission just made", now)):
+        try:
+            locks[what] = read_lock(folder, project)
+        except LockUnread as exc:
+            log(f"NOT READY for the seed check: {what} ({folder}) cannot be read for the lock: {exc}. If no proof of the run "
+                "scores better than the carried one, the run halts when its proof rounds are over.")
+            return 1
+        except LockError as exc:
+            log(f"NOT READY for the seed check: the carried proof cannot be locked ({what}): {exc}")
+            return 1
+    was, new = locks.values()
+    differ = [key for key in ("checker", "sound_statement", "context") if was["fingerprints"][key] != new["fingerprints"][key]]
+    if differ:
+        log("NOT READY for the seed check: the carried proof's checker, as the earlier run's service compiled it, is not "
+            f"the checker the service compiles from the same modules now (differs in: {', '.join(differ)}). A seed check "
+            "that locks the carried proof would come out unverified. A proof scored in this run is locked as this "
+            "run's service compiled it, and does not have this problem.")
+        return 1
+    log(f"the lock: the carried proof can be locked ({len(was['modules'])} locked modules, {len(was['free'])} free), and its "
+        "checker is the same compiled then and now")
+    return 0
+
+
+def check_best(session: Session, best: dict | None, manifest: dict, log, lock: bool = False, project: Path | None = None) -> int:
+    """Submit the best carried scored proof again, from the session's workspace. 0 when it is accepted and scored
+    (and, with `lock`, when the lock read from it is the one read from the earlier run's submission)."""
     if best is None:
         log("no scored proof is carried: nothing to submit again")
         return 0
@@ -190,6 +227,9 @@ def check_best(session: Session, best: dict | None, manifest: dict, log) -> int:
     log(f"accepted and scored: {receipt.get('certified_count')} inputs, length {scoring.get('length'):,}; {size}")
     if best.get("length") and scoring.get("length") != best["length"]:
         log(f"  note: the earlier receipt's length was {best['length']:,}")
+    if lock and project is not None:
+        earlier = Path(best["source"][: -len(best["path"])])
+        return check_lock(earlier, session.path / "submissions" / f"{int(receipt.get('submission') or 0):03d}", project, log)
     return 0
 
 

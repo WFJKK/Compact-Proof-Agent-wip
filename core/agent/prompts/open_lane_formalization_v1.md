@@ -45,14 +45,37 @@ WHAT A PROOF IS
 The Lean project CompactCheck defines the network's computation over the
 rationals and the reals and what "correct" means (Spec.lean). For every
 network and every claimed count N, the service generates a protected
-module with the exact weights and the statement to prove:
+module with the exact weights and the statement to prove, and beside it
+a module with the network alone:
 {PROTECTED_INTERFACE}
-Your module imports that protected module (and CompactCheck, Mathlib)
-and proves `Target`. The service compiles your modules in a box, replays
-every constant through the kernel, and accepts `Challenge.proof : Target
-:= <your theorem>` only with the standard axioms (propext,
-Classical.choice, Quot.sound): no sorry, no native_decide. A proof is
-then VERIFIED: its count is recorded.
+The module that proves `Target` imports the claim's module (and
+CompactCheck, Mathlib). The claim's module is named by the claimed
+count, and by the hash of a certificate and of a plan when there are
+any, so its name changes whenever one of them does, and every module
+that imports it must then be edited and compiled again. The network's
+module has one name. So write what does not depend on the claim in
+modules that import `Protected.N_<network>` alone: the checker, its
+soundness proof, and every fact about the weights that the kernel
+decides. They are compiled once and stay compiled when you raise the
+claimed count; only the last module, which states the instance in the
+service's form and proves `Target`, names the claim's module.
+`Protected.N_<network>.weights` and the claim's `weights` are two
+constants with one definition, so a fact about the first proves the
+same statement about the second: Lean and the kernel unfold both and
+find the same term (`exact`, or `show` with the other name). A
+certificate and a plan also have modules of their own, named by their
+content, with the claim's definition of them:
+`Protected.N_<network>_h<hash>` (`cert`) and
+`Protected.N_<network>_p<hash>` (`plan`). A fact that mentions the
+certificate imports the certificate's module and is compiled again only
+when the certificate changes. lean_check answers with the names of the
+modules it compiled against (`protected_modules`).
+
+The service compiles your modules in a box, replays every constant
+through the kernel, and accepts `Challenge.proof : Target := <your
+theorem>` only with the standard axioms (propext, Classical.choice,
+Quot.sound): no sorry, no native_decide. A proof is then VERIFIED: its
+count is recorded.
 
 The specification, from Spec.lean:
 {SPEC}
@@ -95,8 +118,9 @@ the soundness theorem must hold for every plan,
         CostM.exec (D p Interp.counting) ⟨w, c⟩ = some (n, cost) → n ≤ numCorrect graph w task
     theorem D_instance : CostM.billed (D plan Interp.counting) ⟨weights, cert⟩ = some (N, L)
 
-where `plan` is the protected module's (its name ends in _p and the
-plan's hash; lean_check takes the same plan). The checker's own code
+where `plan` is the protected one (the claim module's name then ends in
+_p and the plan's hash; lean_check takes the same plan). The checker's
+own code
 may not mention the protected `plan`. Data written into D's code counts
 toward its description size; data in a plan does not.
 
@@ -174,6 +198,14 @@ Getting the instance through the kernel:
   indices and only then apply them to D's own list. A proof step about
   the concrete run (a `simp` or `split` on it) can make the kernel
   evaluate the run while checking the proof.
+- For the kernel an Array is a list. Building one entry by entry
+  (`Array.ofFn`, `Array.range`, `Array.map`, `push`) walks the list for
+  every entry: 512 entries cost seconds and a gigabyte. Write the data
+  of a tensor of your own as `((List.range n).map f).toArray`. To have
+  the kernel evaluate the specification's `semOps` or `semGraph`,
+  rewrite with `semOps_eqK` or `semGraph_eqK` first
+  (CompactCheck/SemanticsKernel.lean): the same tensors, built from
+  lists and read through a tree.
 {MODEL_NOTES}
 
 A worked example, a scored brute-force proof (the baseline you should

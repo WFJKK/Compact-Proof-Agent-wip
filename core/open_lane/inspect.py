@@ -9,9 +9,16 @@ service's own Lean.
 
 `inspect_submission` finds those files from the submission's receipt: the service keeps the modules it
 compiled under <work>/submissions/<receipt name>/out, next to its copy of their sources, and the protected
-module under <work>/protected. The copy must be the modules that were submitted. It refuses a submission in
-which Lean's answer would be ambiguous: a constant declared by two modules, or a constant named under the
-marker that stands for the protected module.
+modules under <work>/protected. The copy must be the modules that were submitted. It refuses a submission in
+which Lean's answer would be ambiguous: a constant declared by two modules (other than a theorem two modules
+hold with one statement, which Lean and the service take as one), or a constant named under the marker that
+stands for the protected module.
+
+Since the service's policy v13 the network's graph, weights and task are also in a protected module of their
+own (`Protected.N_<network>`), with the definitions the protected module of a claim has for them. A checker
+may name either. Lean's answer writes both names the same and lists the constant once, so a checker has the
+same digests whichever module it names, and the digests it had when there was one protected module
+(inspect_oleans.lean).
 
 `constant_digests` and `fingerprints` reduce the program's canonical texts to digests:
 
@@ -19,7 +26,7 @@ marker that stands for the protected module.
   their values, theorems with their statements), as kernel terms, with the protected module's name left out;
 - `sound_statement`: the same for the soundness theorem, which counts with its statement, so this is the
   statement and every constant of the candidate's it is written in;
-- `context`: the constants of the protected module either of them reaches (the network's graph and task).
+- `context`: the constants of the protected modules either of them reaches (the network's graph and task).
 
 Two submissions with the same three digests have, term for term, the same checker, applied to the same graph
 and task, with the same soundness statement, whatever their source text says. A constant whose body the
@@ -34,6 +41,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -71,9 +79,10 @@ def lean_binary(lean_project: Path) -> str:
 
 
 def inspect_oleans(lean: str, oleans: dict[str, Path], protected: str | None = None, where=(), closure=(),
-                   cwd: Path | None = None, extra=(), timeout_s: float = TIMEOUT_S) -> dict:
+                   cwd: Path | None = None, extra=(), timeout_s: float = TIMEOUT_S, network: str | None = None) -> dict:
     """Run inspect_oleans.lean on compiled modules (module name to .olean file) and return what it prints.
-    `protected` is the name of the protected module among them, left out of the canonical texts. `cwd` is
+    `protected` is the name of the protected module among them, left out of the canonical texts, and `network`
+    the name of the network's module among them, when the service wrote one (its policy v13). `cwd` is
     the Lean project: a `lean` that is elan's proxy picks its toolchain from the folder it is started in.
     `extra` is further arguments for the program (core.open_lane.offered: the library and what a run shows)."""
     missing = [str(f) for f in oleans.values() if not Path(f).is_file()]
@@ -84,6 +93,10 @@ def inspect_oleans(lean: str, oleans: dict[str, Path], protected: str | None = N
         cmd += ["--olean", f"{module}={f}"]
     if protected:
         cmd += ["--protected", protected]
+    if network:
+        if network not in oleans:
+            raise InspectError(f"the network's module {network} is not among the compiled modules")
+        cmd += ["--network", network]
     for flag, names in (("--where", where), ("--closure", closure)):
         for n in names:
             cmd += [flag, n]
@@ -101,6 +114,9 @@ def inspect_oleans(lean: str, oleans: dict[str, Path], protected: str | None = N
         raise InspectError(f"Lean's answer about the compiled modules is not JSON: {r.stdout[-300:]}")
     if not _well_formed(info):
         raise InspectError("Lean's answer about the compiled modules is not of the expected shape")
+    if info.get("mismatched"):
+        raise InspectError(f"the protected module {protected} defines {info['mismatched'][0]} as something else than the "
+                           f"constant of that name in {network}: not modules the acceptance service wrote")
     return info
 
 
@@ -123,9 +139,15 @@ def _well_formed(info) -> bool:
         return False
 
 
-def submission_oleans(submission: Path) -> tuple[dict[str, Path], str | None]:
+CLAIM_MODULE = re.compile(r"^(N_.+)_c\d+(?:_h[0-9a-f]{16})?(?:_p[0-9a-f]{16})?$")
+
+
+def submission_oleans(submission: Path) -> tuple[dict[str, Path], str | None, str | None]:
     """The compiled modules of an accepted submission, from its manifest and its receipt: module name to
-    .olean file, the protected module included, and the protected module's name."""
+    .olean file, the protected modules included; the name of the claim's protected module; and the name of the
+    network's, when the service keeps one beside the claim's (its policy v13: every protected module a claim
+    imports lies compiled in the claim's folder). A submission of an earlier policy has one protected module,
+    unless the service has since built that claim again: then the folder holds what it builds now."""
     submission = Path(submission)
     try:
         manifest = json.loads((submission / "manifest.json").read_text())
@@ -147,11 +169,22 @@ def submission_oleans(submission: Path) -> tuple[dict[str, Path], str | None]:
         if not same:
             raise InspectError(f"{rel} in the service's workspace {ws} is not the module that was submitted")
         oleans[name] = ws / "out" / (rel[: -len(".lean")] + ".olean")
-    protected = next((s.get("module") for s in receipt.get("steps") or [] if s.get("step") == "protected"), None)
+    step = next((s for s in receipt.get("steps") or [] if s.get("step") == "protected"), {})
+    protected, network = step.get("module"), None
     if protected:
         short = protected[len("Protected."):]
-        oleans[protected] = work / "protected" / short / "out" / "Protected" / f"{short}.olean"
-    return oleans, protected
+        folder = work / "protected" / short / "out" / "Protected"
+        oleans[protected] = folder / f"{short}.olean"
+        named = step.get("network_module")  # the receipt names it since policy v13
+        fits = CLAIM_MODULE.match(short)
+        network = named or (f"Protected.{fits.group(1)}" if fits else None)
+        if network and (named or (folder / f"{network[len('Protected.'):]}.olean").is_file()):
+            for f in sorted(folder.glob("*.olean")):  # the network's module, and a certificate's and a plan's
+                oleans.setdefault(f"Protected.{f.stem}", f)
+            oleans.setdefault(network, folder / f"{network[len('Protected.'):]}.olean")
+        else:
+            network = None
+    return oleans, protected, network
 
 
 def self_check(lean_project: Path) -> None:
@@ -168,16 +201,19 @@ def self_check(lean_project: Path) -> None:
 def inspect_submission(lean_project: Path, submission: Path, where=(), closure=(), timeout_s: float = TIMEOUT_S) -> dict:
     """What Lean says about an accepted submission's compiled modules: see inspect_oleans.lean. Adds
     `protected`, the protected module's name. Raises Refused when the answer would be ambiguous."""
-    oleans, protected = submission_oleans(submission)
-    info = inspect_oleans(lean_binary(lean_project), oleans, protected, where, closure, cwd=lean_project, timeout_s=timeout_s)
+    oleans, protected, network = submission_oleans(submission)
+    info = inspect_oleans(lean_binary(lean_project), oleans, protected, where, closure, cwd=lean_project, timeout_s=timeout_s,
+                          network=network)
     info["protected"] = protected
+    info["network_module"] = network
     unambiguous(info)
     return info
 
 
 def unambiguous(info: dict) -> None:
     """Refuse an answer in which a name does not say which constant is meant. The acceptance service refuses
-    a candidate that declares a constant twice, so neither happens to a submission it accepted."""
+    a candidate that declares a constant twice, so neither happens to a submission it accepted. (A theorem two
+    modules hold with one statement is declared once, for Lean, the service and this: no duplicate.)"""
     if info.get("duplicates"):
         d = info["duplicates"][0]
         raise Refused(f"{d['name']} is declared by more than one module ({', '.join(d['modules'])})")
@@ -199,14 +235,15 @@ def constant_digests(info: dict, root: str) -> tuple[dict[str, str], dict[str, s
     protected = info.get("protected")
     own, context = {}, {}
     for e in c["constants"]:
-        home = e["modules"][0] if len(e["modules"]) == 1 else None
-        if home is None:
-            raise Refused(f"{e['declared']} is declared by more than one module ({', '.join(e['modules'])})")
-        if protected and home == protected:
+        homes = e["modules"]
+        if len(homes) != 1 and e["kind"] != "theorem":  # a theorem two modules hold is one theorem (`unambiguous`)
+            raise Refused(f"{e['declared']} is declared by more than one module ({', '.join(homes)})")
+        if any(h == protected or h.startswith("Protected.") for h in homes):
             context[e["name"]] = _digest(e["text"])
             continue
-        if e["kind"] == "axiom" or (info["modules"].get(home) or {}).get("is_module"):
-            raise Refused(f"the compiled module {home} does not show what {e['declared']} is (an axiom, or a file "
+        hidden = next((h for h in homes if (info["modules"].get(h) or {}).get("is_module")), None)
+        if e["kind"] == "axiom" or hidden:
+            raise Refused(f"the compiled module {hidden or homes[0]} does not show what {e['declared']} is (an axiom, or a file "
                                f"written in Lean's module system, which keeps the bodies of its definitions out of the "
                                f"compiled module); {root} depends on it")
         own[e["name"]] = _digest(e["text"])

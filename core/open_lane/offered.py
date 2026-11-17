@@ -103,20 +103,20 @@ def self_check(surface: dict, lean_project: Path) -> dict:
 
 
 def of_oleans(surface: dict, lean_project: Path, oleans: dict, protected: str | None = None,
-              timeout_s: float = inspect.TIMEOUT_S) -> dict:
+              timeout_s: float = inspect.TIMEOUT_S, network: str | None = None) -> dict:
     """What compiled modules (module name to .olean file; the protected module among them is left out) use of
     the library beyond the surface: {"clean": bool, "uses": [{constant, module, kind, closed: [...]}],
     "library": counts}. Raises InspectError when Lean could not be asked: then nothing is known."""
     info = inspect.inspect_oleans(inspect.lean_binary(lean_project), oleans, protected, cwd=lean_project,
-                                  extra=library_args(surface, lean_project), timeout_s=timeout_s)
+                                  extra=library_args(surface, lean_project), timeout_s=timeout_s, network=network)
     s = _answer(info)
     return {"clean": not s["uses"], "uses": s["uses"], "library": s["library"]}
 
 
 def of_submission(surface: dict, lean_project: Path, submission: Path, timeout_s: float = inspect.TIMEOUT_S) -> dict:
     """The same of an accepted submission, from the modules the acceptance service compiled for it."""
-    oleans, protected = inspect.submission_oleans(Path(submission))
-    return of_oleans(surface, lean_project, oleans, protected, timeout_s=timeout_s)
+    oleans, protected, network = inspect.submission_oleans(Path(submission))
+    return of_oleans(surface, lean_project, oleans, protected, timeout_s=timeout_s, network=network)
 
 
 def note(verdict: dict) -> str:

@@ -1,15 +1,20 @@
 /-
 What a compiled submission declares, read from its .olean files by Lean itself.
 
-    lean --run inspect_oleans.lean --olean <module>=<file.olean> ... [--protected <module>]
+    lean --run inspect_oleans.lean --olean <module>=<file.olean> ... [--protected <module>] [--network <module>]
          [--where <constant> ...] [--closure <constant> ...]
 
 Prints one JSON object:
 
 * `modules`: per module given, its imports, the number of constants it declares, and whether it was
   written in the module system (`is_module`: such a file's .olean hides the bodies of its definitions);
-* `duplicates`: every constant that more than one of the given modules declares, with those modules;
+* `duplicates`: every constant that more than one of the given modules declares, with those modules. A
+  theorem that two modules hold with one statement is not one: Lean derives a definition's equation lemmas
+  (`f.eq_1`, `f.eq_def`) in every module that first unfolds it, and imports such copies together as the one
+  theorem they are. The acceptance service takes them so (its policy v13);
 * `reserved`: every constant named under `Protected._`, the marker used below;
+* `mismatched`: with `--network`, every constant of the protected module that has the name of one of the
+  network's module and another canonical text (none, in modules the service wrote);
 * `where`: per constant asked for, the modules that declare it (one, for a constant that exists once);
 * `closures`: per constant asked for, everything it depends on among the constants of the given
   modules, itself included: through types, and through the values of definitions. A theorem counts
@@ -24,6 +29,13 @@ same text exactly when its kernel terms are the same up to that one renaming. Th
 texts (core/open_lane/inspect.py) and refuses a submission with a duplicate or a reserved name, where
 a text would not say which constant it is about.
 
+Since the service's policy v13 the network's graph, weights and task are also constants of a module of
+their own (`--network`, `Protected.N_<network>`), with the definitions the protected module of a claim
+(`--protected`) has for them, and a checker may name either. Both names are written `Protected._.graph`,
+and the two constants have the same text (`mismatched` says where they do not), so a closure lists the
+constant once. So a checker has the same texts whichever of the two modules it names, and the texts it
+had when there was one protected module.
+
 With `--library <module>=<file.olean> ...` (the modules of the Lean project's own library, as its
 build compiled them) and what a run shows of them, `--shown-whole <module> ...` and
 `--shown-lines <module>=<line>,<line>,... ...` (the source lines of a module that the run shows), it
@@ -36,7 +48,7 @@ also prints `surface`:
   library);
 * `library`: how many modules and constants the library has, how many of them are shown, and the
   exposed ones by name;
-* `uses`: every constant of the given modules, the protected module's apart, whose type, value or
+* `uses`: every constant of the given modules, the protected modules' apart, whose type, value or
   proof mentions a closed constant of the library, with those constants. A projection written as a
   number counts as the field it projects to.
 
@@ -63,11 +75,27 @@ namespace InspectOleans
 /-- What the protected module's name is replaced by. -/
 def marker : Name := `Protected ++ `_
 
-/-- `<protected module>.rest` becomes `Protected._.rest`; every other name stays. -/
-def normName (prot : Option Name) (n : Name) : Name :=
-  match prot with
-  | some p => if p.isPrefixOf n then n.replacePrefix p marker else n
+/-- The protected modules whose names a canonical text leaves out: the claim's (`--protected`) and the
+    network's (`--network`, in a submission the service compiled since its policy v13), which holds the
+    graph, the weights and the task with the definitions the claim's module has for them. -/
+structure Prot where
+  claim : Option Name := none
+  network : Option Name := none
+
+/-- `<protected module>.rest` and `<network module>.rest` become `Protected._.rest`; every other name stays. -/
+def normName (prot : Prot) (n : Name) : Name :=
+  match prot.claim with
+  | some p => if p.isPrefixOf n then n.replacePrefix p marker else
+    match prot.network with
+    | some q => if q.isPrefixOf n then n.replacePrefix q marker else n
+    | none => n
   | none => n
+
+/-- A second copy of a theorem: the same universe parameters and the same statement. -/
+def sameTheorem (a b : ConstantInfo) : Bool :=
+  match a, b with
+  | .thmInfo x, .thmInfo y => x.levelParams == y.levelParams && x.type == y.type
+  | _, _ => false
 
 partial def lvl : Level → String
   | .zero => "0"
@@ -82,7 +110,7 @@ structure St where
   out : Array String := #[]
 
 /-- One line per distinct subterm, children before parents; returns the subterm's line number. -/
-partial def ser (prot : Option Name) (e : Expr) : StateM St Nat := do
+partial def ser (prot : Prot) (e : Expr) : StateM St Nat := do
   if let .mdata _ b := e then return (← ser prot b)
   if let some i := (← get).ids[e]? then return i
   let line ← match e with
@@ -108,8 +136,12 @@ def kind : ConstantInfo → String
   | .axiomInfo _ => "axiom" | .defnInfo _ => "def" | .thmInfo _ => "theorem" | .opaqueInfo _ => "opaque"
   | .quotInfo _ => "quot" | .inductInfo _ => "inductive" | .ctorInfo _ => "constructor" | .recInfo _ => "recursor"
 
+/-- How the kernel is told to unfold a definition, without the height of a regular one: the height counts
+    how deep the definitions below it go, so it changes when the library's definitions are layered
+    differently (the service's policy v10 put a tree under its reads), and the term does not. A proof compiled
+    before such a change and one compiled after it are then the same checker, as they should be. -/
 def hints : ReducibilityHints → String
-  | .opaque => "opaque" | .abbrev => "abbrev" | .regular h => s!"regular {h}"
+  | .opaque => "opaque" | .abbrev => "abbrev" | .regular _ => "regular"
 
 /-- The constants a constant's kernel terms mention: its type; a definition's value (not a theorem's
     proof); an inductive type's constructors; a constructor's type; a recursor's rules. -/
@@ -140,7 +172,7 @@ partial def closureOf (consts : Std.HashMap Name ConstantInfo) (root : Name) : A
   return seen.toArray
 
 /-- The canonical text of one constant: a header, its type, and what its kind adds. -/
-def constText (prot : Option Name) (ci : ConstantInfo) : String :=
+def constText (prot : Prot) (ci : ConstantInfo) : String :=
   let norm := normName prot
   let emit (s : String) : StateM St Unit := modify fun st => { st with out := st.out.push s }
   let go : StateM St Unit := do
@@ -287,7 +319,7 @@ def strs (xs : Array String) : Json := Json.arr (xs.map Json.str)
 
 def run (args : List String) : IO UInt32 := do
   let mut oleans : Array (String × String) := #[]
-  let mut prot : Option Name := none
+  let mut prot : Prot := {}
   let mut wheres : Array Name := #[]
   let mut closures : Array Name := #[]
   let mut library : Array (String × String) := #[]
@@ -301,7 +333,8 @@ def run (args : List String) : IO UInt32 := do
       | m :: f :: more => oleans := oleans.push (m, "=".intercalate (f :: more))  -- a path may hold `=`
       | _ => IO.eprintln s!"--olean takes <module>=<file>, not {spec}"; return 2
       rest := more
-    | "--protected" :: n :: more => prot := some n.toName; rest := more
+    | "--protected" :: n :: more => prot := { prot with claim := some n.toName }; rest := more
+    | "--network" :: n :: more => prot := { prot with network := some n.toName }; rest := more
     | "--where" :: n :: more => wheres := wheres.push n.toName; rest := more
     | "--closure" :: n :: more => closures := closures.push n.toName; rest := more
     | "--library" :: spec :: more =>
@@ -332,17 +365,31 @@ def run (args : List String) : IO UInt32 := do
       ("constants", Json.num data.constants.size),
       ("is_module", Json.bool data.isModule)])
     for ci in data.constants do
-      if consts.contains ci.name && !twice.contains ci.name then twice := twice.push ci.name
+      match consts[ci.name]? with
+      | some first =>  -- the first copy is the one kept, as the service's kernel replay keeps it
+        if !sameTheorem first ci && !twice.contains ci.name then twice := twice.push ci.name
+      | none => consts := consts.insert ci.name ci
       if marker.isPrefixOf ci.name then reserved := reserved.push ci.name
-      consts := consts.insert ci.name ci
       home := home.insert ci.name ((home.getD ci.name #[]).push m)
   let byName (a b : Name) : Bool := a.toString < b.toString
   let duplicates := (twice.qsort byName).map fun n => Json.mkObj [("name", Json.str n.toString), ("modules", strs (home.getD n #[]))]
   let whereJson := wheres.map fun n => (n.toString, strs (home.getD n #[]))
+  -- a constant of the claim's module that has the name of one of the network's and another text
+  let mismatched : Array Name := match prot.claim, prot.network with
+    | some p, some q => consts.fold (fun acc n ci =>
+        if p.isPrefixOf n then
+          match consts[n.replacePrefix p q]? with
+          | some cj => if constText prot ci == constText prot cj then acc else acc.push n
+          | none => acc
+        else acc) #[]
+    | _, _ => #[]
   let mut closureJson : Array (String × Json) := #[]
   for root in closures do
     let names := (closureOf consts root).qsort fun a b => byName (normName prot a) (normName prot b)
-    let entries := names.filterMap fun n => (consts[n]?).map fun ci => Json.mkObj [
+    -- a constant the claim's module and the network's both define is listed once (the two have one text)
+    let once := names.foldl (fun (acc : Array Name) n =>
+      if acc.any (fun m => normName prot m == normName prot n) then acc else acc.push n) #[]
+    let entries := once.filterMap fun n => (consts[n]?).map fun ci => Json.mkObj [
       ("name", Json.str (normName prot n).toString), ("declared", Json.str n.toString),
       ("modules", strs (home.getD n #[])), ("kind", Json.str (kind ci)), ("text", Json.str (constText prot ci))]
     closureJson := closureJson.push (root.toString, Json.mkObj [
@@ -388,7 +435,7 @@ def run (args : List String) : IO UInt32 := do
         else if shownSet.contains n then "shown" else if exposed.contains n then "exposed" else "closed"))
     let mut uses : Array Json := #[]
     for (m, f) in oleans do
-      if prot == some m.toName then continue
+      if prot.claim == some m.toName || prot.network == some m.toName || m.toName.getRoot == `Protected then continue
       let (data, _region) ← readModuleData f
       for ci in data.constants do
         let found := (closedUses lib closed ci).qsort byName
@@ -404,6 +451,7 @@ def run (args : List String) : IO UInt32 := do
   IO.println (Json.mkObj ([
     ("modules", Json.mkObj modules.toList), ("duplicates", Json.arr duplicates),
     ("reserved", strs ((reserved.qsort byName).map (·.toString))),
+    ("mismatched", strs ((mismatched.qsort byName).map (·.toString))),
     ("where", Json.mkObj whereJson.toList), ("closures", Json.mkObj closureJson.toList)] ++ surface)).compress
   return 0
 
