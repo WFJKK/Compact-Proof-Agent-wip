@@ -57,3 +57,8 @@ working from the repositories can read them. Each is dated; later decisions supe
   (its policy v15): the linear proof's check goes from 82 minutes to 21 s, and the proof from ten modules to
   one. The kernel mode stays, the default stays kernel, and every result says which it was. With it: start
   drafts, for work that no run folder can hand on.
+- [linear-four-tokens.md](linear-four-tokens.md) (18 November 2026): the linear network on four tokens, max
+  of 4 and min of 4 (`models/max4`, `models/min4`), prepared for a first run each. With more than two tokens
+  the architecture has a short proof of most inputs by convexity (pure inputs: about V^3 operations, 71% of
+  the right inputs at 64 tokens, brute force over 26,600), which max of 2 has not. The sizes, the training,
+  what the Lean service does at 16,777,216 inputs, the run and dry-start configs, and reference numbers.

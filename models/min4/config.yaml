@@ -1,0 +1,85 @@
+# The linear min-of-4 network: the max2 model (models/max2/model.py, copied: the tokens' one-hot vectors
+# summed over the positions, then three linear maps without biases) on four tokens. The output is the smallest
+# token. Change values here, never in code.
+
+# One entry per size setting; the values are the module's constructor arguments.
+#   v16: 65,536 inputs, small enough for brute force to be run (by the Python checker and by the Lean service).
+#   v64: 16,777,216 inputs at the max2 model's v64 sizes (the same 1,088 weights). Brute force is never run
+#        there; B comes from the shapes, so runs at v64 replay no baselines.
+size_settings:
+  v16:
+    n_ctx: 4
+    d_vocab: 16
+    d_model: 4
+  v64:
+    n_ctx: 4
+    d_vocab: 64
+    d_model: 8
+
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+# Per size setting, this many seeds are held out for the final evaluation. The max2 model's split seed, so
+# the same seeds are held out at v64 (2, 6, 7, 9); at v16 it holds out 0, 1, 2 and 6.
+split:
+  held_out_per_setting: 4
+  seed: 20261009
+
+# The max2 model's optimizer, learning rate and batch size. More steps: on four tokens the accuracy still
+# rises after max2's 4,000 (measured on 18 November 2026 at v64, seed 0, on 200,000 sampled inputs: 97.6% at
+# 4,000 steps, 99.1% at 10,000, 99.73% at 40,000, 99.82% at 80,000, where it has levelled off; at v16 it is
+# above 99.99% from 30,000 on).
+training:
+  optimizer: AdamW
+  lr: 0.001
+  weight_decay: 0.01
+  batch_size: 1024
+  steps: 80000
+
+zoo_path: zoo
+cost_model: cost-v2
+control_networks: []
+
+# Strings the agent's prompt must never contain.
+# The prompt never names the paper this work follows: part 1 refuses these, part 2 removes them.
+hygiene: ["Gross", "Compact Proofs of Model Performance"]
+
+# What an open-lane run on this model takes from the Lean project and tells the agent (a run config may set
+# any of these itself). The worked example is brute force on the tiny network of tests/max2_tiny, the same
+# three linear maps on two tokens at vocabulary size 8: none of this folder's networks.
+# The notes say how the tools behave at these sizes, never what a proof of these networks looks like or how
+# short one has been (docs/decisions/agent-told-nothing.md).
+open_lane:
+  example: examples/open_lane/max2_tiny_scored/Candidate/Max2TinyScored.lean
+  extra_sources: []
+  notes: |
+    - The worked example below is brute force on a smaller network of this
+      kind (two positions, vocabulary size 8, hidden width 4, 64 inputs) on
+      another task (the largest of its two tokens), not this session's
+      network. Its checker and its soundness proof hold for any size. Its
+      instance is one theorem, and brute force on this session's network
+      (B above) is far beyond what one theorem holds.
+    - Whether an instance fits one theorem depends on the length of its
+      run (the limits above). When it does not, build it from small decided
+      facts and combine them with lemmas about the run.
+  # For a run whose checker the service runs compiled (open_lane.instance: compiled): the same brute-force
+  # checker and soundness proof with no instance theorem, and how the tools behave at these sizes then. Measured
+  # on 18 November 2026 on the max4 model's networks of the same sizes, max4-v64-s0 and max4-v16-s3 (Lean
+  # 4.35.0-rc4, the Lean service at policy v15, the cloud machine's two cores); the probe took the same on
+  # min4-v64-s0.
+  compiled:
+    example: examples/open_lane/max2_tiny_run/Candidate/Max2TinyRun.lean
+    notes: |
+      - The worked example below is brute force on a smaller network of this
+        kind (two positions, vocabulary size 8, hidden width 4, 64 inputs) on
+        another task (the largest of its two tokens), not this session's
+        network. Its checker and its soundness proof hold for any size.
+      - Time: at vocabulary size 64 the service ran a checker of 64 forward
+        passes (a bill of 42,944), compiled, on the network and on its eight
+        copies in 2 s, and the whole submission took 7 s. At vocabulary size
+        16 it ran brute force (65,536 forward passes, a bill of 7,274,496) on
+        the network and on its eight copies, and the whole submission took
+        103 s. A development compile gives the nine runs 120 s.
+      - At vocabulary size 64 `allInputs task.space` is a list of 16,777,216
+        inputs. A compiled checker that mentions it builds the whole list
+        before it does anything else: the same 64 forward passes, taken as
+        the first 64 entries of that list, took 32 s.

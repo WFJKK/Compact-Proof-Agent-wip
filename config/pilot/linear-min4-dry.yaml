@@ -1,0 +1,23 @@
+# For the dry start of linear-min4-ptl-1 alone, never a run: that run's settings, with a probe module given to
+# start from, so that the dry start has something to compile, run and submit on min4-v64-s0 before any agent
+# works on it:
+#
+#     python3 -m core.open_lane.dry_start --config config/pilot/linear-min4-dry.yaml --sandbox seatbelt --check
+#
+# The probe (config/pilot/start/linear4-probe/min4/Probe.lean) is the single-input rule on the 64 inputs whose
+# first three tokens are 0, with its soundness proof. READY means: the Lean service exports the network (its
+# 16,777,216 inputs are enumerated once, to name the task), compiles a module against it, checks the soundness
+# theorem, runs the compiled checker on the network and on its eight copies, and scores it. On the cloud
+# machine (18 November 2026): compiled in 2 s, run in 2 s, a bill of 42,944 (64 forward passes of 671),
+# accepted and scored in 7 s.
+# The run itself (linear-min4-ptl-1.yaml) starts from nothing: it is never given this module.
+extends: linear-min4-ptl-1.yaml
+run_id: linear-min4-dry
+open_lane:
+  start_drafts:
+    - path: Candidate/Probe.lean
+      with: config/pilot/start/linear4-probe/min4/Probe.lean
+      note: >-
+        A probe for the dry start: the single-input rule on the inputs whose first three tokens are 0, with
+        its soundness proof.
+      scored: {checker: Candidate.Probe.D, sound: Candidate.Probe.D_sound, certificate: []}

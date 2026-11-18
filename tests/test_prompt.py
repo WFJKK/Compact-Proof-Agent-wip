@@ -206,7 +206,7 @@ def test_template_v3_ends_with_the_aim_and_the_score_as_it_stands(trained_stub, 
         assert (" geometric mean " in aim) == (metric == "cost_of_finishing")
 
 
-@pytest.mark.parametrize("model", ["max2", "attn-max2", "attn-max4", "attn-min2", "attn-min4", "xorformer-majority"])
+@pytest.mark.parametrize("model", ["max2", "max4", "min4", "attn-max2", "attn-max4", "attn-min2", "attn-min4", "xorformer-majority"])
 def test_the_default_prompt_never_names_the_paper(model):
     from core.agent.build_prompt import static_values
     from core.run_config import merge

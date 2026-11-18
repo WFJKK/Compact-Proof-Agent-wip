@@ -1,0 +1,36 @@
+# The first run on the linear min-of-4 network: min4-v64-s0 from an empty workspace, in the python_then_lean
+# workflow with the checker's run made by the Lean service (open_lane.instance: compiled, the service's policy
+# v15). One discovery round, four formalization rounds, sessions of 60 minutes (the last 10 kept for the
+# notes), then a reading of the best proof's checker. No seed check and no scaling question in this first run.
+#
+# The run is given nothing to start from: no checker of an earlier run, no second example. The settings are
+# those of linear-max2-ptl-2 (18 November 2026) with one formalization round more, since that run started
+# from a checker that existed.
+#
+# Before starting it:
+#
+#     python3 -m core.open_lane.dry_start --config config/pilot/linear-min4-dry.yaml --sandbox seatbelt --check
+#
+# has the Lean service compile, check, run and score a probe checker on this network (the single-input rule
+# on 64 of its inputs), with no agent and no API call: READY or NOT READY. The probe belongs to that config
+# alone. This run starts from nothing (start_drafts is empty below).
+# Budget, when billed to an API key (--auth api_key): at most $30 a session and $180 for the run (linear-max2-ptl-2
+# cost $36.65 for five sessions that ended well inside their hour).
+extends: linear-min4.yaml
+run_id: linear-min4-ptl-1
+rounds_max: 5
+api_budget: {run_usd: 180, round_usd: 30}
+open_lane:
+  workflow_mode: python_then_lean
+  instance: compiled
+  discovery_rounds: 1
+  probe_compile_calls: 3
+  probe_auxiliary_submissions: 1
+  probe_seconds: 600
+  worker_seconds: 3600
+  seed_check: null
+  scaling: false
+  # The checker of the best scored proof is read after the rounds, in a session that proves and submits nothing,
+  # for numbers of the network written into its code. A language model's reading: an alarm for a person.
+  code_review: true
+  start_drafts: []

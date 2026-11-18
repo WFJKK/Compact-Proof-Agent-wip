@@ -527,6 +527,15 @@ network and the seed check's network:
   length (docs/decisions/attn-min2-width8.md; both mended on 16 and 17 November 2026, policies v10 and v13 of
   the Lean service, so width 32 is open to a run now). The minimal surface shows the exp bounds (Exp.lean and
   ExpSound.lean as excerpts) for every run.
+- `config/pilot/linear-max4.yaml` and `config/pilot/linear-min4.yaml` (18 November 2026): the linear network
+  on four tokens (`models/max4`, `models/min4`: the max2 model's module on four positions) at vocabulary size
+  64 and hidden width 8, proof rounds on `<model>-v64-s0`, the seed check on `<model>-v64-s1`. 16,777,216
+  inputs: brute force is never run, B comes from the shapes, and round 0 replays no baselines. The first run
+  on each is `linear-<model>-ptl-1.yaml` (python_then_lean, the checker's run made by the service, one
+  discovery round and four formalization rounds from an empty workspace, then the reading), and its dry start
+  is `linear-<model>-dry.yaml`, which gives the same run a probe module so that the service compiles, checks,
+  runs and scores something on the network before an agent works on it
+  (docs/decisions/linear-four-tokens.md).
 
 What an open-lane run needs to know about an architecture is the model folder's to state, under `open_lane`
 in its `config.yaml`: the worked example and the further Lean sources (`example`, `extra_sources`) and notes

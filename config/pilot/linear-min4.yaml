@@ -1,0 +1,17 @@
+# The pilot on the linear min-of-4 network (models/min4: the four tokens' one-hot vectors summed, then three
+# linear maps) at vocabulary size 64 and hidden width 8: 16,777,216 inputs of four tokens, the max2 model's
+# 1,088 weights. Brute force is never run at this size: B comes from the shapes, and round 0 replays no
+# baselines.
+#   proof rounds on  min4-v64-s0
+#   seed check on    min4-v64-s1, the same sizes, another seed
+# How many inputs each gets right is in models/min4/zoo/manifest.json. Everything else is config/pilot/base.yaml.
+extends: base.yaml
+run_id: pilot-linear-min4
+model: models/min4
+networks: [min4-v64-s0]
+baselines: false
+# One run_python call may hold more than the default 2 GB: an array of all 16,777,216 inputs is 0.5 GB as
+# 64-bit integers (the paper-size attention runs use the same limit).
+memory_limit_mb: 4096
+open_lane:
+  seed_check: {network: min4-v64-s1}

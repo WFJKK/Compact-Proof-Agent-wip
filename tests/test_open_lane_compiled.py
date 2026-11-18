@@ -256,10 +256,10 @@ def test_the_setting_defaults_to_the_kernel_and_says_what_a_compiled_run_needs(t
 
 
 def test_the_models_of_the_pilots_name_an_example_without_an_instance(tmp_path):
-    """The two models a pilot has run on carry the block, and the example each names is one of the Lean
-    project's examples of a proof whose run the service makes (checked against the project where it is)."""
+    """The models a pilot has run on or is prepared for carry the block, and the example each names is one of the
+    Lean project's examples of a proof whose run the service makes (checked against the project where it is)."""
     lean = Path(os.environ.get("COMPACT_PROOF_LEAN", "~/Desktop/VerifiedMechanisms/LeanFormalisations/CompactCheck")).expanduser()
-    for model in ("models/max2", "models/attn-min2"):
+    for model in ("models/max2", "models/attn-min2", "models/max4", "models/min4"):
         block = yaml.safe_load((REPO_ROOT / model / "config.yaml").read_text())["open_lane"]["compiled"]
         assert block["example"].startswith("examples/open_lane/") and block["example"].endswith("Run.lean")
         assert "instance" not in block["notes"] and "kernel" not in block["notes"]
