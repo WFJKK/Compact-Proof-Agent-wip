@@ -1,0 +1,46 @@
+# The linear max-of-2 pilot on max2-v64-s0 with the checker's run made by the Lean service (open_lane.instance:
+# compiled, the service's policy v15), starting from a checker that exists. One discovery round, three
+# formalization rounds, sessions of 60 minutes, then a reading of the best proof's checker.
+#
+# Why this run. Three short test runs on this network (10 and 11 November 2026) left one complete proof,
+# written into pilot-linear-max2-test-2 a minute after its session's time was up, so that run never counted it:
+# 4,095 of 4,096 inputs at length 298,016, against brute force's 2,683,968. Its check took 82 minutes on the
+# Mac (compile 19, kernel 19, score 44), so a three-hour session had room for one or two such checks. With the
+# run made by the service the same checker and soundness proof are one module, checked in about a minute (18
+# November, the cloud machine: 21 s): what took the 82 minutes was the run in Lean's kernel. Nothing shorter
+# than that proof was ever formalized on this network.
+#
+# The run is given that checker to start from (open_lane.start_drafts): the module of 11 November adapted to
+# the Lean library as it is now, as a draft. It is not accepted and counts for nothing until a session submits
+# it. The agent is told where it comes from and what the service said of it, nothing else.
+# Without it (a run from an empty workspace): --set open_lane.start_drafts=[]
+#
+# Before starting it:
+#
+#     python3 -m core.open_lane.dry_start --config config/pilot/linear-max2-ptl-2.yaml --sandbox seatbelt --check
+#
+# compiles the given module in the first round's workspace, shows the run the service makes of its checker and
+# submits it, with no agent and no API call: READY or NOT READY.
+# Budget, when billed to an API key (--auth api_key): at most $30 a session and $150 for the run (four proof
+# rounds and the reading; the earlier runs cost $0.35 to $0.39 a minute, so an hour is at most about $24).
+extends: linear-max2-ptl-day.yaml
+run_id: linear-max2-ptl-2
+rounds_max: 4
+api_budget: {run_usd: 150, round_usd: 30}
+open_lane:
+  instance: compiled
+  discovery_rounds: 1
+  # The checker of the best scored proof is read after the rounds, in a session that proves and submits nothing,
+  # for numbers of the network written into its code. A language model's reading: an alarm for a person.
+  code_review: true
+  start_drafts:
+    - path: Candidate/MaxDirect.lean
+      with: config/pilot/start/pilot-linear-max2-test-2/MaxDirect.lean
+      note: >-
+        The checker and its soundness proof from an earlier run on this network (11 November 2026). The service
+        of that day accepted and scored it with an instance theorem: 4,095 inputs at length 298,016. Two things
+        were changed for the Lean library as it is now: it imports the network's own protected module, and its
+        lemma readList_run cites the library's CostM.weight_run_of_lookup where it unfolded a read's old
+        definition. The instance modules of that run are not here: this run has no use for them.
+      # for the dry start alone (never shown to the agent): the checker the module holds, which it runs and submits
+      scored: {checker: Candidate.MaxDirect.D, sound: Candidate.MaxDirect.D_sound, certificate: []}

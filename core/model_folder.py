@@ -63,7 +63,9 @@ TRAINING_KEYS = ("optimizer", "lr", "batch_size", "steps")
 # and tells the agent, facts about the architecture and so the folder's to state (a run config may still set
 # any of them itself): the worked example and further sources as paths in the Lean project, and notes for the
 # prompt (what is known about running this architecture in Lean's kernel).
-OPEN_LANE_FACTS = {"example": str, "extra_sources": list, "notes": str}
+# `compiled`: {example, notes} for a run whose instance the Lean service runs compiled (open_lane.instance): a
+# worked example with no instance theorem, and notes that say nothing about the kernel's run.
+OPEN_LANE_FACTS = {"example": str, "extra_sources": list, "notes": str, "compiled": dict}
 
 
 class ModelFolderError(ValueError):
@@ -207,6 +209,9 @@ def load_model_folder(path: str | Path) -> ModelFolder:
             raise ModelFolderError(f"{path.name}: config.yaml open_lane.{key} must be a {typ.__name__}")
     if not all(isinstance(p, str) for p in block.get("extra_sources", [])):
         raise ModelFolderError(f"{path.name}: config.yaml open_lane.extra_sources must be a list of paths")
+    other = block.get("compiled", {})
+    if not set(other) <= {"example", "notes"} or not all(isinstance(v, str) for v in other.values()):
+        raise ModelFolderError(f"{path.name}: config.yaml open_lane.compiled may hold example and notes, each a text")
 
     model_mod = _import_file(path / "model.py", "model")
     import torch

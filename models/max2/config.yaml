@@ -55,3 +55,16 @@ open_lane:
     - Time: at vocabulary size 64 the service can take a quarter of an
       hour to accept a scored proof, a third of it in the kernel. Plan
       your compiles and submissions with that in mind.
+  # For a run whose checker the service runs compiled (open_lane.instance: compiled): the same brute-force
+  # checker and soundness proof with no instance theorem, and how the tools behave at this size then. Measured on
+  # 18 November 2026 on max2-v64-s0 (Lean 4.35.0-rc4, the Lean service at policy v15).
+  compiled:
+    example: examples/open_lane/max2_tiny_run/Candidate/Max2TinyRun.lean
+    notes: |
+      - The worked example below is brute force on a smaller network of this
+        architecture (vocabulary size 8, hidden width 4, 64 inputs), not this
+        session's network. Its checker and its soundness proof hold for any
+        size.
+      - Time: at vocabulary size 64 the service ran brute force, compiled,
+        on the network and on its eight copies in 40 s, and the whole
+        submission took a minute.

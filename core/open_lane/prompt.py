@@ -40,7 +40,7 @@ from . import continuation
 from . import research
 from . import surface as surfaces
 from . import workflow
-from .session import Session, ToolError
+from .session import Session, ToolError, tool_table
 
 MAX_LEMMA_CHARS = 12000
 MAX_NOTES_CHARS = 6000
@@ -72,9 +72,14 @@ NOT_READY_TEXT = (
     "The proof your score rests on (length {length:,}) cannot be taken to the seed check as it is: {why} Before "
     "the rounds end, submit it again with the checker and its soundness proof in modules apart from the instance."
 )
+# the same in a run whose checker the service runs compiled: there is no instance to move, and the reason says what to mend
+NOT_READY_TEXT_COMPILED = (
+    "The proof your score rests on (length {length:,}) cannot be taken to the seed check as it is: {why} Before "
+    "the rounds end, submit it again without that."
+)
 
 
-def not_ready_line(records: list[dict], entries: list[dict], ready: dict | None) -> str:
+def not_ready_line(records: list[dict], entries: list[dict], ready: dict | None, compiled: bool = False) -> str:
     """For a run on one network with a seed check: a line for the aim when the best scored proof (the one
     that finishes the network cheapest) cannot be locked; empty otherwise."""
     if ready is None or len(entries) != 1:
@@ -87,7 +92,8 @@ def not_ready_line(records: list[dict], entries: list[dict], ready: dict | None)
                 best = (d["total"], r)
     if best is None or ready[best[1]["record_id"]] is None:
         return ""
-    return NOT_READY_TEXT.format(length=best[1]["length"], why=ready[best[1]["record_id"]][:MAX_REASON].rstrip(".") + ".")
+    text = NOT_READY_TEXT_COMPILED if compiled else NOT_READY_TEXT
+    return text.format(length=best[1]["length"], why=ready[best[1]["record_id"]][:MAX_REASON].rstrip(".") + ".")
 
 
 def lean_project(cfg: dict) -> Path:
@@ -198,6 +204,13 @@ AFTER_SEED_CHECK = """- The seed check. The checker of your best scored proof th
   differently, or with smaller margins. Numbers that belong to one
   network reach a checker through the charged certificate, never
   through its code."""
+# the same in a run whose checker the service runs compiled (open_lane.instance): there is no instance to write
+AFTER_SEED_CHECK_COMPILED = AFTER_SEED_CHECK.replace(
+    """seed. You then write only the instance for that network, with a new
+  certificate if the checker reads one. This measures how a fixed""",
+    """seed. You then give only a new certificate and plan for that network,
+  if the checker reads any. This measures how a fixed""")
+assert AFTER_SEED_CHECK_COMPILED != AFTER_SEED_CHECK
 AFTER_SCALING = """- The scaling question. {when} you are asked how your checker's cost
   grows with the sizes of the network, whether it grows more slowly than
   brute force, and to prove as much of the answer as you can. Nothing
@@ -235,7 +248,7 @@ def after_rounds_text(ol: dict) -> str:
     run has them."""
     parts = []
     if ol.get("seed_check"):
-        parts.append(AFTER_SEED_CHECK)
+        parts.append(AFTER_SEED_CHECK_COMPILED if ol.get("instance") == workflow.COMPILED else AFTER_SEED_CHECK)
     if ol.get("scaling"):
         parts.append(AFTER_SCALING.format(when="Last," if parts and not ol.get("code_review") else "Then"))
     if ol.get("code_review"):
@@ -245,7 +258,9 @@ def after_rounds_text(ol: dict) -> str:
 
 def modules_rule_text(ol: dict) -> str:
     """The advice to keep the checker's modules apart from the instance's: only a run with a session after
-    its proof rounds needs it."""
+    its proof rounds needs it, and only one whose proofs have an instance (open_lane.instance kernel)."""
+    if ol.get("instance") == workflow.COMPILED:
+        return ""
     why = (MODULES_WHY["seed_check"] if ol.get("seed_check") else MODULES_WHY["scaling"] if ol.get("scaling") else
            MODULES_WHY["code_review"] if ol.get("code_review") else None)
     return MODULES_RULE + why if why else ""
@@ -291,7 +306,17 @@ def extra_sources_text(project: Path, rels: list[str], surface: dict) -> str:
     return "\n".join(f"From {rel}:\n{lean_block(_read(project, rel, surface))}" for rel in rels)
 
 
-def protected_interface() -> str:
+def protected_interface(instance: str = workflow.KERNEL) -> str:
+    """The protected modules a proof is written against: the claim's and the network's, or, in a run whose
+    checker the service runs compiled, the network's alone (nothing is claimed)."""
+    if instance == workflow.COMPILED:
+        return lean_block(
+            "namespace Protected.N_<network>     -- for example Protected.N_max2_v64_s0\n"
+            "def graph : Graph := ...            -- the network's graph, operation by operation\n"
+            "def weights : Weights ℚ := ...      -- every weight, an exact dyadic rational\n"
+            "def task : Task := ...              -- the task: input space and label function\n"
+            "end Protected.N_<network>"
+        )
     return lean_block(
         "namespace Protected.N_<network>_c<claimed>  -- the claim; for example Protected.N_max2_v64_s0_c4095\n"
         "def graph : Graph := ...            -- the network's graph, operation by operation\n"
@@ -353,24 +378,25 @@ def static_values(cfg: dict, folder: ModelFolder, entries: list[dict]) -> dict:
     )
     ol = cfg["open_lane"]
     budgets = budgets_text(ol)
+    compiled = workflow.is_compiled(cfg)
     return {
         "MODEL_SOURCE": "\n```python\n" + folder.source().rstrip() + "\n```",
         "TASK_DESCRIPTION": folder.task.DESCRIPTION,
         "SIZE_SETTINGS": size_settings,
         "NETWORKS": networks_text(entries),
-        "PROTECTED_INTERFACE": protected_interface(),
+        "PROTECTED_INTERFACE": protected_interface(workflow.instance(cfg)),
         "SPEC": lean_block(_read(project, "CompactCheck/Spec.lean", surface)),
         "COUNTED": lean_block(_read(project, "CompactCheck/Counted.lean", surface)),
         "COUNTED_OPS": lean_block(_read(project, "CompactCheck/CountedOps.lean", surface)),
         "EXAMPLE": lean_block(elide_repeats(_read(project, ol["example"], surface))),
         "EXTRA_SOURCES": extra_sources_text(project, ol["extra_sources"], surface),
         "SECOND_EXAMPLE": second_example_text(ol.get("second_example")),
-        "SPLIT_EXAMPLE": split_example_text(ol),
+        "SPLIT_EXAMPLE": "" if compiled else split_example_text(ol),
         "MODEL_NOTES": (ol.get("notes") or "").strip(),
         "AFTER_ROUNDS": after_rounds_text(ol),
         "MODULES_RULE": modules_rule_text(ol),
         "KNOWLEDGE": KNOWLEDGE_TEXT[ol.get("knowledge", "minimal")],
-        "TOOLS": tools_text(surface, cfg["open_lane"]),
+        "TOOLS": tools_text(surface, cfg["open_lane"], tool_table(False, compiled)),
         "BUDGETS": budgets,
         "METRIC": metric_text(cfg, folder, entries) + (
             f"\nThe budget grid, per size setting: {grid_text(entries, cfg['budget_ratio'])}." if cfg["metric"] == "Q_grid" else ""),
@@ -383,8 +409,6 @@ def phase_static_values(cfg: dict, surface: dict) -> dict:
     another run, whose templates do not ask for it."""
     if not workflow.is_phased(cfg):
         return {}
-    from .session import RESEARCH_TOOLS
-
     sched = workflow.schedule(cfg)
     (d0, d1), (f0, f1) = sched["discovery_rounds"], sched["formalization_rounds"]
     probe, res = sched["probe"], sched["research"]
@@ -399,7 +423,7 @@ def phase_static_values(cfg: dict, surface: dict) -> dict:
                            "accepted Lean results. Neither phase ends early for want of a submission."),
         "PROBE_ALLOWANCE": allowance,
         "RESEARCH_LIMITS": f"The folder holds up to {res['mb']:g} MB in {res['files']:,} files.",
-        "RESEARCH_TOOLS": tools_text(surface, cfg["open_lane"], RESEARCH_TOOLS),
+        "RESEARCH_TOOLS": tools_text(surface, cfg["open_lane"], tool_table(True, workflow.is_compiled(cfg))),
     }
 
 
@@ -494,7 +518,8 @@ def receipts_text(records: list[dict], entries: list[dict] | None = None, metric
     for r in records:
         if r.get("lane") != "open" or r.get("status") == "no_submission":
             continue
-        head = f"- round {r['round']} submission {r.get('submission')}: {r.get('network')}, claimed {r.get('claimed_count')}: {r['status']}"
+        claimed = "" if r.get("claimed_count") is None else f", claimed {r.get('claimed_count')}"  # none: the service ran it
+        head = f"- round {r['round']} submission {r.get('submission')}: {r.get('network')}{claimed}: {r['status']}"
         if r["status"] == "ok":
             line = lines_by_net.get(r.get("network"))
             above = ""
@@ -581,6 +606,13 @@ DRAFTS_HEAD = (
     "lean_check (`edits: []` compiles it as saved) before another module imports it. A draft whose path an accepted "
     "module holds is set apart in drafts/: read it there, and save it at a path with lean_check to go on with it."
 )
+# the modules a fresh run was given to start from (open_lane.start_drafts), for as long as the agent leaves them as they are
+GIVEN_HEAD = (
+    "Modules this run was given to start from. They are in your workspace and are yours to use, change or leave. "
+    "They are drafts, not accepted: nothing in them counts until a submission of them is accepted in this run. None "
+    "was compiled before this session began: compile one with lean_check (`edits: []` compiles it as saved) before "
+    "another module imports it."
+)
 MAX_DRAFTS_LISTED = 40
 PYTHON_HEAD = (
     "Your Python workspace (py/), as your last session left it: the files your run_python code kept there. Your "
@@ -644,6 +676,14 @@ def workspace_text(carried, drafts=None, python=None) -> str:
                 lines.append("  The workspace holds a version of it adapted to the Lean library as it is now, not the "
                              "accepted text" + (f": {note}" if note else "."))
         parts.append("\n".join(lines))
+    given = [d for d in drafts if d.get("given")] if isinstance(drafts, list) else []
+    if given:
+        lines = [GIVEN_HEAD]
+        for d in sorted(given, key=lambda d: d["path"]):
+            note = str(d.get("note") or "").strip()
+            lines.append(f"- {d['path']} ({d.get('lines')} lines)" + (f": {note}" if note else ""))
+        parts.append("\n".join(lines))
+        drafts = [d for d in drafts if not d.get("given")]
     if drafts and isinstance(drafts, list):
         ds = sorted(drafts, key=lambda d: (bool(d.get("from_run")), -(d.get("saved_round") or 0), d["path"]))  # this run's first
         lines = [DRAFTS_HEAD] + [draft_line(d) for d in ds[:MAX_DRAFTS_LISTED]]
@@ -870,7 +910,7 @@ def build_open_lane_prompt(cfg: dict, folder: ModelFolder, entries: list[dict], 
     unread: list[str] = []
     ready = (lock_readiness(run, records, lean_project(cfg), unread)
              if cfg["open_lane"].get("seed_check") and phase != workflow.DISCOVERY else None)
-    nudge = not_ready_line(records, entries, ready)
+    nudge = not_ready_line(records, entries, ready, workflow.is_compiled(cfg))
     earlier = earlier_receipts(run, cfg, entries)  # a continuation's earlier run, listed apart
     if phase:
         values = phase_values(cfg, run, records, entries, k, session, nudge)

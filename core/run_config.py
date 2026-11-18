@@ -81,19 +81,29 @@ def read_run_config_file(path: str | Path, _seen: tuple = ()) -> dict:
 
 
 MODEL_OPEN_LANE_KEYS = ("example", "extra_sources", "notes")
+INSTANCES = ("kernel", "compiled")  # open_lane.instance: who runs the checker on the network (the Lean service's scored.run)
 
 
-def model_open_lane(model: object) -> dict:
+def model_open_lane(model: object, instance: object = "kernel") -> dict:
     """The open-lane facts a model folder carries in its config.yaml (`open_lane`: the worked example and
-    further sources in the Lean project, notes for the agent); empty without them. The folder's own loader
-    checks their form (core.model_folder)."""
-    if not isinstance(model, str):
-        return {}
-    path = resolve(model) / "config.yaml"
-    if not path.is_file():
-        return {}
-    block = (read_yaml(path) or {}).get("open_lane")
-    return {k: v for k, v in block.items() if k in MODEL_OPEN_LANE_KEYS} if isinstance(block, dict) else {}
+    further sources in the Lean project, notes for the agent); empty without them. For a run whose instance
+    the service runs compiled (open_lane.instance), the folder's `compiled` block replaces what it says for a
+    kernel instance: another worked example (one with no instance theorem) and other notes (none, when the
+    block gives none: the folder's notes are about getting an instance through the kernel). The folder's own
+    loader checks their form (core.model_folder)."""
+    block = None
+    if isinstance(model, str):
+        path = resolve(model) / "config.yaml"
+        block = (read_yaml(path) or {}).get("open_lane") if path.is_file() else None
+    block = block if isinstance(block, dict) else {}
+    out = {k: v for k, v in block.items() if k in MODEL_OPEN_LANE_KEYS}
+    if instance == "compiled":
+        # no example unless the folder (or the run config, which comes after) names one for such a run: the
+        # default example and a folder's own both carry an instance theorem, which such a run's prompt says a
+        # proof does not have
+        other = block.get("compiled") if isinstance(block.get("compiled"), dict) else {}
+        out.update({"example": None, "notes": ""}, **{k: v for k, v in other.items() if k in ("example", "notes")})
+    return out
 
 
 def load_run_config(path: str | Path, run_id: str | None = None, overrides: dict | None = None) -> dict:
@@ -157,7 +167,10 @@ def merge(raw: dict, source: str = "run config") -> dict:
     cfg = {**base, **raw}
     if isinstance(raw.get("open_lane", {}), dict):
         # the defaults, then what the model folder says about itself, then the run config
-        cfg["open_lane"] = {**base["open_lane"], **model_open_lane(raw.get("model")), **raw.get("open_lane", {})}
+        instance = raw.get("open_lane", {}).get("instance", base["open_lane"].get("instance", "kernel"))
+        cfg["open_lane"] = {**base["open_lane"], **model_open_lane(raw.get("model"), instance), **raw.get("open_lane", {})}
+        if instance == "compiled":  # the example of an instance put together from kernel facts has no place there
+            cfg["open_lane"]["split_example"] = None
     validate(cfg, source)
     if cfg["open_lane"]["enabled"] and "rule_set" not in raw:
         raise RunConfigError(f"{source}: with the open lane on, rule_set must be written in the run config (no implicit default)")
@@ -282,7 +295,7 @@ OPEN_LANE_KEYS = {"enabled", "lean_project", "work_dir", "python", "compile_call
                   "max_turns", "worker_seconds", "notes_reserve_seconds", "python_workspace_mb", "python_workspace_files", "stall_rounds", "fake_scripts", "example", "extra_sources", "knowledge", "second_example", "notes",
                   "seed_check", "scaling", "code_review", "split_example", "workflow_mode", "discovery_rounds", "probe_compile_calls",
                   "probe_auxiliary_submissions", "probe_seconds", "research_workspace_mb", "research_workspace_files",
-                  "continue_from", "continue_note", "carried_replace"}
+                  "continue_from", "continue_note", "carried_replace", "instance", "start_drafts"}
 KNOWLEDGE_CONDITIONS = ("minimal", "maximum")
 WORKFLOW_MODES = ("interleaved", "python_then_lean")
 
@@ -305,11 +318,13 @@ def workflow_errors(cfg: dict, ol: dict) -> list[str]:
         if ol.get("enabled") is not True:
             errors.append("open_lane.workflow_mode python_then_lean needs open_lane.enabled: true")
         n, total = ol.get("discovery_rounds", 0), cfg.get("rounds_max")
-        least = 0 if ol.get("continue_from") else 1  # a continuation may go straight on with formalization
+        # a continuation, and a run given modules to start from, may go straight on with formalization
+        least = 0 if ol.get("continue_from") or ol.get("start_drafts") else 1
         if isinstance(total, int) and not isinstance(total, bool) and not least <= n < total:
             errors.append(f"open_lane.discovery_rounds must be at least {least} and less than rounds_max ({total}) in "
                           "python_then_lean mode: the rounds after discovery are formalization's"
-                          + ("" if least == 0 else " (0 only in a run that continues an earlier one, open_lane.continue_from)"))
+                          + ("" if least == 0 else " (0 only in a run that continues an earlier one, open_lane.continue_from, "
+                                                   "or is given modules to start from, open_lane.start_drafts)"))
     return errors
 
 
@@ -342,7 +357,11 @@ def open_lane_errors(cfg: dict) -> list[str]:
     for key in ("lean_project", "work_dir", "python"):
         if ol.get(key) is not None and not isinstance(ol[key], str):
             errors.append(f"open_lane.{key} must be a path or null")
-    if not isinstance(ol.get("example"), str) or not ol["example"]:
+    if ol.get("example") is None and ol.get("instance") == "compiled":
+        errors.append("open_lane.example: a run with instance: compiled needs a worked example without an instance "
+                      "theorem: open_lane.compiled.example in the model folder's config.yaml, or open_lane.example in "
+                      "the run config")
+    elif not isinstance(ol.get("example"), str) or not ol["example"]:
         errors.append("open_lane.example must be a path in the Lean project")
     if not isinstance(ol.get("extra_sources"), list) or not all(isinstance(p, str) for p in ol["extra_sources"]):
         errors.append("open_lane.extra_sources must be a list of paths in the Lean project")
@@ -378,6 +397,33 @@ def open_lane_errors(cfg: dict) -> list[str]:
         errors.append("open_lane.scaling must be true or false")
     if not isinstance(ol.get("code_review", False), bool):
         errors.append("open_lane.code_review must be true or false")
+    if ol.get("instance", "kernel") not in INSTANCES:
+        errors.append(f"open_lane.instance must be one of {', '.join(INSTANCES)}")
+    elif ol.get("instance") == "compiled" and ol.get("workflow_mode", "interleaved") != "python_then_lean":
+        errors.append("open_lane.instance: compiled is for a python_then_lean run (open_lane.workflow_mode): the prompts "
+                      "that tell the agent to leave the run to the service are that workflow's")
+    starts = ol.get("start_drafts") or []
+    name = r"Candidate(\.[A-Za-z_][A-Za-z0-9_]*)+"
+    naturals = lambda v: isinstance(v, list) and all(isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in v)
+    block_ok = lambda b: (isinstance(b, dict) and set(b) <= {"checker", "sound", "certificate", "plan"}
+                          and all(isinstance(b.get(k), str) and re.fullmatch(name, b[k]) for k in ("checker", "sound"))
+                          and isinstance(b.get("certificate", []), list) and ("plan" not in b or naturals(b["plan"])))
+    if not (isinstance(starts, list) and all(
+            isinstance(r, dict) and set(r) <= {"path", "with", "note", "scored"} and isinstance(r.get("path"), str)
+            and re.match(r"^Candidate/([A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\.lean$", r["path"])
+            and isinstance(r.get("with"), str) and r["with"].strip() and isinstance(r.get("note", ""), str)
+            and ("scored" not in r or block_ok(r["scored"])) for r in starts)):
+        errors.append("open_lane.start_drafts must be a list of {path: Candidate/<Name>.lean, with: <file>, note: <text>, "
+                      "scored: {checker, sound, certificate, plan}} (scored is optional: the checker the module holds, for "
+                      "the dry start to run and submit)")
+    elif len({r["path"] for r in starts}) != len(starts):
+        errors.append("open_lane.start_drafts names a module twice")
+    elif any("scored" in r for r in starts) and ol.get("instance") != "compiled":
+        errors.append("open_lane.start_drafts: `scored` names a checker for the service to run, which is for a run with "
+                      "open_lane.instance: compiled")
+    elif starts and ol.get("continue_from"):
+        errors.append("open_lane.start_drafts is for a run that starts afresh: a run that continues another "
+                      "(open_lane.continue_from) starts from that run's modules")
     if ol.get("knowledge") not in KNOWLEDGE_CONDITIONS:
         errors.append(f"open_lane.knowledge must be one of {', '.join(KNOWLEDGE_CONDITIONS)}")
     errors += workflow_errors(cfg, ol)

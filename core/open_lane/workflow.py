@@ -42,6 +42,14 @@ INTERLEAVED, PYTHON_THEN_LEAN = "interleaved", "python_then_lean"
 MODES = (INTERLEAVED, PYTHON_THEN_LEAN)
 DISCOVERY, FORMALIZATION = "discovery", "formalization"
 TEMPLATES = {DISCOVERY: "open_lane_discovery_v1", FORMALIZATION: "open_lane_formalization_v1"}
+# How a scored proof's run on the network is established (open_lane.instance; core/run_config.py INSTANCES).
+# kernel: the agent proves the run as an instance theorem, which Lean's kernel checks. compiled: the agent proves
+# soundness alone and the Lean service runs the compiled checker itself (its policy v15, scored.run compiled).
+# The second has its own templates, which say nothing of an instance theorem; their first parts differ from the
+# first's in those passages alone (tests/test_open_lane_compiled.py).
+KERNEL, COMPILED = "kernel", "compiled"
+TEMPLATES_COMPILED = {DISCOVERY: "open_lane_discovery_v2", FORMALIZATION: "open_lane_formalization_v2"}
+GENERAL_COMPILED = "open_lane_v7"  # the first part of the prompt of a session after the proof rounds, in such a run
 STATE_FILE = "workflow.json"
 PROBES_FILE = "probes.json"
 TRANSITION_FILE = "transition.json"
@@ -74,23 +82,47 @@ def phase(cfg: dict, k: int) -> str | None:
     return DISCOVERY if k <= int(cfg["open_lane"]["discovery_rounds"]) else FORMALIZATION
 
 
+def instance(cfg: dict) -> str:
+    """How the run's scored proofs establish their run on the network: KERNEL (an instance theorem) or COMPILED
+    (the service runs the checker)."""
+    return (cfg.get("open_lane") or {}).get("instance") or KERNEL
+
+
+def is_compiled(cfg: dict) -> bool:
+    return instance(cfg) == COMPILED
+
+
+def templates(cfg: dict) -> dict:
+    """The phases' prompt templates of a python_then_lean run."""
+    return TEMPLATES_COMPILED if is_compiled(cfg) else TEMPLATES
+
+
+def general_template(cfg: dict) -> str:
+    """The template whose first part a session outside the phases gets (a session after the proof rounds)."""
+    return GENERAL_COMPILED if is_compiled(cfg) else cfg["prompt_template"]
+
+
 def schedule(cfg: dict) -> dict:
-    """What the run fixes when it starts: the mode, the phases' rounds and the discovery allowance."""
+    """What the run fixes when it starts: the mode, the phases' rounds and the discovery allowance; and, in a
+    run whose checker the service runs compiled, that (a run before the choice existed has no such entry and
+    is a kernel run)."""
     ol = cfg["open_lane"]
     n, total = int(ol.get("discovery_rounds", 0)), int(cfg["rounds_max"])
     out = {"mode": mode(cfg), "rounds_max": total}
     if out["mode"] == PYTHON_THEN_LEAN:
-        out.update(discovery_rounds=[1, n], formalization_rounds=[n + 1, total], templates=dict(TEMPLATES),
+        out.update(discovery_rounds=[1, n], formalization_rounds=[n + 1, total], templates=dict(templates(cfg)),
                    probe={"compile_calls": int(ol["probe_compile_calls"]), "auxiliary_submissions": int(ol["probe_auxiliary_submissions"]),
                           "seconds": float(ol["probe_seconds"])},
                    research={"mb": float(ol["research_workspace_mb"]), "files": int(ol["research_workspace_files"])})
+    if is_compiled(cfg):
+        out["instance"] = COMPILED
     return out
 
 
 def template(cfg: dict, k: int) -> str:
     """The prompt template of round k: the phase's in a python_then_lean run, prompt_template otherwise."""
     p = phase(cfg, k)
-    return TEMPLATES[p] if p else cfg["prompt_template"]
+    return templates(cfg)[p] if p else cfg["prompt_template"]
 
 
 def recorded(run_dir: Path) -> dict | None:

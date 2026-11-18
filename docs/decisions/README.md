@@ -51,3 +51,9 @@ working from the repositories can read them. Each is dated; later decisions supe
   random bits measure 11,536 when written with an alphabet of variables); the seed check with the plan bounded
   in information does (policy v12). A dry start before a run, replaced carried modules, and the measured
   length of a proof refused scoring.
+- [run-by-compiled-code-v15.md](run-by-compiled-code-v15.md) (18 November 2026): a result is soundness
+  (mathematics, kernel-checked) and the run on the network (arithmetic). With `open_lane.instance: compiled`
+  the agent proves soundness alone and the Lean service runs the compiled checker for the count and the bill
+  (its policy v15): the linear proof's check goes from 82 minutes to 21 s, and the proof from ten modules to
+  one. The kernel mode stays, the default stays kernel, and every result says which it was. With it: start
+  drafts, for work that no run folder can hand on.

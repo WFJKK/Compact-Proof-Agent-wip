@@ -115,6 +115,12 @@ def open_lane_records(ctx, k: int, j: int, source: str) -> list[dict]:
             "receipt": {k_: receipt.get(k_) for k_ in ("status", "reason", "scoring", "digests", "receipt_path")},
             "versions": ctx.versions,
         }
+        if session.compiled and not receipt.get("claimed_count"):
+            rec["claimed_count"] = None  # nothing is claimed in such a session (the service's 0 for a lemma names a module)
+        if receipt.get("run"):
+            # who ran the checker on the network for a scored proof: the kernel (an instance theorem) or the service
+            # with compiled code (the Lean service's policy v15). A receipt before that policy says nothing: kernel.
+            rec["run"] = receipt["run"]
         tag_file = path / "submissions" / f"{int(n):03d}" / "research.json"
         if tag_file.is_file():  # the research candidate a submission of a python_then_lean run names (the agent's word)
             tag = json.loads(tag_file.read_text())

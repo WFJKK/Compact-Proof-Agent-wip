@@ -20,6 +20,12 @@ sessions follow, each one round of the run, each resumable like any round:
   it is compared exactly. The reader's answer (clean, suspect or unclear, and what it found) is an alarm for
   a person. It never decides a score.
 
+In a run whose checker the service runs compiled (open_lane.instance compiled) a proof has no instance
+theorem, so the whole proof is locked and the seed check's session writes no Lean: it gives the second
+network's certificate and plan, and the service runs the locked checker there. Such a run's stages have their
+own texts where the kernel run's speak of an instance (STAGE_TEXTS_COMPILED), and the first part of their
+prompts is the compiled run's (workflow.general_template).
+
 Lean not answering (no Lean, no compiled modules) decides nothing: the run halts and a resume asks again.
 
 `stages.json` in the run folder records that the proof rounds are over, which proof was locked (or why none
@@ -39,9 +45,12 @@ from ..scoring import fallback_cost_per_input
 from .lock import LockError, LockUnread, read_lock
 from .prompt import static_values
 from .records import proof_records
+from . import workflow
 from .session import Session
 
 STAGES = ("seed_check", "scaling", "code_review")
+# the stages' texts in a run whose checker the service runs compiled, where they differ (open_lane.instance)
+STAGE_TEXTS_COMPILED = {"seed_check": "open_lane_seed_check_v2", "scaling": "open_lane_scaling_v2"}
 VERDICTS = ("clean", "suspect", "unclear")
 STATE_FILE = "stages.json"
 
@@ -204,8 +213,14 @@ def rename_text(lock: dict) -> str:
             "the one of its network, claimed count, certificate and plan.")
 
 
+def stage_text(cfg: dict, name: str) -> Path:
+    """The file with a stage's own text: the run's kind's, where the two kinds of run differ."""
+    stem = STAGE_TEXTS_COMPILED.get(name) if workflow.is_compiled(cfg) else None
+    return TEMPLATES / f"{stem or 'open_lane_' + name}.md"
+
+
 def free_text(lock: dict) -> str:
-    if not lock["free"]:
+    if not lock["free"] or lock.get("run") == "compiled":  # a proof the service ran has no instance to adapt
         return ""
     return (" The first network's instance (" + ", ".join(lock["free"]) + ") is in your workspace to read and adapt; "
             "saving over it is allowed.")
@@ -240,7 +255,7 @@ def seed_check_line(state: dict) -> str:
 def build_stage_prompt(cfg: dict, folder, run: RunDir, k: int, name: str, state: dict, entry: dict) -> Prompt:
     """The prompt of a stage's session: the run's part 1 (for the network of this session) and the stage's
     own second part. Opens the stage's session, which starts from the locked proof."""
-    part1_t, _ = load_template(cfg["prompt_template"])
+    part1_t, _ = load_template(workflow.general_template(cfg))
     part1 = fill(part1_t, static_values(cfg, folder, [entry]))
     leaked = [t for t in forbidden(folder) if t in part1]
     if leaked:
@@ -254,7 +269,7 @@ def build_stage_prompt(cfg: dict, folder, run: RunDir, k: int, name: str, state:
         raise StageError(f"the locked proof's modules in {locked['submission_dir']} changed since they were locked; the run halts")
     stage = {"name": name, "of": locked["record_id"], "submission": locked["submission_dir"], "lock": lock}
     Session.create(run.round_path(k) / "attempt_0" / "open_lane", cfg, cfg["model"], [entry], run.path, stage=stage)
-    path = TEMPLATES / f"open_lane_{name}.md"
+    path = stage_text(cfg, name)
     if not path.is_file():
         raise PromptError(f"no prompt text {path.name} in {TEMPLATES}")
     n = entry["n_inputs"]
@@ -267,7 +282,7 @@ def build_stage_prompt(cfg: dict, folder, run: RunDir, k: int, name: str, state:
     }
     part2 = fill(path.read_text(), values)
     stats = {"chars": len(part1) + len(part2), "tokens_estimate": (len(part1) + len(part2)) // CHARS_PER_TOKEN, "trimmed": [],
-             "template": cfg["prompt_template"], "lane": "open", "stage": name}
+             "template": workflow.general_template(cfg), "lane": "open", "stage": name}
     return Prompt(part1, part2, stats)
 
 

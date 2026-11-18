@@ -383,12 +383,12 @@ def check_surface(cfg: dict, folder, entries: list[dict], log=print) -> str:
     surface that holds proofs to what it shows, Lean reads the library the project built as the surface
     says (core.open_lane.offered). Returns the digest of what is shown (core.open_lane.surface.digest),
     which a run records and keeps."""
-    from .agent.build_prompt import PromptError, TEMPLATES, fill, forbidden, load_template
+    from .agent.build_prompt import PromptError, fill, forbidden, load_template
     from .open_lane import offered
     from .open_lane import surface as surfaces
     from .open_lane.prompt import static_values
-    from .open_lane.session import run_python_folder
-    from .open_lane.stages import planned
+    from .open_lane.session import run_python_folder, start_drafts
+    from .open_lane.stages import planned, stage_text
 
     project = resolve(cfg["open_lane"]["lean_project"])
     try:
@@ -396,16 +396,22 @@ def check_surface(cfg: dict, folder, entries: list[dict], log=print) -> str:
         from .open_lane import workflow
 
         statics = static_values(cfg, folder, entries)
-        part1_t, part2_t = load_template(cfg["prompt_template"])
+        # the template of a round outside the phases, and of the sessions after the rounds (the compiled run's own
+        # where the service runs the checker: open_lane.instance)
+        part1_t, part2_t = load_template(workflow.general_template(cfg))
         shown = {"the prompt's first part": fill(part1_t, statics),
                  "the prompt's second part (its template)": part2_t}
         if workflow.is_phased(cfg):  # the phases' own templates, which the rounds send instead
-            for phase, name in workflow.TEMPLATES.items():
+            for phase, name in workflow.templates(cfg).items():
                 p1, p2 = load_template(name)
                 shown[f"the {phase} prompt's first part"] = fill(p1, statics)
                 shown[f"the {phase} prompt's second part (its template)"] = p2
         for name in planned(cfg):
-            shown[f"the {name} session's text"] = (TEMPLATES / f"open_lane_{name}.md").read_text()
+            shown[f"the {name} session's text"] = stage_text(cfg, name).read_text()
+        for d in start_drafts(cfg):  # modules the run is given to start from: shown to the agent like any file
+            shown[f"the start draft {d['path']}"] = d["text"].decode("utf-8", "replace")
+            if d.get("note"):
+                shown[f"the note on the start draft {d['path']}"] = d["note"]
         for name, text in run_python_folder(folder.source()).items():
             shown[f"run_python's folder: {name}"] = text
         surfaces.check(surface, project, shown, extra_forbidden=forbidden(folder))

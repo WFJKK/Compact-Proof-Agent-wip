@@ -52,3 +52,11 @@ open_lane:
       of this run's networks. Its checker and its soundness proof hold for
       any size; its instance is one theorem, and brute force on this run's
       networks (B above) is far beyond what one theorem holds.
+  # for a run whose checker the service runs compiled (open_lane.instance: compiled)
+  compiled:
+    example: examples/open_lane/max2_tiny_run/Candidate/Max2TinyRun.lean
+    notes: |
+      - The worked example below is brute force on a smaller network of this
+        architecture (8 tokens, hidden width 4, 64 inputs), which is not one
+        of this run's networks. Its checker and its soundness proof hold for
+        any size.

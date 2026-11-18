@@ -190,7 +190,11 @@ def build_report(run_path: str | Path, reference_path: str | Path | None = None)
         f"- Cost model {versions.get('cost_model')}, rule set {versions.get('rule_set')}, prompt template {cfg['prompt_template']}, sandbox {', '.join(modes) or 'unknown'}",
         f"- Agent use: {tokens_in:,} input and {tokens_out:,} output tokens, about ${cost:.2f} billed"
         + (f" (about ${equivalent:.2f} at API prices, covered by a subscription)" if equivalent and not cost else ""),
-        "- Open lane: every agent result is a Lean proof accepted by the acceptance service (kernel-checked count, and bill for scored ones); round 0's baselines are Python-checked."
+        ("- Open lane: every agent result is a Lean proof accepted by the acceptance service. Soundness of the checker is "
+         "kernel-checked; the count and the bill of a scored proof are those of the service's own run of the compiled "
+         "checker on the network (open_lane.instance compiled), not kernel-checked. Round 0's baselines are Python-checked."
+         if (cfg.get("open_lane") or {}).get("instance") == "compiled" else
+         "- Open lane: every agent result is a Lean proof accepted by the acceptance service (kernel-checked count, and bill for scored ones); round 0's baselines are Python-checked.")
         if open_lane
         else "- Every number is Python-checked: this model has no Lean checker yet."
         if lean_command(folder) is None
@@ -236,7 +240,9 @@ def build_report(run_path: str | Path, reference_path: str | Path | None = None)
                 rec = next((r for r in records if r["round"] == key[0] and r["attempt"] == key[1] and r.get("network") == nid
                             and r.get("length") == p["length"] and r.get("certified") == p["certified"]), {})
                 lines.append(f"- round {key[0]}: `{rec.get('theorem')}` on {nid}: certified {p['certified']}/{p['n_inputs']}, length {p['length']:,}"
-                             + (f", description size {rec['description_size']:,}" if rec.get("description_size") else ""))
+                             + (f", description size {rec['description_size']:,}" if rec.get("description_size") else "")
+                             + (", run by the service with compiled code" if rec.get("run") == "compiled" else
+                                ", run checked by the kernel" if rec.get("run") == "kernel" else ""))
             notes = (run.read(key[0], f"attempt_{key[1]}/parsed.json") or {}).get("claim", "").strip()
             if notes:
                 lines += ["", f"> {notes}"]

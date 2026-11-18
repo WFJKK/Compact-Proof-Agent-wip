@@ -191,6 +191,42 @@ digest halts the run (`core.open_lane.records.check_receipt_identity`).
 A submission of kind `auxiliary` is a lemma with any statement: accepted with no count and no score,
 recorded with status `lemma`, and shown to the agent in later rounds with its statement.
 
+## Who runs the checker (18 November 2026)
+
+A scored result has two parts: the checker is sound for every set of weights (mathematics), and on this
+network's weights it returns the count at the bill (arithmetic). `open_lane.instance` says who establishes
+the second (docs/decisions/run-by-compiled-code-v15.md; the Lean project's docs/COUNTED.md, "The run by
+compiled code").
+
+- `kernel` (the default): the agent proves the run as an instance theorem, which Lean's kernel checks, and
+  claims the count and the bill. Nothing is trusted beyond the kernel.
+- `compiled`: the agent proves soundness and nothing else. The service has the kernel check the soundness
+  theorem and then runs the compiled checker on the network itself, for the count and the bill. That trusts
+  Lean's compiler for one evaluation and takes the kernel's evaluation of the run, minutes to more than
+  an hour per submission in the pilots, off every submission.
+
+A compiled run needs `workflow_mode: python_then_lean` and a worked example without an instance theorem,
+which the model folder names (`open_lane.compiled` in its config.yaml: `example`, `notes`). What differs in
+such a run:
+
+- The prompts are `open_lane_discovery_v2`, `open_lane_formalization_v2` and, for the sessions after the
+  proof rounds, the first part of `open_lane_v7`: the kernel run's texts with the passages about the
+  instance rewritten (tests/test_open_lane_compiled.py holds them to that).
+- `lean_check` takes no claimed count and compiles against the network's own protected module. With
+  `checker` its preview holds the run: the count, the bill and the length a submission of that checker
+  gets, and the last-bits test.
+- `submit_candidate` takes a checker with its soundness theorem (`scored`: checker, sound, certificate,
+  plan), or a lemma. The session adds `run: compiled`. A scored block with an instance or a bill is refused
+  by the session, before a submission is spent.
+- A proof is locked whole (core/open_lane/lock.py): there is no instance to keep apart. The seed check's
+  session writes no Lean. It gives the second network's certificate and plan and the service runs the
+  locked checker there.
+- Every record carries `run` (kernel or compiled), the receipt its `execution_assurance`, and the report
+  says of each proof on the frontier how its run was established.
+
+A run keeps the mode it started with: it is part of the recorded schedule, and a resume with another is
+refused.
+
 ## Scoring and the next evaluation
 
 The primary objective is Q_exact (`core.scoring.q_exact`): the log-area of the verified frontier over
@@ -339,6 +375,26 @@ version of the path is carried as it is. The session's record names both digests
 the workspace holds an adapted version. A replacement that fits no carried module in the run's first round
 stops the run before the round begins. It is for a change of the library alone (a proof that unfolded a
 definition the library has since changed): the statements stay, and nothing about the network is added.
+
+### Starting from modules that no run can hand on (18 November 2026)
+
+`open_lane.start_drafts` gives a fresh run's first session modules to start from:
+
+    start_drafts:
+      - path: Candidate/MaxDirect.lean
+        with: config/pilot/start/pilot-linear-max2-test-2/MaxDirect.lean
+        note: <where it comes from and what the service said of it, shown to the agent>
+        scored: {checker: Candidate.MaxDirect.D, sound: Candidate.MaxDirect.D_sound, certificate: []}
+
+They are drafts: listed apart in the prompt with the note, never compiled before the agent begins, never
+accepted until a session submits them. It is for work outside any run folder that `continue_from` could
+take: the complete linear proof of 11 November was written a minute after its session ended, so its run
+never counted it, and it no longer compiles under today's library. A run with start drafts may have no
+discovery round. `scored` is optional, for the dry start alone and for a run with `instance: compiled`:
+the dry start compiles each start draft, reports the run the service makes of the named checker, and with
+`--check` submits it. What a start draft holds is checked against the run's surface like everything else
+the run shows (a forbidden expression in it stops the run before it starts). The note holds facts about
+the module's origin, never what a proof of the network looks like.
 
 ## After the proof rounds
 

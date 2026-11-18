@@ -79,6 +79,18 @@ files and an experiment record per call (experiments/<call>/), and, in discovery
 candidate and a question and draw on the phase's Lean allowance. A submission's candidate is written beside its
 manifest (research.json), never into it.
 
+A run whose checker the service runs compiled (open_lane.instance compiled; the Lean service's scored.run):
+its sessions' proofs have no instance theorem and claim no count. lean_check takes no claimed count and
+compiles against the network's own protected module; with `checker` its preview holds the run (`run`: the
+count, the bill and the length a submission gets). submit_candidate takes a checker with its soundness
+theorem (`scored`: checker, sound, certificate, plan), to which the session adds `run: compiled`, or a lemma;
+a scored block with an instance or a bill is refused here, before a submission is spent on it. session.json's
+`instance` says so, and the tools' texts are the ones of that mode (tool_table).
+
+Start drafts (open_lane.start_drafts): the first session of a fresh run gets the modules the person running
+it gives it, as drafts: listed apart in the prompt with the person's note, never compiled before the agent
+begins, never accepted until a submission of them is.
+
 A session after the proof rounds (core.open_lane.stages) works under a lock (core.open_lane.lock): the
 locked proof's checker modules are in its workspace, cannot be saved over, and are written again from the
 lock before every compile and submission. When the service accepts a scored proof of the seed check, or a
@@ -166,6 +178,13 @@ SCORING_PREVIEW_NOTE = ("What scoring checks without the kernel, measured as the
                         "and on copies of the network whose weights differ in their last bits). Not a "
                         "verdict: a submission's score step also has the kernel check the soundness and instance theorems "
                         "and time the general layer.")
+SCORING_PREVIEW_NOTE_COMPILED = ("What a submission of this checker gets, measured as the service measures it: whether the "
+                                 "checker uses only the counted language, its description size against the budget, the run "
+                                 "(`run`: the count the compiled checker certifies on the network with this call's "
+                                 "certificate and plan, its bill, and the length they make) and the last-bits test "
+                                 "(`last_bits`: the count on copies of the network whose weights differ in their last "
+                                 "bits). Not a verdict: a submission also has the kernel check the soundness theorem and "
+                                 "time it, and only then is the count a proved one.")
 PY_MODULE = re.compile(r"^py/[A-Za-z_][A-Za-z0-9_]*\.py$")  # run_python's save_as
 MIB = 1024 * 1024
 SUBMIT_TIMEOUT_S = 4 * 3600
@@ -261,7 +280,9 @@ def _accepted_into(latest: dict[str, dict], base: Path, rounds, from_run: str | 
                         "beyond_offered": bool(kept) and kept.get("clean") is False,
                         "path": rel, "source": str(f), "round": kk, "attempt": int(adir.name[len("attempt_"):]),
                         "submission": int(d.name), "kind": manifest.get("kind", "performance"),
-                        "theorem": manifest.get("theorem"), "statement": receipt.get("statement"),
+                        # a proof whose checker the service ran names no theorem but its soundness theorem
+                        "theorem": manifest.get("theorem") or (manifest.get("scored") or {}).get("sound"),
+                        "statement": receipt.get("statement"),
                         "scored": (receipt.get("scoring") or {}).get("status") == "scored",
                         "certified": receipt.get("certified_count"), "length": (receipt.get("scoring") or {}).get("length"),
                         "network": manifest.get("network"), "claimed_count": int(manifest.get("claimed_count") or 0),
@@ -389,7 +410,7 @@ def draft_modules(run_path: Path, k: int, carried: list[dict]) -> list[dict]:
     saved = last_compiles(src)
     earlier = continuation.origin(src, Path(run_path))  # a session of an earlier run this one continues
     here_from = {"from_run": earlier} if earlier else {}
-    kept = ("saved_round", "compiled", "stopped", "from_run")
+    kept = ("saved_round", "compiled", "stopped", "from_run", "given", "note")
     found: dict[str, tuple[bytes, dict]] = {}
     ws = src / "workspace"
     for f in sorted(ws.glob("Candidate/**/*.lean")):
@@ -401,7 +422,7 @@ def draft_modules(run_path: Path, k: int, carried: list[dict]) -> list[dict]:
         if rel in saved:  # saved in that session
             meta = {"saved_round": kk, "compiled": saved[rel].get("ok"), "stopped": bool(saved[rel].get("timed_out")), **here_from}
         elif not prior.get("set_apart") and prior.get("sha256") == _sha(data):  # a draft it was given and left as it was
-            meta = {k2: prior.get(k2) for k2 in kept if k2 in prior or k2 != "from_run"}
+            meta = {k2: prior.get(k2) for k2 in kept if k2 in prior or k2 not in ("from_run", "given", "note")}
             meta = {**here_from, **meta} if "from_run" not in meta else meta
         else:
             meta = {"saved_round": None, "compiled": None, "stopped": False, **here_from}
@@ -414,7 +435,7 @@ def draft_modules(run_path: Path, k: int, carried: list[dict]) -> list[dict]:
         here = ws / rel
         if here.is_file() and _sha(here.read_bytes()) != prior.get("held_sha256"):
             continue  # the agent saved something else at that path since: that is the newer work
-        meta = {k2: prior.get(k2) for k2 in kept if k2 in prior or k2 != "from_run"}
+        meta = {k2: prior.get(k2) for k2 in kept if k2 in prior or k2 not in ("from_run", "given", "note")}
         found[rel] = (f.read_bytes(), {**here_from, **meta} if "from_run" not in meta else meta)
     out = []
     for rel, (data, meta) in sorted(found.items()):
@@ -541,7 +562,8 @@ class Session:
             if session.state.get("py_files") == "pending":  # interrupted while putting them in place: again
                 session._place_python(python_workspace_from(Path(run_path), k))
             if session.state.get("drafts") == "pending":
-                session._place_drafts(draft_modules(Path(run_path), k, carried_modules(Path(run_path), k)))
+                session._place_drafts(draft_modules(Path(run_path), k, carried_modules(Path(run_path), k))
+                                      or (start_drafts(cfg) if k == 1 and not session.state.get("stage") else []))
             if session.state.get("carried") == "pending":  # interrupted while compiling them: do it again
                 session._carry(carried_modules(Path(run_path), k), log)
             return session
@@ -565,12 +587,16 @@ class Session:
             "knowledge": ol.get("knowledge", "minimal"),
             "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         }
+        if workflow.is_compiled(cfg):  # the service runs the checker: no claimed count, no instance (open_lane.instance)
+            state["instance"] = workflow.COMPILED
         k = round_of(path)
         carried = carried_modules(Path(run_path), k) if k and not stage else []
         state["carried_replace"] = replacements(cfg) if carried else []
         if k == 1 and carried:
             unused_replacements(state["carried_replace"], carried)  # a replacement no carried module takes: refused
         drafts = draft_modules(Path(run_path), k, carried) if k and not stage else []
+        if k == 1 and not stage and not drafts:
+            drafts = start_drafts(cfg)  # the modules the person running a fresh run gives it to start from
         python = python_workspace_from(Path(run_path), k) if k and not stage else []
         state["carried"] = "pending" if carried else []
         state["drafts"] = "pending" if drafts else []
@@ -609,9 +635,16 @@ class Session:
         return (self.state.get("workflow") or {}).get("phase")
 
     @property
+    def compiled(self) -> bool:
+        """Whether this session's scored proofs have no instance theorem: the service runs the checker compiled
+        (open_lane.instance compiled)."""
+        return self.state.get("instance") == workflow.COMPILED
+
+    @property
     def tools(self) -> dict:
-        """The tools this session offers: the research inventory in a python_then_lean proof round, else the five."""
-        return RESEARCH_TOOLS if self.phase() else self.TOOLS
+        """The tools this session offers: the research inventory in a python_then_lean proof round, else the five;
+        each as a run with or without an instance theorem words them."""
+        return tool_table(bool(self.phase()), self.compiled)
 
     def tool_names(self) -> list[str]:
         return list(self.tools)
@@ -1004,6 +1037,8 @@ class Session:
             if source is not None and (not isinstance(source, str) or len(source) > MAX_SOURCE):
                 raise ToolError(f"source must be a string of at most {MAX_SOURCE} characters")
             self._network(network)
+            if claimed_count is None and self.compiled:
+                claimed_count = 0  # nothing is claimed in such a run; the number only names a protected module
             if isinstance(claimed_count, bool) or not isinstance(claimed_count, int) or claimed_count < 0:
                 raise ToolError("claimed_count must be a natural number")
             if checker is not None and (not isinstance(checker, str) or not CHECKER_NAME.match(checker)):
@@ -1015,9 +1050,9 @@ class Session:
                                             or not 1 <= max_seconds <= COMPILE_TIMEOUT_S):
                 raise ToolError(f"max_seconds must be a whole number of seconds from 1 to {COMPILE_TIMEOUT_S:,}")
             cap = float(max_seconds) if max_seconds is not None else self.compile_seconds()
-            if path in ((self._lock() or {}).get("modules") or {}):
+            if path in ((self._lock() or {}).get("modules") or {}) and not (source is None and edits == []):
                 raise ToolError(f"{path} is locked: this session runs the accepted checker unchanged. Write in another "
-                                "module, which may import it.")
+                                "module, which may import it; to compile it as it is, give `edits: []`.")
             discovery = self.phase() == workflow.DISCOVERY
             tag = self._candidate(candidate_id, question, required=discovery) if self.phase() else {}
             if edits is not None:
@@ -1080,8 +1115,12 @@ class Session:
                    "lines": saved["lines"],
                    "messages": excerpt(text) if text else "(no messages)", "seconds": res.get("seconds"),
                    "limit_s": round(limit)}
+            if self.compiled:  # nothing is claimed: the network's own module is the one to import
+                out["protected_module"] = res.get("network_module") or res.get("protected_module")
+                del out["protected_modules"]
             if isinstance(res.get("scoring_preview"), dict):
-                out["scoring_preview"] = {**res["scoring_preview"], "note": SCORING_PREVIEW_NOTE}
+                out["scoring_preview"] = {**res["scoring_preview"],
+                                          "note": SCORING_PREVIEW_NOTE_COMPILED if self.compiled else SCORING_PREVIEW_NOTE}
             outcome = "timeout" if out["timed_out"] else "compiled" if out["ok"] else "compiler_error"
             logged = {"ok": out["ok"], "saved": saved, "messages": out["messages"][:500], "errors": error_lines(out["messages"])}
             if "scoring_preview" in out:
@@ -1096,6 +1135,8 @@ class Session:
                                                                                    "least_count_on_copies") if k in lb}
                     if lb.get("reason"):
                         logged["scoring_preview"]["last_bits"]["reason"] = str(lb["reason"])[:200]
+                if isinstance(out["scoring_preview"].get("run"), dict):  # the compiled checker's run on the network
+                    logged["scoring_preview"]["run"] = {k: out["scoring_preview"]["run"].get(k) for k in ("count", "bill", "length")}
             if out["timed_out"]:
                 logged["timed_out"] = True
             showed = surfaces.matches(text, self.surface().get("forbidden") or [])
@@ -1464,8 +1505,36 @@ class Session:
             self._log("search_library", args, {"error": str(exc)}, time.monotonic() - t0)
             raise
 
-    def submit_candidate(self, network: str, claimed_count: int, theorem: str, modules: list, scored: dict | None = None,
-                         kind: str = "performance", candidate_id: str | None = None, question: str | None = None) -> dict:
+    SCORED_COMPILED = ("checker", "sound", "certificate", "plan")
+
+    def _run_submission(self, kind: str, claimed_count, theorem, scored) -> tuple[dict | None, int | None, str | None]:
+        """A submission in a session whose checker the service runs (open_lane.instance compiled), as the manifest
+        gets it: the scored block with `run: compiled`, and no claimed count and no theorem for a proof (the
+        service takes the soundness theorem and claims nothing); a lemma keeps its theorem, and a claimed count
+        only where the agent gave one (it then names a protected module the lemma's modules import)."""
+        if kind == "auxiliary":
+            if not isinstance(theorem, str) or not theorem.startswith("Candidate."):
+                raise ToolError("theorem must be the full name of your lemma, under Candidate.")
+            if scored is not None:
+                raise ToolError("a lemma (kind auxiliary) has no scored block")
+            return None, claimed_count, theorem
+        if not isinstance(scored, dict) or not all(isinstance(scored.get(key), str) for key in ("checker", "sound")):
+            raise ToolError("a submission names your checker and its soundness theorem: scored {checker, sound, certificate, "
+                            "plan} (kind auxiliary takes a lemma)")
+        extra = sorted(set(scored) - set(self.SCORED_COMPILED) - {"run"})
+        if extra:
+            raise ToolError(f"scored does not take {extra} in this run: the service runs your checker itself, so there is no "
+                            "instance theorem and no claimed bill. scored is {checker, sound, certificate, plan}")
+        if scored.get("run", workflow.COMPILED) != workflow.COMPILED:
+            raise ToolError("in this run the service runs the checker: leave scored.run out")
+        if theorem is not None and theorem != scored["sound"]:
+            raise ToolError("in this run a submission's theorem is its soundness theorem (scored.sound): leave `theorem` out; "
+                            "a lemma is submitted with kind auxiliary")
+        return {**scored, "run": workflow.COMPILED}, claimed_count, None
+
+    def submit_candidate(self, network: str, claimed_count: int | None = None, theorem: str | None = None,
+                         modules: list | None = None, scored: dict | None = None, kind: str = "performance",
+                         candidate_id: str | None = None, question: str | None = None) -> dict:
         t0 = time.monotonic()
         args = {"network": network, "claimed_count": claimed_count, "theorem": theorem, "modules": modules, "scored": scored, "kind": kind}
         args.update({k_: v_ for k_, v_ in (("candidate_id", candidate_id), ("question", question)) if v_ is not None})
@@ -1473,19 +1542,25 @@ class Session:
         try:
             left = self._time_for_call()
             self._network(network)
+            proof = "a checker with its soundness proof" if self.compiled else "a proof of Target"
             if kind not in ("performance", "auxiliary"):
-                raise ToolError("kind must be performance (a proof of Target) or auxiliary (a lemma)")
+                raise ToolError(f"kind must be performance ({proof}) or auxiliary (a lemma)")
             discovery = self.phase() == workflow.DISCOVERY
             if discovery and kind != "auxiliary":
-                raise ToolError("the discovery phase takes lemmas only (kind auxiliary), within its Lean allowance: proofs of "
-                                "Target are submitted in the formalization phase")
+                raise ToolError("the discovery phase takes lemmas only (kind auxiliary), within its Lean allowance: "
+                                + ("checkers are" if self.compiled else "proofs of Target are")
+                                + " submitted in the formalization phase")
             if not isinstance(modules, list) or not modules or not all(isinstance(m, str) and MODULE_PATH.match(m) for m in modules):
                 raise ToolError("modules must be a list of Candidate/<Name>.lean paths saved with lean_check")
             for m in modules:
                 if not (self.workspace / m).is_file():
                     raise ToolError(f"{m} is not in the workspace; save it with lean_check first")
-            if not isinstance(theorem, str) or not theorem.startswith("Candidate."):
+            if self.compiled:
+                scored, claimed_count, theorem = self._run_submission(kind, claimed_count, theorem, scored)
+            elif not isinstance(theorem, str) or not theorem.startswith("Candidate."):
                 raise ToolError("theorem must be the full name of the theorem proving Target, under Candidate.")
+            if claimed_count is not None and (isinstance(claimed_count, bool) or not isinstance(claimed_count, int) or claimed_count < 0):
+                raise ToolError("claimed_count must be a natural number")
             stage, lock = self.state.get("stage") or {}, self._lock()
             if stage.get("name") == "seed_check":
                 if kind != "performance" or not isinstance(scored, dict):
@@ -1498,7 +1573,7 @@ class Session:
             elif stage.get("name") == "code_review":
                 raise ToolError("this session reads the checker and answers: it takes no submission")
             tag = self._candidate(candidate_id, question, required=discovery) if self.phase() else {}
-            applied = self._apply_lock(network, claimed_count, (scored or {}).get("certificate") if isinstance(scored, dict) else None,
+            applied = self._apply_lock(network, claimed_count or 0, (scored or {}).get("certificate") if isinstance(scored, dict) else None,
                                        (scored or {}).get("plan") if isinstance(scored, dict) else None)
             if lock:  # the locked modules always go along, so the constants the manifest names are the locked ones
                 modules = list(dict.fromkeys(list(modules) + list(lock["modules"])))
@@ -1517,6 +1592,8 @@ class Session:
             manifest = {"schema": "open-lane-candidate-v1", "candidate_id": f"{self.path.parent.name}-s{n:03d}", "kind": kind,
                         "model": self.state["model"], "network": network, "claimed_count": claimed_count,
                         "theorem": theorem, "modules": modules}
+            # a proof whose checker the service runs claims no count and names no theorem but its soundness theorem
+            manifest = {key: value for key, value in manifest.items() if value is not None}
             if scored is not None:
                 manifest["scored"] = scored
             (cdir / "manifest.json").write_text(json.dumps(manifest, indent=1))
@@ -1577,6 +1654,10 @@ class Session:
                         tmp.replace(cdir / "lock.json")
             out = {k: receipt.get(k) for k in ("status", "reason", "claim_kind", "certified_count", "domain_size", "claimed_count",
                                                 "network", "statement", "axioms", "score_eligible", "execution_assurance", "scoring", "seconds")}
+            if self.compiled and "claimed_count" in out and out["claimed_count"] is None:
+                del out["claimed_count"]  # nothing was claimed: the count is the run's (certified_count)
+            if receipt.get("run"):  # who ran the checker on the network: the kernel, or the service with compiled code
+                out["run"] = receipt["run"]
             out = _shortened(out, self.run_dir())  # the receipt itself stays as the service wrote it
             out["submission"] = n
             out["modules"] = modules
@@ -1849,6 +1930,106 @@ def _research_tools() -> dict:
 
 
 RESEARCH_TOOLS = _research_tools()
+
+
+# The same tools in a run whose checker the service runs compiled (open_lane.instance compiled, the Lean service's
+# scored.run): nothing is claimed and there is no instance theorem, so lean_check takes no claimed count and
+# submit_candidate takes a checker with its soundness theorem, or a lemma.
+LEAN_CHECK_COMPILED = (
+    ("compile it against the protected modules of a network "
+     "and a claimed count, which the service builds: the claim's (Protected.N_<network>_c<claimed>; "
+     "with a certificate or a plan the name carries their hashes) and the network's "
+     "(Protected.N_<network>, the same graph, weights and task). A module that imports the network's "
+     "module alone is compiled once and stays compiled whatever the claimed count of later calls. "
+     "The answer names the modules (`protected_modules`). ",
+     "compile it against the protected module of a network, which the service builds "
+     "(Protected.N_<network>: its graph, weights and task; the answer names it, `protected_module`). "),
+    ("also returns a scoring preview: whether D uses only the counted language (the constants it is "
+     "refused for, if not), its description size against the budget, with its largest "
+     "definitions, and the last-bits test (what the compiled D certifies on the network, with its "
+     "bill, and on copies whose weights differ in their last bits), measured as the score step "
+     "measures them. ",
+     "also returns what a submission of that checker would get, measured as the service measures it "
+     "(`scoring_preview`): whether D uses only the counted language (the constants it is refused for, if not), its "
+     "description size against the budget, with its largest definitions, the run (`run`: the count the compiled D "
+     "certifies on the network with this call's `certificate` and `plan`, its bill, and the length they make) and "
+     "the last-bits test (the count on copies whose weights differ in their last bits). "),
+)
+SUBMIT_COMPILED = (
+    "Submit modules from your workspace to the acceptance service: your checker with its soundness proof (`scored`), "
+    "or a lemma (kind auxiliary, with `theorem`). For a checker, the service has the kernel check the soundness "
+    "theorem and then runs the compiled checker on the network itself, with the certificate and the plan you "
+    "give: you claim no count and prove nothing about the run. Returns the receipt: status accepted or rejected "
+    "with the reason, the axioms, the count the run certified (`certified_count`) and the scoring block (status "
+    "scored or refused, the bill and the length). Each call counts against the submission budget.")
+
+
+def _compiled_tools(table: dict) -> dict:
+    import copy
+
+    t = copy.deepcopy(table)
+    lc = t["lean_check"]
+    for old, new in LEAN_CHECK_COMPILED:
+        if lc["description"].count(old) != 1:
+            raise RuntimeError("lean_check's description changed: LEAN_CHECK_COMPILED no longer fits it")
+        lc["description"] = lc["description"].replace(old, new)
+    del lc["schema"]["properties"]["claimed_count"]
+    lc["schema"]["required"] = ["path", "network"]
+    lc["schema"]["properties"]["certificate"]["description"] = (
+        "optional: the certificate the run is made with (numbers: integers, floats or [p, q]), as the scored block will give it")
+    lc["schema"]["properties"]["plan"]["description"] = (
+        "optional: the plan of a planned checker (natural numbers) the run is made with, as the scored block will give it")
+    sc, base = t["submit_candidate"], Session.TOOLS["submit_candidate"]["description"]
+    if not sc["description"].startswith(base):
+        raise RuntimeError("submit_candidate's description changed: SUBMIT_COMPILED no longer replaces it")
+    sc["description"] = SUBMIT_COMPILED + sc["description"][len(base):]
+    props = sc["schema"]["properties"]
+    del props["claimed_count"]
+    props["theorem"] = {"type": "string", "description": "for a lemma (kind auxiliary): Candidate.<...>.<name>; left out otherwise"}
+    props["scored"] = {"type": "object",
+                       "description": "{checker, sound, certificate}: the names of your checker D and of its soundness "
+                                      "theorem, and the certificate ([] when D reads none); and plan (natural numbers) "
+                                      "for a planned checker D : List Nat → Checker"}
+    props["kind"] = {"type": "string", "enum": ["performance", "auxiliary"],
+                     "description": "performance (default): a checker with its soundness proof, named in scored; auxiliary: "
+                                    "theorem is a lemma with any statement, accepted with no count and no score, listed to "
+                                    "you in later rounds"}
+    sc["schema"]["required"] = ["network", "modules"]
+    return t
+
+
+TOOLS_COMPILED = _compiled_tools(Session.TOOLS)
+RESEARCH_TOOLS_COMPILED = _compiled_tools(RESEARCH_TOOLS)
+
+
+def tool_table(research: bool, compiled: bool) -> dict:
+    """A session's tools: the five, or the research inventory of a python_then_lean proof round; each as a run
+    with an instance theorem words them, or one whose checker the service runs compiled."""
+    if compiled:
+        return RESEARCH_TOOLS_COMPILED if research else TOOLS_COMPILED
+    return RESEARCH_TOOLS if research else Session.TOOLS
+
+
+def start_drafts(cfg: dict) -> list[dict]:
+    """The modules a fresh run's first session starts from (open_lane.start_drafts: path, with, note), as drafts:
+    files the person running the run gives it, such as a checker of an earlier run adapted to today's library.
+    They are placed like a session's unfinished modules, are never compiled before the agent begins and are
+    not accepted: whatever the agent submits of them is checked as any other submission. `with` is a path in
+    this repository or an absolute one."""
+    out = []
+    for r in (cfg.get("open_lane") or {}).get("start_drafts") or []:
+        src = Path(r["with"]).expanduser()
+        src = src if src.is_absolute() else REPO_ROOT / src
+        if src.is_symlink() or not src.is_file():
+            raise ToolError(f"open_lane.start_drafts: {r['with']} is not a file")
+        data = src.read_bytes()
+        text = data.decode("utf-8", "replace")
+        if len(text) > MAX_SOURCE:
+            raise ToolError(f"open_lane.start_drafts: {r['with']} is longer than a module may be ({MAX_SOURCE:,} characters)")
+        out.append({"path": r["path"], "text": data, "set_apart": False, "lines": len(text.splitlines()), "sha256": _sha(data),
+                    "saved_round": None, "compiled": None, "stopped": False, "given": True,
+                    "note": (r.get("note") or "").strip() or None})
+    return out
 
 
 # The fixed rules lane's helpers.py names that lane's rules, which this lane's agent is not told

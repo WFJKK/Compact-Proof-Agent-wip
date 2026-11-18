@@ -223,3 +223,21 @@ open_lane:
   # changed), never for the network: `python3 -m core.open_lane.dry_start --config <config>` shows what the
   # carried modules need.
   carried_replace: []
+  # How a scored proof's run on the network is established (the Lean service's scored.run, its policy v15).
+  # kernel: the agent proves the run as an instance theorem, which Lean's kernel checks, and claims the count and
+  # the bill. compiled: the agent proves the checker sound and nothing else; the service runs the compiled checker
+  # on the network itself and takes the count and the bill from that run. Soundness is kernel-checked either
+  # way. The second trusts Lean's compiler for that one evaluation and takes the kernel's evaluation of the run
+  # off every submission (the attention pilot's proof: 78 s against 515 s on one machine). Every receipt, record and
+  # report line says which it was. The default stays kernel, so a config written before the choice runs as it
+  # did; the pilots written since set compiled. compiled needs workflow_mode: python_then_lean.
+  instance: kernel
+  # Modules a fresh run's first session starts from, as drafts (never accepted until a submission of them is):
+  # a list of {path: Candidate/<Name>.lean, with: <file, a path of this repository or any path>, note: <shown
+  # to the agent>, scored: {checker, sound, certificate, plan}}. For work that exists outside any run folder a
+  # run could continue (open_lane.continue_from), such as a checker of an earlier run adapted to the Lean
+  # library as it is now. `scored` is optional and for the dry start alone, in a run with instance: compiled:
+  # it names the checker the module holds, so that `python3 -m core.open_lane.dry_start --config <config>
+  # --check` runs and submits it before the run. The agent is never shown it. The note holds facts about where
+  # the module comes from and what the service said of it, never what a proof of the network looks like.
+  start_drafts: []

@@ -28,6 +28,11 @@ modules have other names, so the locked text is taken over with those names repl
 `renamed`. The names are the Lean project's to give (scripts/make_protected.py), and they are asked for there:
 the network's, the claim's (network, claimed count, certificate and plan of the call), and the certificate's
 and the plan's own modules when the call has any.
+
+A proof whose run the service made with compiled code (scored.run compiled, the service's policy v15) has no
+instance theorem: its general part is all of it. It can always be locked, the lock's `instance` is None, and
+on another network nothing is written: the service runs the locked checker there with a new certificate and
+plan.
 """
 
 from __future__ import annotations
@@ -74,9 +79,11 @@ def read_lock(submission: Path, lean_project: Path) -> dict:
         if not isinstance(rel, str) or not rel.endswith(".lean") or f.is_symlink() or not f.is_file():
             raise LockError(f"its module {rel!r} is missing")
         names[_module_name(rel)] = rel
-    roots = {key: scored.get(key) for key in ("checker", "sound", "instance")}
+    compiled = scored.get("run") == "compiled"  # the service ran the checker: there is no instance theorem
+    roots = {key: scored.get(key) for key in (("checker", "sound") if compiled else ("checker", "sound", "instance"))}
     if not all(isinstance(v, str) for v in roots.values()):
-        raise LockError("its manifest does not name a checker, a soundness theorem and an instance")
+        raise LockError("its manifest does not name a checker and a soundness theorem" if compiled else
+                        "its manifest does not name a checker, a soundness theorem and an instance")
     try:
         info = inspect.inspect_submission(lean_project, submission, where=list(roots.values()),
                                           closure=[roots["checker"], roots["sound"]])
@@ -103,7 +110,7 @@ def read_lock(submission: Path, lean_project: Path) -> dict:
             continue
         locked.append(name)
         todo += imports[name]
-    if home["instance"] in locked:
+    if not compiled and home["instance"] in locked:
         raise LockError(f"the instance theorem {roots['instance']} is in {names[home['instance']]}, a module the checker "
                         "and its soundness proof are in or import; the instance belongs in a module of its own that "
                         "imports them")
@@ -116,7 +123,8 @@ def read_lock(submission: Path, lean_project: Path) -> dict:
     modules = {names[name]: (submission / names[name]).read_text() for name in sorted(locked)}
     digest = hashlib.sha256(json.dumps(modules, sort_keys=True).encode()).hexdigest()
     return {
-        "checker": roots["checker"], "sound": roots["sound"], "instance": roots["instance"],
+        "checker": roots["checker"], "sound": roots["sound"], "instance": roots.get("instance"),
+        **({"run": "compiled"} if compiled else {}),
         "home": {key: names[home[key]] for key in ("checker", "sound")},
         "network": manifest.get("network"), "claimed_count": manifest.get("claimed_count"),
         "protected": protected[len("Protected."):] if protected else None,

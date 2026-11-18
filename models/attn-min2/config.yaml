@@ -71,3 +71,16 @@ open_lane:
     - Whether an instance fits one theorem depends on the length of its
       run (the limits above). When it does not, build it from small decided
       facts and combine them with lemmas about the run.
+  # For a run whose checker the service runs compiled (open_lane.instance: compiled): the same brute-force
+  # checker and soundness proof with no instance theorem, and how the tools behave at these sizes then. Measured
+  # on 18 November 2026 on attn-min2-v64d8-s1 (Lean 4.35.0-rc4, the Lean service at policy v15).
+  compiled:
+    example: examples/open_lane/attn_max2_tiny_run/Candidate/AttnTinyRun.lean
+    notes: |
+      - The worked example below is brute force on a smaller network of this
+        architecture (vocabulary size 8, width 4, 64 inputs) on another task
+        (the maximum of the two tokens), not this session's network. Its
+        checker and its soundness proof hold for any size.
+      - Time: at vocabulary size 64 and width 8 the service ran brute force,
+        compiled, on the network and on its eight copies in 31 s, and the
+        whole submission took under a minute.
