@@ -430,7 +430,9 @@ A pilot run is about one network and has two more sessions after its proof round
   from numbers of this network written into its code? A checker's own code is free, the Lean service's size
   budget cannot keep a copy of a small network's weights out, and its last-bits test sees a copy only where
   it is compared exactly (docs/decisions/weights-in-code-v14.md). The session has the locked modules to
-  read, `run_python` to compare what it finds with the weights, and no way to submit. Its answer ends with a
+  read, the certificate and the plan the proof was accepted with (`py/locked_proof.json` in its Python
+  workspace, as every session after the proof rounds has since 18 November), `run_python` to compare what
+  it finds with the weights, and no way to submit. Its answer ends with a
   verdict, clean, suspect or unclear, and what it found; the status and the report carry it, marked as a
   language model's reading. It is an alarm for a person and never moves a score.
 

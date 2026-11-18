@@ -360,6 +360,10 @@ SEED_CHECK = {"calls": [
     call("submit_candidate", network=B, modules=["Candidate/Col.lean"], scored={**SCORED, "checker": "Candidate.Other.D"}),
     call("submit_candidate", network=B, modules=["Candidate/Col.lean"], scored={**SCORED, "certificate": [1, 2]}),
 ], "response": "CLAIM: 570 of 576.\nWHY IT HELPS: six inputs differ.\nNOTES: none."}
+READING = {"calls": [
+    call("read_file", path="py/locked_proof.json"),
+    call("submit_candidate", network=A, modules=["Candidate/Col.lean"], scored=SCORED),
+], "response": "VERDICT: clean\nFOUND: no numbers of the network in the code.\nNOTES: none."}
 SCALING = {"calls": [
     call("submit_candidate", network=A, modules=["Candidate/Col.lean"], scored=SCORED),
     call("lean_check", path="Candidate/Growth.lean", source="import Candidate.Col\nnamespace Candidate.Growth\ntheorem bill_fixed : True := trivial\nend Candidate.Growth\n", network=A),
@@ -380,14 +384,15 @@ def test_a_compiled_run_from_a_given_module_through_the_seed_check(tmp_path, mon
     certificate; the locked text reaches the service with the network's module renamed and nothing else. The
     report says how the count was established. A resumed run adds nothing."""
     (tmp_path / "Given.lean").write_text(COL)
-    path = compiled_run(tmp_path, monkeypatch, [ROUND_1, SEED_CHECK, SCALING], seed_check={"network": B}, scaling=True,
+    path = compiled_run(tmp_path, monkeypatch, [ROUND_1, SEED_CHECK, SCALING, READING], seed_check={"network": B},
+                        scaling=True, code_review=True,
                         start_drafts=[{"path": "Candidate/Col.lean", "with": str(tmp_path / "Given.lean"), "note": NOTE,
                                        "scored": SCORED}])
     lines: list[str] = []
     ctx = loop.start(path, log=lines.append)
     loop.drive(ctx)
     run = ctx.run
-    assert run.done_rounds() == [0, 1, 2, 3], lines[-8:]
+    assert run.done_rounds() == [0, 1, 2, 3, 4], lines[-8:]
     # the first session: a compiled run's, with the given module as a draft and the prompt of its kind
     first = json.loads((run.round_path(1) / "attempt_0" / "open_lane" / "session.json").read_text())
     assert first["instance"] == "compiled" and first["workflow"]["phase"] == "formalization"
@@ -444,11 +449,23 @@ def test_a_compiled_run_from_a_given_module_through_the_seed_check(tmp_path, mon
     assert json.loads((sent / "manifest.json").read_text())["scored"] == {**SCORED, "certificate": [1, 2], "run": "compiled"}
     result = state["stages"]["seed_check"]["result"]
     assert (result["outcome"], result["certified"], result["length"], result["lock_verified"]) == ("certified", 570, 20450, True)
+    # every session after the rounds has what the locked proof was accepted with: its certificate and plan, which
+    # in such a run are in the submission's manifest and in none of its modules
+    held = json.loads((run.round_path(2) / "attempt_0" / "open_lane" / "py" / "locked_proof.json").read_text())
+    assert (held["network"], held["checker"], held["certificate"], held["plan"]) == (A, "Candidate.Col.D", [], None)
+    assert (held["certified_count"], held["bill"], held["length"]) == (576, 20000, 20448)
+    assert "locked_proof.json" in second["py_files"] and "py/locked_proof.json" in p2
     # the scaling question: lemmas only, in the compiled run's words
     p3 = run.read(3, "prompt.md")
     assert "its bill is the number the service's run gave" in " ".join(p3.split()) and "your instance" not in p3
     said3 = answers(run, 3)
     assert "this session takes lemmas only" in said3[0]["error"] and said3[2]["status"] == "accepted", said3
+    assert "py/locked_proof.json" in p3
+    # the reading: it is told where the locked certificate and plan are, reads them, and can submit nothing
+    p4, said4 = run.read(4, "prompt.md"), answers(run, 4)
+    assert "The certificate and the plan that proof was accepted with are in your Python workspace as py/locked_proof.json" in " ".join(p4.split())
+    assert said4[0]["ok"] and "it takes no submission" in said4[1]["error"], said4
+    assert state["stages"]["code_review"]["result"]["verdict"] == "clean"
     # what a person reads
     from core.report import build_report
 
@@ -643,3 +660,38 @@ def test_a_dry_start_submits_a_carried_kernel_proof_without_its_instance(tmp_pat
     assert "accepted and scored: 576 inputs, length 20,448" in text and "the run made by the service with compiled code" in text
     assert len(sent) == 1 and sent[0]["modules"] == ["Candidate/Col.lean"] and "claimed_count" not in sent[0]
     assert sent[0]["scored"] == {"checker": "Candidate.Col.D", "sound": "Candidate.Col.D_sound", "certificate": [], "run": "compiled"}
+
+
+def test_a_session_after_the_rounds_gets_the_locked_proofs_certificate_and_plan(tmp_path, monkeypatch):
+    """The reading of run linear-max2-ptl-2 (18 November 2026) could not see the certificate and the plan its
+    locked proof was accepted with: in a run whose checker the service runs they are in the submission's
+    manifest and in no module, and the session got the modules alone. It built its own, 47,000 units longer.
+    A session after the proof rounds now starts with py/locked_proof.json in its Python workspace: the two as
+    submitted, with the count, the bill and the length of the receipt. read_file reads it; the session's record
+    of its Python workspace has it; a submission whose files cannot be read leaves the session without it."""
+    from core.model_folder import load_model_folder
+    from core.run_config import resolve
+
+    monkeypatch.setattr(inspect, "inspect_submission", inspect_run)
+    cfg = load_run_config(compiled_run(tmp_path, monkeypatch, [], rounds_max=2, discovery_rounds=1))
+    entries = loop.select_networks(load_model_folder(resolve(cfg["model"])), cfg)
+    scored = {**SCORED, "run": "compiled", "certificate": [[1747, 1024], 2], "plan": [0, 4, 2]}
+    locked = submission(tmp_path / "locked", {"Candidate/Col.lean": COL}, scored)
+    (locked / "receipt.json").write_text(json.dumps({"status": "accepted", "certified_count": 576, "run": "compiled", "scoring": {
+        "status": "scored", "bill": 20000, "length": 20450, "description_size": 900, "plan_bits": 12}}))
+    stage = {"name": "code_review", "of": "the locked record", "submission": str(locked), "lock": read_lock(locked, Path("/nowhere"))}
+    s = Session.create(tmp_path / "run" / "round_002" / "attempt_0" / "open_lane", cfg, cfg["model"], entries, tmp_path / "run", stage=stage)
+    held = json.loads((s.path / "py" / "locked_proof.json").read_text())
+    assert held["certificate"] == [[1747, 1024], 2] and held["plan"] == [0, 4, 2] and held["checker"] == "Candidate.Col.D"
+    assert (held["certified_count"], held["bill"], held["length"], held["plan_bits"]) == (576, 20000, 20450, 12)
+    assert list(s.state["py_files"]) == ["locked_proof.json"] and s.state["py_files"]["locked_proof.json"]["bytes"] > 0
+    shown = s.read_file("py/locked_proof.json")
+    assert '"plan": [' in json.dumps(shown) or "plan" in json.dumps(shown), shown
+    assert (s.workspace / "Candidate" / "Col.lean").read_text() == COL  # the locked module, as before
+    # a submission folder without a readable receipt: the session opens, with the modules and no such file
+    bare = submission(tmp_path / "bare", {"Candidate/Col.lean": COL}, scored)
+    lock = read_lock(bare, Path("/nowhere"))
+    t = Session.create(tmp_path / "run" / "round_003" / "attempt_0" / "open_lane", cfg, cfg["model"], entries, tmp_path / "run",
+                       stage={"name": "code_review", "of": "x", "submission": str(bare), "lock": lock})
+    assert not (t.path / "py" / "locked_proof.json").exists() and t.state["py_files"] == {}
+    assert (t.workspace / "Candidate" / "Col.lean").is_file()

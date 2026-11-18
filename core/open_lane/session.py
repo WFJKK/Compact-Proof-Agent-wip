@@ -693,10 +693,40 @@ class Session:
     def _lock(self) -> dict | None:
         return (self.state.get("stage") or {}).get("lock")
 
+    LOCKED_PROOF = "locked_proof.json"  # in the Python workspace of a session after the proof rounds
+
+    def _locked_proof(self, stage: dict) -> dict | None:
+        """The locked proof's certificate and plan as they were submitted, with what its receipt says, for the
+        Python workspace of a session after the proof rounds (py/locked_proof.json: run_python finds it there
+        and read_file reads it). A proof whose checker the service ran has them in its submission's manifest
+        and in none of its modules, so without this file a session cannot make the run the lock is about (a
+        reading without it had to build a certificate and a plan of its own). They are the agent's own data:
+        nothing here is trusted or locked. None when the submission's files cannot be read."""
+        try:
+            manifest = json.loads((Path(stage["submission"]) / "manifest.json").read_text())
+            receipt = json.loads((Path(stage["submission"]) / "receipt.json").read_text())
+        except (OSError, ValueError):
+            return None
+        scored = manifest.get("scored") if isinstance(manifest.get("scored"), dict) else {}
+        scoring = receipt.get("scoring") if isinstance(receipt.get("scoring"), dict) else {}
+        text = json.dumps({
+            "what": "The certificate and the plan the locked proof was accepted with, as submitted, and what the "
+                    "service's receipt says of that submission.",
+            "network": manifest.get("network"), "checker": scored.get("checker"), "sound": scored.get("sound"),
+            "certificate": scored.get("certificate") or [], "plan": scored.get("plan"),
+            "certified_count": receipt.get("certified_count"), "bill": scoring.get("bill"), "length": scoring.get("length"),
+            "description_size": scoring.get("description_size"), "plan_bits": scoring.get("plan_bits")}, indent=1)
+        data = text.encode()
+        return {"path": self.LOCKED_PROOF, "data": data, "bytes": len(data), "sha256": _sha(data)}
+
     def _seed_stage(self) -> None:
         """The locked proof in the workspace: its locked modules as they were submitted, and its other
-        modules (the instance for the network it was proved on) to read and adapt. Nothing is compiled."""
+        modules (the instance for the network it was proved on) to read and adapt. Nothing is compiled. Its
+        certificate and plan go into the Python workspace (`_locked_proof`)."""
         stage = self.state["stage"]
+        given = self._locked_proof(stage)
+        if given is not None and self._python_enabled():
+            self._place_python([given])
         for rel, text in stage["lock"]["modules"].items():
             dst = self.workspace / rel
             dst.parent.mkdir(parents=True, exist_ok=True)

@@ -38,7 +38,9 @@ WHAT TO LOOK FOR, in {CHECKER} and everything it uses
   sizes. Does its result decide what is counted?
 - Where numbers that do belong to this network enter. The certificate
   and the plan are the places for them: the certificate is charged, the
-  plan is limited in bits, and neither is trusted.
+  plan is limited in bits, and neither is trusted. Look at the ones
+  this proof was accepted with (below): what they hold, and whether the
+  plan says more than where to look.
 A number that the network's weights determine is not a fault by itself.
 A threshold is one, and so is a place to look. The question is whether
 work that should be charged is done on such numbers for free.
@@ -48,6 +50,11 @@ LOCKED
 These modules are in your workspace: read them with read_file. They
 cannot be saved over, and nothing can be submitted in this session.
 lean_check and run_python work as before.{FREE}
+The certificate and the plan that proof was accepted with are in your
+Python workspace as py/locked_proof.json, with the count and the bill
+of its receipt: read_file reads it, and run_python code opens it at
+that path. lean_check takes them as `certificate` and `plan`, so that
+its preview is the locked proof's own run.
 
 HOW TO ANSWER
 End with these sections in this order, each starting on its own line:

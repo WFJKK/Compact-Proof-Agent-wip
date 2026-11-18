@@ -20,7 +20,10 @@ YOURS TO GIVE
 - The certificate and the plan for {NETWORK}, if the checker reads any,
   computed from this network's weights (run_python has them). They are
   all that changes. The service runs the locked checker on this network
-  itself: there is nothing to prove here and no count to claim.
+  itself: there is nothing to prove here and no count to claim. The
+  ones the proof was accepted with on {FROM_NETWORK} are in your Python
+  workspace as py/locked_proof.json, to see their form: they were made
+  for that network's weights.
 - lean_check shows the run before you submit: compile the checker's
   module as it is (its path, with `edits: []`), with `checker`
   {CHECKER}, the certificate and the plan. `run` in the answer is the

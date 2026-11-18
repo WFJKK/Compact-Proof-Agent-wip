@@ -24,6 +24,9 @@ LOCKED
 {LOCKED}
 These modules are in your workspace and cannot be saved over; new
 modules may import them.{RENAME}
+The certificate and the plan the proof was accepted with are in your
+Python workspace as py/locked_proof.json, with the count and the bill
+of its receipt.
 
 WHAT TO HAND IN
 1. The claim, in your answer:
