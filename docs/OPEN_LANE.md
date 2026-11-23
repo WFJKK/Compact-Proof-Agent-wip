@@ -436,6 +436,29 @@ A pilot run is about one network and has two more sessions after its proof round
   verdict, clean, suspect or unclear, and what it found; the status and the report carry it, marked as a
   language model's reading. It is an alarm for a person and never moves a score.
 
+The scaling proofs (since 23 November 2026) come after a finished run and never during one: a person starts
+them once the run's proofs have been looked at,
+
+    python3 -m core.loop scale --run <run folder> [--only V] [--budget-usd 300]
+
+One session per size, in this order: the number of token values V, the number of positions n, the width d,
+each with the other two held at the network's values (`core/open_lane/scaling_steps.py`). The model folder
+says which of its sizes each one is (`open_lane.scaling_sizes`; an attention model's width and head width
+vary together), and `open_lane.scaling_steps` gives each step's minutes and dollars (by default V 60 minutes
+and $20, n and d 30 minutes and $10 each). The sessions are about every scored proof on the run's frontier,
+not only the locked one: the locked proof's modules are in the workspace, locked, as in the scaling question;
+the other proofs' modules are there to read and import where they do not clash with the locked ones; every
+proof's certificate and plan are in `py/handed_in_proofs.json`. Each session asks, for its size, the formula
+of each proof's length part by part, brute force's, the verdict, and what the proof certifies at other values
+of the size; and in Lean, as lemmas, the bill at this size for every weight, the bill as an exact formula in
+the size, and its leading order against brute force's. Where a cost depends on something other than the
+sizes (how many pieces a plan makes), that is a parameter of the formula, with its value on this network. A
+step carries the modules of the lemmas the earlier steps had accepted and their answers. For each accepted
+lemma Lean is asked which of the proofs' checkers the modules the service compiled hold, term for term (for
+the locked proof in the session, for the others after it); the report prints each statement in full beside
+that answer. The steps are rounds of the run after its last; `stages.json` keeps them under
+`scaling_proofs`, and running the command again goes on with the steps not done. Nothing is scored.
+
 `stages.json` in the run folder records when and why the proof rounds ended, which proof was locked (and
 any better proof passed over because it could not be), each stage's round and what it found. Once it
 exists the run makes no more proof rounds: the proof rounds end at the round limit or by patience, not

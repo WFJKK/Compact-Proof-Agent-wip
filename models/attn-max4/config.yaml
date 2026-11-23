@@ -49,6 +49,10 @@ hygiene: ["Gross", "Compact Proofs of Model Performance"]
 # networks. The notes say how the tools behave at these sizes, never what a proof of these networks looks like
 # or how short one has been (docs/decisions/agent-told-nothing.md).
 open_lane:
+  # For the scaling proofs after a run (core.open_lane.scaling_steps): which sizes are the number of token
+  # values V, the number of positions n and the width d (the width of the residual stream and of the head vary
+  # together, as they are equal in every size setting here).
+  scaling_sizes: {V: [d_vocab], n: [n_ctx], d: [d_model, d_head]}
   example: examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean
   extra_sources: [CompactCheck/CountedGeneral.lean, CompactCheck/CountedGeneralSound.lean, CompactCheck/ExpSound.lean]
   notes: |

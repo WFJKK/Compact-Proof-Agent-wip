@@ -653,6 +653,19 @@ def drive(ctx: Context) -> None:
             raise LoopError(str(exc)) from exc
 
 
+
+def scale(ctx: Context, only: list[str] | None = None) -> None:
+    """After a finished open-lane run: the scaling proofs, one session per size (core.open_lane.scaling_steps)."""
+    if not (ctx.cfg.get("open_lane") or {}).get("enabled"):
+        raise LoopError("the scaling proofs are for open-lane runs")
+    from .open_lane import scaling_steps, stages
+
+    backend = make_backend(ctx.cfg, ctx.log)
+    try:
+        scaling_steps.run_steps(ctx, backend, run_round, only=only)
+    except (scaling_steps.ScalingError, stages.StageError) as exc:
+        raise LoopError(str(exc)) from exc
+
 # status ------------------------------------------------------------------------
 def status_text(run: RunDir, diagnostics: bool = False) -> str:
     cfg = run.config()
@@ -707,6 +720,9 @@ def status_text(run: RunDir, diagnostics: bool = False) -> str:
                          f"{rec['copied']}; none of its records counts here")
         lines += workflow.lines(run, records)
         lines += status_lines(run)
+        from .open_lane.scaling_steps import status_lines as scaling_status
+
+        lines += scaling_status(run)
     return "\n".join(lines)
 
 
@@ -727,6 +743,12 @@ def main(argv=None):
     p_run.add_argument("--sandbox", help="auto, hardened, container, landlock, seatbelt or process (default: the config's)")
     p_run.add_argument("--budget-usd", type=float, help="auth api_key: what the whole run may spend, in dollars")
     sub.choices["resume"].add_argument("--budget-usd", type=float, help="auth api_key: a new budget for the whole run, in dollars")
+    p_scale = sub.add_parser("scale", help="after a finished open-lane run: the scaling proofs, one session per size "
+                                           "(V, then n, then d; core/open_lane/scaling_steps.py)")
+    p_scale.add_argument("--run", required=True, help="the run's folder, <runs_dir>/<run_id>")
+    p_scale.add_argument("--only", nargs="+", choices=("V", "n", "d"),
+                         help="run only these steps now; they must be the next ones in order")
+    p_scale.add_argument("--budget-usd", type=float, help="auth api_key: a new budget for the whole run, in dollars")
     args = ap.parse_args(argv)
     ctx = None
     try:
@@ -743,6 +765,11 @@ def main(argv=None):
             if args.budget_usd is not None:
                 overrides["api_budget.run_usd"] = args.budget_usd
             ctx = start(args.config, run_id=args.run_id, overrides=overrides)
+        elif args.cmd == "scale":
+            ctx = resume(args.run, budget_usd=args.budget_usd)
+            scale(ctx, only=args.only)
+            print(status_text(ctx.run))
+            return 0
         else:
             ctx = resume(args.run, budget_usd=args.budget_usd)
         drive(ctx)
@@ -752,8 +779,9 @@ def main(argv=None):
         # the command as it can be pasted: a placeholder in angle brackets is a redirection to a shell
         import shlex
 
-        where = ctx.run.path if ctx is not None else Path(args.run).expanduser().resolve() if args.cmd == "resume" else None
-        again = f"python -m core.loop resume --run {shlex.quote(str(where))}" if where else "python -m core.loop resume --run and the run's folder"
+        where = ctx.run.path if ctx is not None else Path(args.run).expanduser().resolve() if args.cmd in ("resume", "scale") else None
+        verb = "scale" if args.cmd == "scale" else "resume"
+        again = f"python -m core.loop {verb} --run {shlex.quote(str(where))}" if where else "python -m core.loop resume --run and the run's folder"
         print(f"stopped: {exc}\nFix the cause, then continue with: {again}", file=sys.stderr)
         return 3
     except (LoopError, RoundError, BackendError, SandboxError, PromptError, LeanError, RunConfigError) as exc:

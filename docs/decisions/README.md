@@ -66,4 +66,7 @@ working from the repositories can read them. Each is dated; later decisions supe
   network at the paper's size (`models/attn-max4` at v64) prepared for a first run: what the Lean service does
   there, the run and dry-start configs, a rehearsal, references, and `q_above` summed with numpy on lines of
   many steps (it took about 40 s a call at 16,777,216 inputs).
+- [scaling-proofs.md](scaling-proofs.md) (23 November 2026): the scaling proofs after a run, `python3 -m core.loop
+  scale --run <run>`: one session per size (V, then n, then d) with its own time and cap, about every scored
+  proof on the run's frontier, each lemma checked by Lean against the proofs' checkers and printed in full.
 

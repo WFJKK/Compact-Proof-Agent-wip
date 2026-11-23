@@ -295,7 +295,36 @@ OPEN_LANE_KEYS = {"enabled", "lean_project", "work_dir", "python", "compile_call
                   "max_turns", "worker_seconds", "notes_reserve_seconds", "python_workspace_mb", "python_workspace_files", "stall_rounds", "fake_scripts", "example", "extra_sources", "knowledge", "second_example", "notes",
                   "seed_check", "scaling", "code_review", "split_example", "workflow_mode", "discovery_rounds", "probe_compile_calls",
                   "probe_auxiliary_submissions", "probe_seconds", "research_workspace_mb", "research_workspace_files",
-                  "continue_from", "continue_note", "carried_replace", "instance", "start_drafts"}
+                  "continue_from", "continue_note", "carried_replace", "instance", "start_drafts", "scaling_steps"}
+# The sizes the scaling proofs vary, one session each, in this order (core.open_lane.scaling_steps): the number of
+# token values, the number of positions, the width.
+SCALING_PARAMETERS = ("V", "n", "d")
+
+
+def scaling_steps_errors(steps: object) -> list[str]:
+    """What is wrong with open_lane.scaling_steps: a list of {parameter, minutes, usd}, the parameters some of
+    V, n, d in that order, each once; minutes and dollars positive."""
+    form = "open_lane.scaling_steps must be a list of {parameter, minutes, usd}"
+    if not isinstance(steps, list) or not steps:
+        return [form + ", at least one"]
+    errors, seen = [], []
+    for s in steps:
+        if not isinstance(s, dict) or set(s) != {"parameter", "minutes", "usd"}:
+            errors.append(form)
+            continue
+        if s["parameter"] not in SCALING_PARAMETERS:
+            errors.append(f"open_lane.scaling_steps: parameter must be one of {', '.join(SCALING_PARAMETERS)}, not {s['parameter']!r}")
+            continue
+        seen.append(s["parameter"])
+        for key in ("minutes", "usd"):
+            v = s[key]
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+                errors.append(f"open_lane.scaling_steps: {s['parameter']}'s {key} must be a positive number")
+    if len(set(seen)) != len(seen) or seen != [p for p in SCALING_PARAMETERS if p in seen]:
+        errors.append("open_lane.scaling_steps: each of V, n, d at most once, in that order")
+    return errors
+
+
 KNOWLEDGE_CONDITIONS = ("minimal", "maximum")
 WORKFLOW_MODES = ("interleaved", "python_then_lean")
 
@@ -397,6 +426,8 @@ def open_lane_errors(cfg: dict) -> list[str]:
         errors.append("open_lane.scaling must be true or false")
     if not isinstance(ol.get("code_review", False), bool):
         errors.append("open_lane.code_review must be true or false")
+    if "scaling_steps" in ol:
+        errors += scaling_steps_errors(ol["scaling_steps"])
     if ol.get("instance", "kernel") not in INSTANCES:
         errors.append(f"open_lane.instance must be one of {', '.join(INSTANCES)}")
     elif ol.get("instance") == "compiled" and ol.get("workflow_mode", "interleaved") != "python_then_lean":

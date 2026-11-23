@@ -266,6 +266,9 @@ def build_report(run_path: str | Path, reference_path: str | Path | None = None)
 
         lines += workflow.lines(run, markdown=True)
         lines += report_lines(run)
+        from .open_lane.scaling_steps import report_lines as scaling_report
+
+        lines += scaling_report(run)
 
     final = run.path / "final" / "final.json"
     if final.exists():

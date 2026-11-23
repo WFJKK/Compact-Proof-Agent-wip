@@ -724,9 +724,15 @@ class Session:
         modules (the instance for the network it was proved on) to read and adapt. Nothing is compiled. Its
         certificate and plan go into the Python workspace (`_locked_proof`)."""
         stage = self.state["stage"]
-        given = self._locked_proof(stage)
-        if given is not None and self._python_enabled():
-            self._place_python([given])
+        given = [g for g in [self._locked_proof(stage)] if g is not None]
+        # a scaling step after the run (core.open_lane.scaling_steps) gives more: files for the Python workspace
+        # (every scored proof's certificate and plan) and modules to read and import (the run's other scored
+        # proofs', and the lemmas an earlier step had accepted); none of it is locked
+        for item in stage.get("python_given") or []:
+            data = item["text"].encode()
+            given.append({"path": item["path"], "data": data, "bytes": len(data), "sha256": _sha(data)})
+        if given and self._python_enabled():
+            self._place_python(given)
         for rel, text in stage["lock"]["modules"].items():
             dst = self.workspace / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -737,6 +743,12 @@ class Session:
                 dst = self.workspace / rel
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 dst.write_bytes(src.read_bytes())
+        for rel, text in (stage.get("extra_modules") or {}).items():
+            if rel in stage["lock"]["modules"] or not MODULE_PATH.match(rel):
+                continue
+            dst = self.workspace / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(text)
 
     def _apply_lock(self, network: str, claimed_count: int, certificate: list | None, plan: list | None = None) -> dict | None:
         """Before anything is compiled or submitted in a session with a lock: every locked module is written

@@ -318,6 +318,9 @@ def _open_line(rec: dict) -> str:
         return f"{head}, certified {rec['certified']}/{rec['n_inputs']}, length {rec['length']:,}{said}"
     if rec["status"] == "verified":
         return f"{head}, certified {rec['certified']}/{rec['n_inputs']}; {(rec.get('error') or '')[:120]}"
+    if rec["status"] == "lemma":  # an accepted lemma: its theorem's name, and a note where there is one
+        note = (rec.get("error") or "").splitlines()[-1][:120] if rec.get("error") else ""
+        return f"{head} {rec.get('theorem') or '(no theorem named)'}" + (f"; {note}" if note else "")
     return f"{head}: {(rec.get('error') or '').splitlines()[-1][:120] if rec.get('error') else ''}"
 
 
