@@ -32,8 +32,10 @@ ROUND = {"calls": [
     call("submit_candidate", network=A, modules=["Candidate/Short.lean"], scored=SCORED_SHORT),
 ], "response": "CLAIM: two proofs.\nWHY IT HELPS: -\nNOTES: none."}
 DISCOVERY = {"calls": [], "response": "CLAIM: none yet.\nWHY IT HELPS: -\nNOTES: -"}
+# The reading as a real session's answer comes: its opening line runs into the answer (the text before a tool
+# call), and the headings are in bold.
 READING = {"calls": [call("read_file", path="py/locked_proof.json")],
-           "response": "VERDICT: clean\nFOUND: nothing.\nNOTES: none."}
+           "response": "I'll start by reading the locked proof.**VERDICT:** clean\n\n**FOUND:**\n\nnothing.\n\n**NOTES:** none."}
 STEP_V = {"calls": [
     call("read_file", path="py/handed_in_proofs.json"),
     call("read_file", path="Candidate/Short.lean"),
@@ -48,7 +50,8 @@ STEP_N = {"calls": [
     call("lean_check", path="Candidate/GrowthN.lean", source=GROWTH_N, network=A),
     call("submit_candidate", network=A, modules=["Candidate/GrowthN.lean", "Candidate/Col.lean"],
          theorem="Candidate.GrowthN.bill_in_n", kind="auxiliary"),
-], "response": "CLAIM: no n in it.\nSCALING:\n- Col: bill independent of n.\nWHY IT HELPS: -\nNOTES: none."}
+], "response": ("I'll start by reading the earlier lemma.**CLAIM:** no n in it.\n\n**SCALING:**\n\n"
+                "- Col: bill independent of n.\n\n**WHY IT HELPS:** -\n\n**NOTES:** none.")}
 STEP_D = {"calls": [call("submit_candidate", network=A, modules=["Candidate/Col.lean"], scored=SCORED)],
           "response": "CLAIM: nothing proved.\nSCALING:\n- none.\nWHY IT HELPS: -\nNOTES: ran out."}
 
@@ -148,6 +151,9 @@ def test_the_steps_run_in_order_with_their_own_time_and_carry_on(tmp_path, monke
     status = loop.status_text(run)
     assert "scaling in V (round 4): 1 lemma(s) accepted, 1 shown by Lean to hold a submitted proof's checker" in status
     assert "scaling in d (round 6): 0 lemma(s) accepted" in status
+    assert "the reading of the checker (round 3, a language model's, an alarm and not a check): clean" in status
+    assert sp["steps"][1]["result"]["answer"] == {"CLAIM": "no n in it.", "SCALING": "- Col: bill independent of n.",
+                                                  "WHY IT HELPS": "-", "NOTES": "none."}
     assert stages.scored_proofs(run.read_archive(), network_entry(ctx.folder, A) | {"id": A}) == front
 
 

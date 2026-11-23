@@ -104,6 +104,8 @@ def _parse_output(out: str) -> tuple[dict | None, list[dict]]:
 
     stream-json prints one JSON object per line. Lines that are not JSON
     objects are ignored. A plain `json` result (one object) parses the same way.
+    A message whose text a tool call followed (in the same event or a later one)
+    is marked `tool_call`: its text ended there and was not cut off.
     """
     result, messages = None, []
     for line in out.splitlines():
@@ -119,15 +121,19 @@ def _parse_output(out: str) -> tuple[dict | None, list[dict]]:
         if ev.get("type") == "assistant":
             msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
             content = msg.get("content")
-            parts = []
+            parts, called = [], False
             if isinstance(content, str):
                 parts.append(content)
             elif isinstance(content, list):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
                         parts.append(block["text"])
+                    elif isinstance(block, dict) and block.get("type") == "tool_use":
+                        called = True
             if parts:
                 messages.append({"text": "".join(parts), "stop_reason": msg.get("stop_reason")})
+            if called and messages:
+                messages[-1]["tool_call"] = True
         elif ev.get("type") == "result":
             result = ev
     return result, messages
@@ -252,12 +258,18 @@ def _overlap(a: str, b: str) -> int:
     return 0
 
 
+def _cut(message: dict) -> bool:
+    """Whether a message may have been cut off: no stop reason, or the output limit; never one that a tool
+    call followed, since the model ends its text to make the call."""
+    return message.get("stop_reason") in (None, "max_tokens") and not message.get("tool_call")
+
+
 def _concat(messages: list[dict], drop_overlap: bool) -> str:
     text = ""
     for i, m in enumerate(messages):
         part = m["text"]
         if i:
-            cut = messages[i - 1].get("stop_reason") in (None, "max_tokens")
+            cut = _cut(messages[i - 1])
             if cut and drop_overlap:
                 part = part[_overlap(text, part) :]
             elif not cut and not text.endswith("\n"):
@@ -275,10 +287,11 @@ def _join(messages: list[dict]) -> str:
     between such pieces. A resumed stream sometimes repeats a few characters from before
     the cut; when the plain join holds no recipe that parses, the join that drops the
     repetition is tried, and kept if it does. Messages that ended on their own are
-    separated by a newline.
+    separated by a newline, and so is text a tool call followed (the stream gives such text
+    no stop reason either, so without this a session's opening line ran into its answer).
     """
     plain = _concat(messages, drop_overlap=False)
-    if len(messages) < 2 or not any(m.get("stop_reason") in (None, "max_tokens") for m in messages[:-1]):
+    if len(messages) < 2 or not any(_cut(m) for m in messages[:-1]):
         return plain
     from ..parse import ParseError, parse_response
 

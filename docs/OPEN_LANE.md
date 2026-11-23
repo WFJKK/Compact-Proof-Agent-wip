@@ -434,7 +434,11 @@ A pilot run is about one network and has two more sessions after its proof round
   workspace, as every session after the proof rounds has since 18 November), `run_python` to compare what
   it finds with the weights, and no way to submit. Its answer ends with a
   verdict, clean, suspect or unclear, and what it found; the status and the report carry it, marked as a
-  language model's reading. It is an alarm for a person and never moves a score.
+  language model's reading. It is an alarm for a person and never moves a score. The answer's headings
+  (and the scaling steps' below) are read by `core/open_lane/answer.py`, which takes them in markdown bold
+  too and after other text on a line: a session's answer is its messages joined, and before 23 November
+  2026 the text written before a tool call ran straight into the answer (`...the modules.**VERDICT:**
+  clean`), which the first reading on attn-max4-ptl-1 lost ("no verdict").
 
 The scaling proofs (since 23 November 2026) come after a finished run and never during one: a person starts
 them once the run's proofs have been looked at,

@@ -598,6 +598,10 @@ def test_the_locked_checker_is_read_and_the_readers_answer_is_an_alarm_and_no_mo
     assert stages.code_review_result(run, 3) == {"verdict": None, "found": "nothing.", "notes": ""}
     (run.round_path(3) / "attempt_0" / "response.md").write_text("VERDICT: **clean**.\nFOUND: one table of sizes.\nNOTES: none.")
     assert stages.code_review_result(run, 3)["verdict"] == "clean"
+    # as a real session's answer came (attn-max4-ptl-1): its opening line runs into the answer, headings in bold
+    (run.round_path(3) / "attempt_0" / "response.md").write_text(
+        "I'll start by reading the locked proof.**VERDICT:** clean\n\n**FOUND:**\n\none table of sizes.\n\n**NOTES:** none.")
+    assert stages.code_review_result(run, 3) == {"verdict": "clean", "found": "one table of sizes.", "notes": "none."}
     # the proof rounds' prompt names the reading when the run has it, last
     both = after_rounds_text({"scaling": True, "code_review": True})
     assert "- The scaling question. Then you are asked" in both and "- Last, the checker of your best scored proof is read" in both

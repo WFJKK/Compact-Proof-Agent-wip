@@ -44,7 +44,7 @@ import yaml
 from ..agent.build_prompt import CHARS_PER_TOKEN, Prompt, PromptError, TEMPLATES, fill, forbidden, load_template
 from ..archive import RunDir
 from ..run_config import DEFAULTS_PATH, SCALING_PARAMETERS, scaling_steps_errors
-from . import stages, workflow
+from . import answer, stages, workflow
 from .lock import LockError, LockUnread, read_lock, same_checker
 from .prompt import static_values
 from .session import Session
@@ -201,16 +201,10 @@ def proofs_text(proofs: list[dict]) -> str:
 
 
 def answer_sections(text: str) -> dict:
-    """The answer's CLAIM, SCALING, WHY IT HELPS and NOTES sections, as written; a missing one is absent."""
-    out, current = {}, None
-    for line in (text or "").splitlines():
-        head = next((name for name in SECTIONS if line.startswith(name + ":")), None)
-        if head:
-            current = head
-            out[head] = line[len(head) + 1:].strip()
-        elif current:
-            out[current] += "\n" + line
-    return {k: v.strip() for k, v in out.items()}
+    """The answer's CLAIM, SCALING, WHY IT HELPS and NOTES sections, as written; a missing one is absent.
+    Headings are read as `answer.sections` reads them: in bold too, and after text the session wrote before
+    a tool call."""
+    return answer.sections(text, SECTIONS)
 
 
 def earlier_text(run: RunDir, sp: dict, step: dict) -> str:

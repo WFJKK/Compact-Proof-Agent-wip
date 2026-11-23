@@ -45,7 +45,7 @@ from ..scoring import fallback_cost_per_input
 from .lock import LockError, LockUnread, read_lock
 from .prompt import static_values
 from .records import proof_records
-from . import workflow
+from . import answer, workflow
 from .session import Session
 
 STAGES = ("seed_check", "scaling", "code_review")
@@ -374,26 +374,14 @@ def guards_text(submission: Path) -> str:
 
 
 def code_review_result(run: RunDir, k: int) -> dict:
-    """The reader's answer, from the round's response: the verdict (the word after `VERDICT:`, None when the
-    answer has none of the three) and the sections FOUND and NOTES as the reader wrote them."""
-    text = run.read(k, "attempt_0/response.md") or ""
-    verdict = None
-    for line in text.splitlines():
-        if line.strip().upper().startswith("VERDICT:"):
-            word = line.split(":", 1)[1].strip().lower().split()
-            verdict = next((v for v in VERDICTS if word and word[0].strip(".,;:()*`") == v), None)
-    def section(name: str) -> str:
-        lines, on = [], False
-        for line in text.splitlines():
-            head = line.strip().split(":", 1)[0].upper()
-            if head == name and ":" in line:
-                on, line = True, line.split(":", 1)[1]
-            elif on and head in ("VERDICT", "FOUND", "NOTES"):
-                on = False
-            if on:
-                lines.append(line.rstrip())
-        return "\n".join(lines).strip()
-    return {"verdict": verdict, "found": section("FOUND")[:6000], "notes": section("NOTES")[:3000]}
+    """The reader's answer, from the round's response: the verdict (the first word after the VERDICT
+    heading, None when it is none of the three) and the sections FOUND and NOTES as the reader wrote them.
+    Headings are read as `answer.sections` reads them: in bold too, and after text the session wrote
+    before a tool call."""
+    found = answer.sections(run.read(k, "attempt_0/response.md") or "", ("VERDICT", "FOUND", "NOTES"))
+    word = answer.first_word(found.get("VERDICT", ""))
+    return {"verdict": word if word in VERDICTS else None,
+            "found": found.get("FOUND", "")[:6000], "notes": found.get("NOTES", "")[:3000]}
 
 
 def code_review_line(state: dict) -> str:

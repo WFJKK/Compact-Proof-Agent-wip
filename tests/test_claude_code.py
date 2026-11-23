@@ -138,6 +138,21 @@ def test_messages_that_ended_on_their_own_are_joined_on_a_new_line():
     assert b.respond(PROMPT, 0).text == "CLAIM: a\nNOTES: b"
 
 
+def tool_use_event(text=None):
+    """An assistant event with a tool call, after some text when given."""
+    content = ([{"type": "text", "text": text}] if text else []) + [{"type": "tool_use", "id": "t1", "name": "mcp__cpl__read_file", "input": {}}]
+    return {"type": "assistant", "message": {"role": "assistant", "content": content, "stop_reason": None}, "session_id": "sess_123"}
+
+
+def test_text_a_tool_call_followed_is_joined_on_a_new_line():
+    """The stream gives no stop reason to text a tool call follows, as to a cut-off message; but that text
+    ended there, so the answer after it starts on a line of its own (in a separate event or the same one)."""
+    out = stream(assistant_event("I'll start by reading the notes.", stop_reason=None), tool_use_event(),
+                 tool_use_event("Now the lemma."), assistant_event("VERDICT: clean", stop_reason=None), result_event("VERDICT: clean"))
+    b, _, _, _ = backend([Completed(out)])
+    assert b.respond(PROMPT, 0).text == "I'll start by reading the notes.\nNow the lemma.\nVERDICT: clean"
+
+
 def test_a_plain_json_result_still_parses():
     """The old one-object output: no assistant events, so the result's own text is used."""
     b, _, _, _ = backend([Completed(json.dumps(result_event()))])
