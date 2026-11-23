@@ -182,6 +182,35 @@ def test_q_exact_is_the_clipped_log_area_of_the_verified_frontier():
     assert fallback_cost_per_input(entry, [])[1].startswith("estimate")
 
 
+def test_q_above_on_a_line_of_many_steps_is_the_same_sum(monkeypatch):
+    """Above LINE_STEPS_IN_PYTHON steps of the brute-force line (one per input it certifies), q_above sums with numpy
+    over the same pieces and values as the Python loop (23 November 2026: the loop took about 40 s a call at
+    16,777,216 inputs). The two agree on frontiers below, across and above the line, with points on its steps,
+    at the range's start, beyond B, and with no point."""
+    import random
+
+    import core.scoring as sc
+
+    rng = random.Random(7)
+    n, E, c = 250_000, 1088.0, 671.0
+    B = E + c * n
+    line = {"c": c, "E": E, "coverage": n - 3_000, "n": n}
+    entry = {"E": E, "B": B, "real_correct": n - 3_000}
+    cases = [[], [{"length": B / 1000, "certified": 200_000, "n_inputs": n}],
+             [{"length": E + c * 1_000, "certified": 1_000, "n_inputs": n}, {"length": E + c * 50_000, "certified": 240_000, "n_inputs": n}],
+             [{"length": B * 1.5, "certified": n - 3_000, "n_inputs": n}]]
+    for _ in range(6):
+        cases.append(sorted(({"length": rng.uniform(E, B), "certified": rng.randint(0, n - 3_000), "n_inputs": n}
+                             for _ in range(rng.randint(1, 5))), key=lambda p: p["length"]))
+    for pts in cases:
+        fast = sc.q_above(pts, entry, line)
+        monkeypatch.setattr(sc, "LINE_STEPS_IN_PYTHON", 10**12)
+        slow = sc.q_above(pts, entry, line)
+        monkeypatch.setattr(sc, "LINE_STEPS_IN_PYTHON", 100_000)
+        assert abs(fast - slow) < 1e-12, (pts, fast, slow)
+    assert sc.q_above(cases[2], entry, line) > 0.0
+
+
 def test_q_above_counts_only_what_beats_the_brute_force_line():
     """Q_above (26 October 2026): the frontier's log-area above the brute-force line b(L) = min(coverage,
     floor((L - E) / c)) / n over the room above it. Checked: brute force on any subset scores 0 (the max2

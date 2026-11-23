@@ -42,3 +42,52 @@ cost_model: cost-v2
 control_networks: []
 # The prompt never names the paper this work follows: part 1 refuses these, part 2 removes them.
 hygiene: ["Gross", "Compact Proofs of Model Performance"]
+
+# What an open-lane run on this model takes from the Lean project and tells the agent (a run config may set
+# any of these itself). The worked examples are brute force on a tiny attention network of tests/attn_max2_tiny
+# (two positions, vocabulary size 8, width 4, on the largest of its two tokens): none of this folder's
+# networks. The notes say how the tools behave at these sizes, never what a proof of these networks looks like
+# or how short one has been (docs/decisions/agent-told-nothing.md).
+open_lane:
+  example: examples/open_lane/attn_max2_tiny_scored/Candidate/AttnTinyScored.lean
+  extra_sources: [CompactCheck/CountedGeneral.lean, CompactCheck/CountedGeneralSound.lean, CompactCheck/ExpSound.lean]
+  notes: |
+    - The worked example below is brute force on a smaller network of this
+      architecture (two positions, vocabulary size 8, width 4, 64 inputs) on
+      another task (the largest of its two tokens), not this session's
+      network. Its checker and its soundness proof hold for any size.
+    - In the kernel a list, and an array too, is a chain of cells:
+      reaching entry i takes i steps, and the memory is held until the
+      theorem is done, so a loop that indexes every entry of a list of n
+      entries costs about n^2 / 2 steps. The interpreter's reads, I.weight
+      and I.cert, are the exception: they go through a balanced tree,
+      about log2 n steps a read. Measured on a network of this architecture
+      at vocabulary size 64 and width 8: converting the 512 entries of its
+      embedding into the general rule's form took 10 s and 2.1 GB, and the
+      general single rule on one of its inputs did not fit in 7 GB. This
+      network is four times as wide.
+    - Whether an instance fits one theorem depends on the length of its
+      run (the limits above). When it does not, build it from small decided
+      facts and combine them with lemmas about the run.
+  # For a run whose checker the service runs compiled (open_lane.instance: compiled): the same brute-force
+  # checker and soundness proof with no instance theorem, and how the tools behave at this size then. Measured
+  # on 23 November 2026 on attn-max4-v64-s0 (Lean 4.35.0-rc4, the Lean service at policy v15, the cloud
+  # machine's two cores); the list of all inputs on 18 November on the linear max4 network of as many inputs.
+  compiled:
+    example: examples/open_lane/attn_max2_tiny_run/Candidate/AttnTinyRun.lean
+    notes: |
+      - The worked example below is brute force on a smaller network of this
+        architecture (two positions, vocabulary size 8, width 4, 64 inputs) on
+        another task (the largest of its two tokens), not this session's
+        network. Its checker and its soundness proof hold for any size.
+      - Time: at vocabulary size 64 and width 32 the service ran a checker of
+        64 forward passes (a bill of 842,176), compiled, on the network and
+        on its eight copies in 8 s, and the whole submission took 14 s. A
+        development compile gives the nine runs 120 s. The first compile
+        against the network in a session also builds the network's module:
+        about two minutes.
+      - At vocabulary size 64 `allInputs task.space` is a list of 16,777,216
+        inputs. A compiled checker that mentions it builds the whole list
+        before it does anything else: 32 s for the nine runs of 64 forward
+        passes taken from it, on a network with as many inputs.
+

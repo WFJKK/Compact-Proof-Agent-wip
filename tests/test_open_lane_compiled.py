@@ -259,7 +259,7 @@ def test_the_models_of_the_pilots_name_an_example_without_an_instance(tmp_path):
     """The models a pilot has run on or is prepared for carry the block, and the example each names is one of the
     Lean project's examples of a proof whose run the service makes (checked against the project where it is)."""
     lean = Path(os.environ.get("COMPACT_PROOF_LEAN", "~/Desktop/VerifiedMechanisms/LeanFormalisations/CompactCheck")).expanduser()
-    for model in ("models/max2", "models/attn-min2", "models/max4", "models/min4"):
+    for model in ("models/max2", "models/attn-min2", "models/max4", "models/min4", "models/attn-max4"):
         block = yaml.safe_load((REPO_ROOT / model / "config.yaml").read_text())["open_lane"]["compiled"]
         assert block["example"].startswith("examples/open_lane/") and block["example"].endswith("Run.lean")
         assert "instance" not in block["notes"] and "kernel" not in block["notes"]

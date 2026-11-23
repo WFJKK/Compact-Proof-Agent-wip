@@ -536,6 +536,11 @@ network and the seed check's network:
   is `linear-<model>-dry.yaml`, which gives the same run a probe module so that the service compiles, checks,
   runs and scores something on the network before an agent works on it
   (docs/decisions/linear-four-tokens.md).
+- `config/pilot/attn-max4.yaml` (23 November 2026): the attention max-of-4 network at the paper's own size
+  (`models/attn-max4` at v64: vocabulary size 64, width 32, 16,777,216 inputs), proof rounds on
+  `attn-max4-v64-s0`, the seed check on `attn-max4-v64-s2`, no baselines replayed. The first run is
+  `attn-max4-ptl-1.yaml` (as `linear-max4-ptl-1` but with sessions of 90 minutes and caps of $40 and $200),
+  and its dry start `attn-max4-dry.yaml` (docs/decisions/attention-max4-paper-size.md).
 
 What an open-lane run needs to know about an architecture is the model folder's to state, under `open_lane`
 in its `config.yaml`: the worked example and the further Lean sources (`example`, `extra_sources`) and notes

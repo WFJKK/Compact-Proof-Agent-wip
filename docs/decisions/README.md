@@ -62,3 +62,8 @@ working from the repositories can read them. Each is dated; later decisions supe
   the architecture has a short proof of most inputs by convexity (pure inputs: about V^3 operations, 71% of
   the right inputs at 64 tokens, brute force over 26,600), which max of 2 has not. The sizes, the training,
   what the Lean service does at 16,777,216 inputs, the run and dry-start configs, and reference numbers.
+- [attention-max4-paper-size.md](attention-max4-paper-size.md) (23 November 2026): the attention max-of-4
+  network at the paper's size (`models/attn-max4` at v64) prepared for a first run: what the Lean service does
+  there, the run and dry-start configs, a rehearsal, references, and `q_above` summed with numpy on lines of
+  many steps (it took about 40 s a call at 16,777,216 inputs).
+

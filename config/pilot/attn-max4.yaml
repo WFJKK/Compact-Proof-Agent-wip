@@ -1,0 +1,17 @@
+# The pilot on the attention max-of-4 network at the paper's own size (models/attn-max4 at v64: one layer, one
+# head, attention only, vocabulary size 64, width 32, four positions): 16,777,216 inputs, 8,320 weights. Brute
+# force is never run at this size: B comes from the shapes (a forward pass of 13,159), and round 0 replays no
+# baselines.
+#   proof rounds on  attn-max4-v64-s0
+#   seed check on    attn-max4-v64-s2, the same sizes, another development seed (s1 is held out)
+# How many inputs each gets right is in models/attn-max4/zoo/manifest.json. Everything else is config/pilot/base.yaml.
+extends: base.yaml
+run_id: pilot-attn-max4
+model: models/attn-max4
+networks: [attn-max4-v64-s0]
+baselines: false
+# One run_python call may hold more than the default 2 GB: the network on all 16,777,216 inputs is worked
+# through in chunks, and one array of all inputs is 0.5 GB as 64-bit integers.
+memory_limit_mb: 4096
+open_lane:
+  seed_check: {network: attn-max4-v64-s2}

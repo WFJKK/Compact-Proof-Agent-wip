@@ -1,0 +1,35 @@
+# The first run on the attention max-of-4 network at the paper's size: attn-max4-v64-s0 from an empty workspace,
+# in the python_then_lean workflow with the checker's run made by the Lean service (open_lane.instance:
+# compiled, the service's policy v15). One discovery round, four formalization rounds, sessions of 90 minutes
+# (the attention pilots' length: a soundness proof through the softmax takes more Lean than a linear one), then
+# a reading of the best proof's checker. No seed check and no scaling question in this first run.
+#
+# The run is given nothing to start from. Its settings are those of linear-max4-ptl-1 (23 November 2026) but
+# for the session length and the budget.
+#
+# Before starting it:
+#
+#     python3 -m core.open_lane.dry_start --config config/pilot/attn-max4-dry.yaml --sandbox seatbelt --check
+#
+# has the Lean service compile, check, run and score a probe checker on this network (the single rule on 64
+# of its inputs), with no agent and no API call: READY or NOT READY. The probe belongs to that config alone.
+# Budget, when billed to an API key (--auth api_key): at most $40 a session and $200 for the run, as for the
+# attention continuation attn-min2-ptl-4.
+extends: attn-max4.yaml
+run_id: attn-max4-ptl-1
+rounds_max: 5
+api_budget: {run_usd: 200, round_usd: 40}
+open_lane:
+  workflow_mode: python_then_lean
+  instance: compiled
+  discovery_rounds: 1
+  probe_compile_calls: 3
+  probe_auxiliary_submissions: 1
+  probe_seconds: 600
+  worker_seconds: 5400
+  seed_check: null
+  scaling: false
+  # The checker of the best scored proof is read after the rounds, in a session that proves and submits nothing,
+  # for numbers of the network written into its code. A language model's reading: an alarm for a person.
+  code_review: true
+  start_drafts: []

@@ -228,10 +228,43 @@ def q_above(points: list[dict], entry: dict, line: dict) -> float:
         return line_certified(line, L) / n
 
     breaks = [p["length"] for p in points]
+    if line["c"] and line["coverage"] > LINE_STEPS_IN_PYTHON:
+        return _q_above_many_steps(points, line, lo_limit, float(B), a_max, breaks)
     if line["c"]:
         breaks += [line["E"] + line["c"] * k for k in range(1, line["coverage"] + 1)]
     gain = _log_area(lambda L: max(a(L) - b(L), 0.0), lo_limit, B, breaks)
     room = _log_area(lambda L: max(a_max - b(L), 0.0), lo_limit, B, breaks)
+    return gain / room if room > 0 else 0.0
+
+
+# Above this many steps of the brute-force line (one per input it certifies), q_above sums with numpy instead
+# of a Python loop over the steps. At 16,777,216 inputs the loop took about 40 s a call, and every round's
+# prompt and every report call it per network (23 November 2026).
+LINE_STEPS_IN_PYTHON = 100_000
+
+
+def _q_above_many_steps(points: list[dict], line: dict, lo_limit: float, B: float, a_max: float,
+                        breaks: list[float]) -> float:
+    """q_above's two log areas, the same pieces and values as `_log_area` evaluates, summed with numpy: the
+    pieces are cut at the frontier's lengths and at the line's steps, and each piece takes the step functions'
+    values at its left end."""
+    import numpy as np
+
+    k = np.arange(1, int(line["coverage"]) + 1, dtype=np.float64)
+    steps = float(line["E"]) + float(line["c"]) * k
+    inside = [x for x in breaks if lo_limit < x < B]
+    xs = np.unique(np.concatenate([np.array([lo_limit, B, *inside], dtype=np.float64), steps[(steps > lo_limit) & (steps < B)]]))
+    left = xs[:-1]
+    width = np.log(xs[1:]) - np.log(left)
+    pts = sorted(points, key=lambda p: p["length"])
+    lengths = np.array([p["length"] for p in pts], dtype=np.float64)
+    best = np.maximum.accumulate(np.array([p["certified"] / p["n_inputs"] for p in pts] or [0.0], dtype=np.float64))
+    at = np.searchsorted(lengths, left, side="right") - 1  # the last frontier point within each piece's left end
+    a = np.where(at >= 0, np.maximum(best[np.clip(at, 0, None)], 0.0), 0.0)
+    b = np.where(left < float(line["E"]), 0.0,
+                 np.minimum(float(line["coverage"]), np.floor((left - float(line["E"])) / float(line["c"])))) / line["n"]
+    gain = math.fsum(np.maximum(a - b, 0.0) * width)
+    room = math.fsum(np.maximum(a_max - b, 0.0) * width)
     return gain / room if room > 0 else 0.0
 
 
