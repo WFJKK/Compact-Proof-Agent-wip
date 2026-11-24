@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from core import loop
 from core.model_folder import load_model_folder
@@ -174,6 +175,84 @@ def test_the_command_refuses_what_it_cannot_do(tmp_path, monkeypatch):
         "open_lane.scaling_steps: each of V, n, d at most once, in that order"]
     assert scaling_steps_errors([{"parameter": "V", "minutes": 0, "usd": 1}]) == ["open_lane.scaling_steps: V's minutes must be a positive number"]
     assert scaling_steps_errors([{"parameter": "w", "minutes": 1, "usd": 1}])[0].startswith("open_lane.scaling_steps: parameter must be one of V, n, d")
+
+
+def _folder_files(folder) -> dict:
+    return {p.relative_to(folder.path).as_posix(): p.read_bytes() for p in folder.identity_files() if folder.path in p.parents}
+
+
+def _without_scaling_sizes(config: bytes) -> bytes:
+    """config.yaml as it was before the model folder named its sizes for the scaling proofs."""
+    cfg = yaml.safe_load(config)
+    cfg["open_lane"] = {k: v for k, v in cfg["open_lane"].items() if k != "scaling_sizes"}
+    return yaml.safe_dump(cfg).encode()
+
+
+def test_a_later_pipeline_scales_a_run_whose_networks_it_did_not_change(tmp_path, monkeypatch):
+    """The steps come after a finished run, with the pipeline as it is by then (the pull that brings them changes
+    the checker code and the model folders' open_lane blocks). A resume still refuses a run whose trusted
+    hashes changed; the steps open it when the model folder differs from the run's only in its open_lane block,
+    read back from the pipeline commit the run recorded, and say which pipeline they ran with."""
+    ctx, lines = finished_run(tmp_path, monkeypatch, [DISCOVERY, ROUND, READING, STEP_V, STEP_N, STEP_D])
+    run, folder = ctx.run, ctx.folder
+    then = {**_folder_files(folder), "config.yaml": _without_scaling_sizes((folder.path / "config.yaml").read_bytes())}
+    versions = json.loads((run.path / "versions.json").read_text())
+    versions.update({"checker": "0" * 64, "model_folder": loop.files_hash(then), "git": {"commit": "a" * 40, "dirty": False}})
+    (run.path / "versions.json").write_text(json.dumps(versions))
+    monkeypatch.setattr(loop, "model_folder_at", lambda commit, f: then if commit == "a" * 40 else None)
+    with pytest.raises(loop.LoopError, match="checker, model_folder changed since run run started; results would not be comparable"):
+        loop.resume(run.path, log=lambda line: None)
+    log: list[str] = []
+    after = loop.resume(run.path, log=log.append, after_run=True)
+    assert [l for l in log if l.startswith("note:")] == [
+        f"note: the pipeline's checker code, model folder changed since run run started (pipeline aaaaaaa, now "
+        f"{after.versions['git']['commit'][:7]}); the steps after a finished run add lemmas and no scores, so they go on; "
+        "the model folder differs from the run's only in its open_lane block"]
+    loop.scale(after, only=["V"])
+    step = stages.read_state(run)["scaling_proofs"]["steps"][0]
+    assert step["result"] is not None and step["pipeline"] == {"commit": after.versions["git"]["commit"],
+                                                               "changed_since_run": ["checker", "model_folder"]}
+    records = [r for r in run.read_archive() if r["round"] == 4]
+    assert records and all(r["versions"]["after_run"] == {"run_git": {"commit": "a" * 40, "dirty": False},
+                                                           "changed": ["checker", "model_folder"]} for r in records)
+    assert f"Ran with pipeline {after.versions['git']['commit'][:7]}; changed since the run started: checker, model_folder" in \
+        Path(build_report(run.path)).read_text()
+
+
+@pytest.mark.parametrize("change, why", [
+    (lambda f: {**f, "model.py": f["model.py"] + b"\n# changed\n"}, "the model folder's model.py changed since the run started"),
+    (lambda f: {**f, "config.yaml": f["config.yaml"].replace(b"d_vocab", b"d_vocab_was")},
+     "the model folder's config.yaml changed outside its open_lane block"),
+    (lambda f: {k: v for k, v in f.items() if k != "task.py"}, "files of the model folder were added or removed since the run started: task.py"),
+])
+def test_a_later_pipeline_does_not_scale_a_run_whose_networks_or_task_changed(change, why):
+    """Anything of the model folder outside its open_lane block (the networks' manifest, the task, the
+    architecture, the sizes) must be as the run started; and the folder must be readable back from the run's
+    pipeline commit, as the run recorded it."""
+    folder = load_model_folder(REPO_ROOT / "tests" / "max2_ladder")
+    then = change(_folder_files(folder))
+    started = {"git": {"commit": "a" * 40}, "model_folder": loop.files_hash(then)}
+    read = lambda commit, f: then
+    assert loop.after_run_refusal(started, folder, ["model_folder"], read=read).startswith(why)
+    assert loop.after_run_refusal(started, folder, ["checker"], read=read) is None  # the model folder did not change
+    assert loop.after_run_refusal({**started, "model_folder": "b" * 64}, folder, ["model_folder"], read=read).startswith(
+        "the model folder at pipeline commit aaaaaaaaaaaa is not the one the run recorded")
+    assert loop.after_run_refusal(started, folder, ["model_folder"], read=lambda commit, f: None).startswith(
+        "git cannot show the model folder as it was at pipeline commit aaaaaaaaaaaa")
+
+
+def test_the_model_folder_read_back_from_git_hashes_as_the_folder_does():
+    """model_folder_at reads a model folder's identity files at a commit; at HEAD, for a folder git has no
+    changes in, they hash to the folder's own hash."""
+    import subprocess
+
+    folder = load_model_folder(REPO_ROOT / "models" / "max4")
+    if subprocess.run(["git", "status", "--porcelain", "--", "models/max4"], cwd=REPO_ROOT, capture_output=True, text=True).stdout.strip():
+        pytest.skip("models/max4 has uncommitted changes")
+    then = loop.model_folder_at("HEAD", folder)
+    if then is None:
+        pytest.skip("git cannot show HEAD here")
+    assert loop.files_hash(then) == folder.folder_hash() and set(then) == set(_folder_files(folder))
 
 
 @pytest.mark.parametrize("model, network, expected", [

@@ -37,15 +37,24 @@ locked proof only, with the sizes left to the agent. It was off in the recent ru
   step's lemmas and answer). Running the command again goes on with the steps not done; `--only V` runs the
   next step alone.
 - The round log names an accepted lemma's theorem (it printed an empty `lemma:` before).
+- With a later pipeline (24 November). The first use, on attn-max4-ptl-1 after `git pull`, stopped at once:
+  the command opened the run as a resume does, and a resume refuses a run whose checker code or model folder
+  changed since it started, which the pull that brought the steps had done (the folders gained
+  `open_lane.scaling_sizes`). The steps add lemmas and never a score, so they now open such a run when the
+  Lean checker is the run's and the model folder differs only in its `open_lane` block, read back with git
+  from the run's pipeline commit and checked against the hash the run recorded. Each step records the
+  pipeline it ran with and what changed; its records carry the pipeline's hashes as they are now.
 
 ## Checked
 
-- Tests (`tests/test_scaling_steps.py`): the order, each step's time in its prompt, the proofs and their files
+- Tests (`tests/test_scaling_steps.py`): a run opened by a later pipeline, and the changes that refuse it; the order, each step's time in its prompt, the proofs and their files
   in the workspace, a lemma checked against both proofs' checkers, what carries over, `--only`, the refusals,
   the report and the status; each model folder's sizes.
 - A rehearsal on the cloud machine with the real Lean service: a finished run on max4-v64-s0 (the dry-start
   probe as its proof), then the three steps, each submitting a lemma about the locked checker; Lean found the
   locked checker in each.
+- The two runs of 23 November (attn-max4-ptl-1 from ded98e7, linear-max4-ptl-1 from 451f296): their model
+  folders read back from git hash to what each run recorded, and differ from today's only in `open_lane`.
 
 ## Not done
 

@@ -267,12 +267,110 @@ def prepare_sandbox(cfg: dict, folder, run: RunDir, entries: list[dict], log=pri
     return sb, report
 
 
-def open_context(run: RunDir, cfg: dict, log=print, surface_checked: bool = False) -> Context:
+def model_folder_at(commit: str, folder) -> dict[str, bytes] | None:
+    """The model folder's identity files (ModelFolder.identity_files) as they were at a pipeline commit, by
+    their path in the folder, read with git; None when git cannot show them (no repository, an unknown
+    commit, or a folder outside the repository)."""
+    import subprocess
+
+    try:
+        rel = folder.path.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+        zoo = folder.zoo_dir().resolve().relative_to(folder.path.resolve()).as_posix()
+    except ValueError:
+        return None
+    listing = subprocess.run(["git", "ls-tree", "-r", "-z", "--name-only", commit, "--", rel], cwd=REPO_ROOT, capture_output=True)
+    if listing.returncode != 0:
+        return None
+    out = {}
+    for path in listing.stdout.decode("utf-8", "replace").split("\0"):
+        name = path[len(rel) + 1:] if path.startswith(rel + "/") else None
+        if not name:
+            continue
+        parts = name.split("/")
+        if any(p.startswith(".") for p in parts) or "__pycache__" in parts or name.endswith(".pyc"):
+            continue
+        if name.startswith(zoo + "/") and parts[-1] != "manifest.json":
+            continue  # weights and the like: the manifest names them by their hashes
+        blob = subprocess.run(["git", "show", f"{commit}:{path}"], cwd=REPO_ROOT, capture_output=True)
+        if blob.returncode != 0:
+            return None
+        out[name] = blob.stdout
+    return out or None
+
+
+def files_hash(files: dict[str, bytes]) -> str:
+    """ModelFolder.folder_hash of files given by their path in the folder and their bytes."""
+    import hashlib
+
+    h = hashlib.sha256()
+    for name in sorted(files):
+        h.update(name.encode() + b"\0" + hashlib.sha256(files[name]).hexdigest().encode() + b"\0")
+    return h.hexdigest()
+
+
+def after_run_refusal(started: dict, folder, bad: list[str], read=None) -> str | None:
+    """Why the steps after a finished run (the scaling proofs) may not open it with the pipeline as it is now,
+    or None. They add lemmas and never a score, so the pipeline's code may have changed since the run started
+    (its checker and sandbox code: the Lean checker must be the run's, which opening the run checks anyway).
+    The model folder may differ only in its open_lane block, which says what open-lane sessions are shown and
+    given: its networks, task and architecture must be the run's. The folder the run started with is read back
+    from the pipeline commit the run recorded, and must hash to what the run recorded."""
+    if "model_folder" not in bad:
+        return None
+    commit = (started.get("git") or {}).get("commit")
+    if not commit:
+        return "the run recorded no pipeline commit to read its model folder back from"
+    then = (read or model_folder_at)(commit, folder)
+    if then is None:
+        return f"git cannot show the model folder as it was at pipeline commit {commit[:12]}, which the run started from"
+    if files_hash(then) != started.get("model_folder"):
+        return (f"the model folder at pipeline commit {commit[:12]} is not the one the run recorded "
+                "(it started with changes that were not committed)")
+    now = {p.relative_to(folder.path).as_posix(): p.read_bytes() for p in folder.identity_files() if folder.path in p.parents}
+    if set(then) != set(now):
+        return "files of the model folder were added or removed since the run started: " + ", ".join(sorted(set(then) ^ set(now)))
+    for name in sorted(n for n in now if now[n] != then[n]):
+        if name != "config.yaml":
+            return f"the model folder's {name} changed since the run started"
+        import yaml
+
+        old, new = yaml.safe_load(then[name]), yaml.safe_load(now[name])
+        if not isinstance(old, dict) or not isinstance(new, dict):
+            return "the model folder's config.yaml is not a mapping"
+        outside = sorted(k for k in set(old) | set(new) if k != "open_lane" and old.get(k) != new.get(k))
+        if outside:
+            return f"the model folder's config.yaml changed outside its open_lane block ({', '.join(outside)})"
+    return None
+
+
+TRUSTED_WORDS = {"checker": "checker code", "sandbox": "sandbox code", "model_folder": "model folder"}
+
+
+def open_context(run: RunDir, cfg: dict, log=print, surface_checked: bool = False, after_run: bool = False) -> Context:
+    """Open a run to go on with it. With `after_run` (the steps after a finished run, which add lemmas and no
+    scores), the pipeline may have changed since the run started, as after_run_refusal says; the context's
+    versions are then the pipeline's as it is now, with what changed, so the new rounds' records say what ran."""
     sys.dont_write_bytecode = True  # so compiled files that appear in trusted folders can only come from elsewhere
     folder = load_model_folder(resolve(cfg["model"]))
     started = read_json(run.path / "versions.json")
     bad = changed(started, folder)
-    if bad:
+    versions = started
+    if after_run:
+        why = after_run_refusal(started, folder, bad) if bad else None
+        if why:
+            raise LoopError(f"{', '.join(bad)} changed since run {run.run_id} started, and {why}. The scaling proofs "
+                            "need the run's networks, task and architecture: check out the pipeline commit the run started "
+                            f"from ({((started.get('git') or {}).get('commit') or '?')[:12]}) and run the command there")
+        from .versions import trusted
+
+        git = git_state()
+        versions = {**started, **trusted(folder), "git": git, "after_run": {"run_git": started.get("git"), "changed": bad}}
+        if bad:
+            log(f"note: the pipeline's {', '.join(TRUSTED_WORDS.get(b, b) for b in bad)} changed since run {run.run_id} started "
+                f"(pipeline {((started.get('git') or {}).get('commit') or '?')[:7]}, now {(git.get('commit') or '?')[:7]}); the steps "
+                "after a finished run add lemmas and no scores, so they go on"
+                + ("; the model folder differs from the run's only in its open_lane block" if "model_folder" in bad else ""))
+    elif bad:
         raise LoopError(
             f"{', '.join(bad)} changed since run {run.run_id} started; results would not be comparable. "
             "Start a new run instead."
@@ -310,7 +408,7 @@ def open_context(run: RunDir, cfg: dict, log=print, surface_checked: bool = Fals
         folder=folder,
         run=run,
         entries=entries,
-        versions=started,
+        versions=versions,
         limits=Limits.from_config(cfg),
         sandbox=sb,
         log=log,
@@ -557,7 +655,8 @@ def inherit(run: RunDir, cfg: dict, log=print) -> dict:
         raise LoopError(f"run {run.run_id}: {exc}") from exc
 
 
-def resume(run_path: str | Path, log=print, budget_usd: float | None = None) -> Context:
+def resume(run_path: str | Path, log=print, budget_usd: float | None = None, after_run: bool = False) -> Context:
+    """Open a run to go on with it; `after_run` for the steps after a finished run (open_context)."""
     run_path = Path(run_path).expanduser().resolve()
     run = RunDir(run_path.parent, run_path.name)
     if not run.exists():
@@ -574,7 +673,7 @@ def resume(run_path: str | Path, log=print, budget_usd: float | None = None) -> 
         before = api_budget.state(run.path, cfg["api_budget"])
         api_budget.set_run_budget(run.path, budget_usd)
         log(f"the run's API budget is now ${budget_usd:.2f} (was ${before['run_usd']:.2f}; ${before['spent']:.2f} counted so far)")
-    return open_context(run, cfg, log)
+    return open_context(run, cfg, log, after_run=after_run)
 
 
 def drive(ctx: Context) -> None:
@@ -766,7 +865,7 @@ def main(argv=None):
                 overrides["api_budget.run_usd"] = args.budget_usd
             ctx = start(args.config, run_id=args.run_id, overrides=overrides)
         elif args.cmd == "scale":
-            ctx = resume(args.run, budget_usd=args.budget_usd)
+            ctx = resume(args.run, budget_usd=args.budget_usd, after_run=True)
             scale(ctx, only=args.only)
             print(status_text(ctx.run))
             return 0

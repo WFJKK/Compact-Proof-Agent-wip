@@ -463,6 +463,15 @@ the locked proof in the session, for the others after it); the report prints eac
 that answer. The steps are rounds of the run after its last; `stages.json` keeps them under
 `scaling_proofs`, and running the command again goes on with the steps not done. Nothing is scored.
 
+The steps run with the pipeline as it is when the person starts them, usually later than the run's (the
+pull that brought them changed the checker code and the model folders' open_lane blocks). A resume refuses a
+run whose trusted hashes changed; the steps open it all the same (`core.loop.after_run_refusal`) when the
+Lean checker is the run's and the model folder differs from the run's only in its `open_lane` block: the
+folder the run started with is read back with git from the pipeline commit the run recorded, must hash to
+what the run recorded, and must have the same networks' manifest, task, architecture and the same settings
+outside `open_lane`. Otherwise the command says which commit to check out. Each step records the pipeline it
+ran with and what changed since the run started; the report says so under the step.
+
 `stages.json` in the run folder records when and why the proof rounds ended, which proof was locked (and
 any better proof passed over because it could not be), each stage's round and what it found. Once it
 exists the run makes no more proof rounds: the proof rounds end at the round limit or by patience, not

@@ -388,6 +388,11 @@ def run_steps(ctx, backend, run_round, only: list[str] | None = None) -> None:
             ctx.log(f"the {backend.name} backend has no more responses; the step on {step['parameter']} (round {k}) is left for later")
             return
         prompt = Prompt.from_json(saved) if saved is not None else build_step_prompt(step_cfg, ctx.folder, run, k, step, state, entry)
+        # the pipeline the step runs with: it may be later than the run's (core.loop.after_run_refusal)
+        versions = ctx.versions or {}
+        step["pipeline"] = {"commit": (versions.get("git") or {}).get("commit"),
+                            "changed_since_run": list((versions.get("after_run") or {}).get("changed") or [])}
+        stages.write_state(run, state)
         ctx.log(f"round {k}: scaling in {step['parameter']} ({step['minutes']:g} minutes, ${float(step['usd']):.2f})"
                 + (f"; prompt of about {prompt.stats['tokens_estimate']:,} tokens" if saved is None else ""))
         step_ctx = dataclasses.replace(ctx, cfg=step_cfg, entries=[entry])
@@ -442,6 +447,12 @@ def report_lines(run: RunDir) -> list[str]:
             if res["answer"].get(name):
                 lines += [f"**{name.title()}** (the agent's):", "", res["answer"][name], ""]
         lines += [f"The whole answer is `round_{s['round']:03d}/attempt_0/response.md`. Lemmas accepted: {len(res['lemmas'])}.", ""]
+        ran = s.get("pipeline") or {}
+        if ran.get("commit"):
+            changed = ran.get("changed_since_run") or []
+            lines += [f"Ran with pipeline {ran['commit'][:7]}" + (
+                f"; changed since the run started: {', '.join(changed)} (its networks, task and architecture are the run's)"
+                if changed else "") + ".", ""]
         for l in res["lemmas"]:
             found = [rid for rid, c in l["checkers"].items() if c["verified"]]
             unknown = [rid for rid, c in l["checkers"].items() if c["verified"] is None]
