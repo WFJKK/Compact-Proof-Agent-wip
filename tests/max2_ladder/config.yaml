@@ -44,8 +44,6 @@ hygiene: ["Gross", "Compact Proofs of Model Performance"]
 # any of these itself). The worked example is brute force on the tiny network of tests/max2_tiny, the same
 # architecture at 8 tokens: none of this folder's networks.
 open_lane:
-  # the scaling proofs after a run (core.open_lane.scaling_steps)
-  scaling_sizes: {V: [d_vocab], n: [n_ctx], d: [d_model]}
   example: examples/open_lane/max2_tiny_scored/Candidate/Max2TinyScored.lean
   extra_sources: []
   notes: |

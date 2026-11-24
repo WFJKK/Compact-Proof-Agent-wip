@@ -446,9 +446,7 @@ them once the run's proofs have been looked at,
     python3 -m core.loop scale --run <run folder> [--only general] [--again V n] [--budget-usd 300]
 
 They ask, as theorems of Lean, how the cost of the run's scored proofs grows with each size of the network
-(the number of token values V, the number of positions n, the width d) against brute force's
-(`core/open_lane/scaling_steps.py`). The result for a size is four links, each a theorem the service accepted
-or missing:
+against brute force's. The result for a size is four links, each a theorem the service accepted or missing:
 
 - `general`: a checker with the size as a parameter, proved to be the submitted checker at the network's
   value. A submitted checker has the network's sizes written into its loops, or tests them against the
@@ -458,45 +456,63 @@ or missing:
 - `formula`: that function in closed form, or between proved bounds.
 - `brute`: brute force's cost as a function of the size, and the comparison.
 
-A formula worked out by hand, a Python model or a Lean function evaluated at a few sizes is not a link. The
-sessions, in the order of `open_lane.scaling_steps` (by default `general` 90 minutes and $30, then V, n and d
-45 minutes and $15 each): `general` is for the first two links, for all three sizes at once, since that work
-is shared; each size's session is for the other two, and for the first two where they are missing. The model
-folder says which of its sizes each one is (`open_lane.scaling_sizes`; an attention model's width and head
-width vary together). The sessions are about every scored proof on the run's frontier, not only the locked
-one: the locked proof's modules are in the workspace, locked, as in the scaling question; the other proofs'
-modules are there to read and import where they do not clash with the locked ones; every proof's certificate
-and plan are in `py/handed_in_proofs.json`.
+A formula worked out by hand, a Python model or a Lean function evaluated at a few sizes is not a link.
+
+They are a package of their own, `core/open_lane/scaling`, made to follow any open-lane run on one network:
+
+- The sizes are the whole-number entries of the network's size setting in its model folder, whatever they
+  are called there (`sizes.py`). A model folder declares nothing for the scaling proofs. `open_lane.scaling_names`
+  (in `config/defaults.yaml`, or a run's own) gives names a symbol and words: `d_vocab` is V, the number of
+  token values; `n_ctx` is n, the number of positions; `d_model` is d, the width, together with `d_head` where
+  the two are equal. A size it does not list goes by its own name.
+- The sessions are `open_lane.scaling_steps` (`plan.py`): `general` is the session for the first two links,
+  for every size at once, since that work is shared; `sizes` is one session for every size, each for the
+  other two links, and for the first two where they are missing; a size named by its symbol gets settings of
+  its own. By default `general` at 90 minutes and $30, then every size at 45 minutes and $15.
+- A session's prompt is the run's first part, a frame every session shares and a part for its kind
+  (`prompt.py`; `open_lane_scaling_frame_v1.md`, `open_lane_scaling_part_general_v1.md`,
+  `open_lane_scaling_part_size_v1.md`). The texts name no size: the symbols come from the run.
+- The loop driver, the report, the sessions and the stages know the package only as a command that follows a
+  finished run (`core/open_lane/after_run.py`). None of the files a run's identity rests on belongs to it, so a
+  pull that changes only the scaling proofs leaves every finished run openable as it is.
+
+Which run: one whose proof rounds are over. A run with stages after its proof rounds says so itself and has
+locked a proof. A run that plans no stage says nothing, so the command asks for `--end-proof-rounds`: the
+proof rounds are then over for good and the best scored proof that can be locked is locked, as the stages
+would have done. The sessions are about every scored proof on the run's frontier, not only the locked one: the
+locked proof's modules are in the workspace, locked, as in the scaling question; the other proofs' modules
+are there to read and import where they do not clash with the locked ones; every proof's certificate and
+plan are in `py/handed_in_proofs.json`.
 
 A session starts with the modules of the lemmas the earlier sessions had accepted, the modules they left
 without submitting them (drafts), their Python files and their answers; and every module of its workspace is
-compiled before it begins, in import order, at no charge to its budgets (`Session._prebuild`). Its prompt
-says its time so that it cannot be subtracted twice: the minutes of tool time, then the minutes for the
-answer, and that `remaining.seconds` is the tool time left.
+compiled before it begins, in import order, at no charge to its budgets (`workspace.py`). Its prompt says its
+time so that it cannot be subtracted twice: the minutes of tool time, then the minutes for the answer, and
+that `remaining.seconds` is the tool time left.
 
-What is recorded, and shown in the status and the report: for each accepted lemma, its statement in full,
-which of the proofs' checkers Lean finds in the modules the service compiled for it (term for term; for the
-locked proof in the session, for the others after it), and which of the proofs' checkers its statement
-names. Only a lemma whose statement names a checker that Lean found says anything about a submitted proof;
-one that names none may compare two formulas of the agent's own. The answer's THEOREMS section names, per
-size and link, the accepted theorem that holds it (`V formula: Candidate.Module.theorem`, `as submitted`
-for a checker general as it is, `none`); the pipeline checks that the theorem is the named theorem of an
-accepted submission and tabulates the links per size. That a theorem says what its link asks stays the
-agent's account: a person reads the statement.
+What is recorded, and shown in the status and the report (`steps.py`, `links.py`, `show.py`): for each
+accepted lemma, its statement in full, which of the proofs' checkers Lean finds in the modules the service
+compiled for it (term for term; for the locked proof in the session, for the others after it), and which of
+the proofs' checkers its statement names. Only a lemma whose statement names a checker that Lean found says
+anything about a submitted proof; one that names none may compare two formulas of the agent's own. The
+answer's THEOREMS section names, per size and link, the accepted theorem that holds it (`V formula:
+Candidate.Module.theorem`, `as submitted` for a checker general as it is, `none`); the pipeline checks that
+the theorem is the named theorem of an accepted submission and tabulates the links per size. That a theorem
+says what its link asks stays the agent's account: a person reads the statement.
 
-The steps are rounds of the run after its last; `stages.json` keeps them under `scaling_proofs`, and running
-the command again goes on with the steps not done. `--again [steps]` adds a further session for each named
-step (none named: for each configured step) to a run whose steps are done, with `--minutes` and `--usd` in
-place of the configured ones when given; it starts from all that was accepted and left. Nothing is scored.
+The sessions are rounds of the run after its last; `stages.json` keeps them under `scaling_proofs`, and
+running the command again goes on with the sessions not done. `--again [steps]` adds a further session for
+each named step (`general`, a size's symbol, `sizes` for every size; none named: for each configured step) to
+a run whose sessions are done, with `--minutes` and `--usd` in place of the configured ones when given; it
+starts from all that was accepted and left. Nothing is scored.
 
-The steps run with the pipeline as it is when the person starts them, usually later than the run's (the
-pull that brought them changed the checker code and the model folders' open_lane blocks). A resume refuses a
-run whose trusted hashes changed; the steps open it all the same (`core.loop.after_run_refusal`) when the
-Lean checker is the run's and the model folder differs from the run's only in its `open_lane` block: the
-folder the run started with is read back with git from the pipeline commit the run recorded, must hash to
-what the run recorded, and must have the same networks' manifest, task, architecture and the same settings
-outside `open_lane`. Otherwise the command says which commit to check out. Each step records the pipeline it
-ran with and what changed since the run started; the report says so under the step.
+The sessions run with the pipeline as it is when the person starts them, which may be later than the run's.
+A resume refuses a run whose trusted hashes changed; the command opens it all the same (`later_pipeline.py`)
+when the Lean checker is the run's and the model folder differs from the run's only in the `open_lane` block
+of its config: the folder the run started with is read back with git from the pipeline commit the run
+recorded, must hash to what the run recorded, and must have the same networks' manifest, task, architecture
+and the same settings outside `open_lane`. Otherwise the command says which commit to check out. Each
+session records the pipeline it ran with and what changed since the run started; the report says so under it.
 
 `stages.json` in the run folder records when and why the proof rounds ended, which proof was locked (and
 any better proof passed over because it could not be), each stage's round and what it found. Once it

@@ -49,9 +49,6 @@ hygiene: ["Gross", "Compact Proofs of Model Performance"]
 # The notes say how the tools behave at these sizes, never what a proof of these networks looks like or how
 # short one has been (docs/decisions/agent-told-nothing.md).
 open_lane:
-  # For the scaling proofs after a run (core.open_lane.scaling_steps): which sizes are the number of token
-  # values V, the number of positions n and the width d.
-  scaling_sizes: {V: [d_vocab], n: [n_ctx], d: [d_model]}
   example: examples/open_lane/max2_tiny_scored/Candidate/Max2TinyScored.lean
   extra_sources: []
   notes: |

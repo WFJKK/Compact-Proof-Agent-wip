@@ -65,10 +65,7 @@ TRAINING_KEYS = ("optimizer", "lr", "batch_size", "steps")
 # prompt (what is known about running this architecture in Lean's kernel).
 # `compiled`: {example, notes} for a run whose instance the Lean service runs compiled (open_lane.instance): a
 # worked example with no instance theorem, and notes that say nothing about the kernel's run.
-# `scaling_sizes`: {V: [...], n: [...], d: [...]}, for the scaling proofs after a run (core.open_lane.scaling_steps):
-# the size names of size_settings that are the number of token values, the number of positions and the width.
-# Several names under one parameter vary together (an attention model's width and head width).
-OPEN_LANE_FACTS = {"example": str, "extra_sources": list, "notes": str, "compiled": dict, "scaling_sizes": dict}
+OPEN_LANE_FACTS = {"example": str, "extra_sources": list, "notes": str, "compiled": dict}
 
 
 class ModelFolderError(ValueError):
@@ -215,18 +212,6 @@ def load_model_folder(path: str | Path) -> ModelFolder:
     other = block.get("compiled", {})
     if not set(other) <= {"example", "notes"} or not all(isinstance(v, str) for v in other.values()):
         raise ModelFolderError(f"{path.name}: config.yaml open_lane.compiled may hold example and notes, each a text")
-    if "scaling_sizes" in block:
-        sizes = block["scaling_sizes"]
-        named = [n for v in sizes.values() if isinstance(v, list) for n in v]
-        if (set(sizes) != {"V", "n", "d"} or not all(isinstance(v, list) and v and all(isinstance(n, str) for n in v) for v in sizes.values())
-                or len(set(named)) != len(named)):
-            raise ModelFolderError(f"{path.name}: config.yaml open_lane.scaling_sizes must map V, n and d each to a list of size names, "
-                                   "no name twice")
-        for setting, given in config["size_settings"].items():
-            missing = [n for n in named if n not in given]
-            if missing:
-                raise ModelFolderError(f"{path.name}: config.yaml open_lane.scaling_sizes names {', '.join(missing)}, which size "
-                                       f"setting {setting!r} does not have")
 
     model_mod = _import_file(path / "model.py", "model")
     import torch

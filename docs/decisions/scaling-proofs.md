@@ -19,7 +19,8 @@ locked proof only, with the sizes left to the agent. It was off in the recent ru
   it is where a checker that fixes the vocabulary has to be rewritten to read it and proved equal to the
   submitted one at this network's value; the later steps start from that work.
 - The model folder names its sizes (`open_lane.scaling_sizes`): `d_vocab`, `n_ctx`, `d_model`, and for the
-  attention models `d_model` and `d_head` together.
+  attention models `d_model` and `d_head` together. (Taken out again on 24 November: see "A package of its
+  own" below.)
 - Every scored proof on the run's frontier is in scope, not only the locked one. The locked proof is in the
   workspace as in the scaling question; the others' modules beside it where they do not clash; every proof's
   certificate and plan in `py/handed_in_proofs.json`.
@@ -74,14 +75,15 @@ What was built:
   The prompts say what is not a result: a formula worked out by hand, a Python model, a Lean function
   evaluated at a few sizes; and what makes a checker not general, with the hypothesis that fixes a size.
 - A first session, `general`, for the first two links and all three sizes at once (their shared work), then
-  V, n and d for the other two (`open_lane_scaling_general_v1`, `open_lane_scaling_step_v2`). By default 90
-  minutes and $30, then 45 minutes and $15 each. Only the cost of the general checker is asked, never its
+  V, n and d for the other two (two prompt texts, since replaced by a frame and two parts: see below). By
+  default 90 minutes and $30, then 45 minutes and $15 each. Only the cost of the general checker is asked, never its
   soundness at other sizes: the service's network module holds one graph and one task.
 - `--again [steps]` adds a further session for each named step to a run whose steps are done, with
   `--minutes` and `--usd`; the two runs of 23 November go on this way. Earlier results are never rewritten;
   a further session is told which earlier sessions were asked for formulas and not for the links.
-- A session starts with everything compiled (`Session._prebuild`, not charged, before its clock), with the
-  modules the earlier sessions left unsubmitted and with their Python files. Its prompt gives its time as
+- A session starts with everything compiled (not charged, before its clock; now in
+  `core/open_lane/scaling/workspace.py`), with the modules the earlier sessions left unsubmitted and with
+  their Python files. Its prompt gives its time as
   minutes of tool time, then minutes for the answer, and says what `remaining.seconds` is.
 - The answer's THEOREMS section names, per size and link, the theorem that holds it; the pipeline records
   whether that theorem is the named theorem of an accepted submission (the service checks the axioms of
@@ -95,23 +97,72 @@ named theorem says what its link asks is for a person to read. A full result is 
 other sizes: it says nothing of the general checker's soundness there, nor of what it would certify on a
 network trained at another size.
 
+## A package of its own (24 November 2026)
+
+Asked for by the user: "make everything modular and remove non-modular things. the idea is that we could do
+this procedure after every network and run". What was not modular in the two versions above:
+
+- Every model folder had to declare its sizes (`open_lane.scaling_sizes`), checked in `core/model_folder.py`.
+  Both are among the files a run's identity rests on, so the pull that brought the scaling proofs made every
+  finished run look changed, and a new model folder had no scaling proofs until someone wrote the block.
+- The sizes were three, and called V, n and d in the code, the prompts, the command's choices and the report.
+- The loop driver held the command, its arguments and the rule for opening a run with a later pipeline; the
+  session held the compilation before a scaling session; one file of 760 lines held the rest.
+- A run without stages after its proof rounds could not be scaled: only the stages lock a proof.
+
+What was built:
+
+- `core/open_lane/scaling/`, one module per concern: `sizes.py`, `plan.py`, `links.py`, `workspace.py`,
+  `prompt.py`, `steps.py`, `show.py`, `later_pipeline.py`, `command.py`.
+- The sizes are read from the network's size setting. `open_lane.scaling_names` in `config/defaults.yaml`
+  gives names a symbol and words and says which names are one size where they are equal; a size it does not
+  list goes by its own name. `core/model_folder.py` and the model folders are as they were before the scaling
+  proofs (restored to their content at ded98e7), so the checker hash and the model folder hashes are again
+  the ones the runs of 23 November recorded: `scale` opens them under the ordinary rule.
+- `open_lane.scaling_steps` takes `general`, `sizes` (every size the list does not name) and sizes' symbols.
+  `--only` and `--again` take the run's own step names.
+- The prompt is a frame and a part per kind of session (`open_lane_scaling_frame_v1.md`, and
+  `open_lane_scaling_part_general_v1.md`, `open_lane_scaling_part_size_v1.md`); the texts name no size. The two
+  texts of the morning (`open_lane_scaling_general_v1.md`, `open_lane_scaling_step_v2.md`) were never used in a
+  run and never pushed, and are removed. `open_lane_scaling_step_v1.md` stays: it is what the sessions of 24
+  November were asked.
+- `core/open_lane/after_run.py` lists the commands that follow a finished run and says what one is made of.
+  The loop driver registers them, opens the run with the command's own rule for a changed pipeline
+  (`open_context(changed_since=...)`) and hands it the backend; the status and the report ask each for its
+  lines. Nothing in `core/loop.py` or `core/report.py` names the scaling proofs.
+- The session has one small method for any caller, `Session.compile_uncharged` (one module compiled as a
+  lean_check with no edits compiles it, not charged). Which modules, in which order, with which limits, is in
+  `workspace.py`; what was compiled is kept in the session's record in `stages.json` (`compiled_beforehand`).
+- `--end-proof-rounds` for a run that plans no stage after its proof rounds: the proof rounds are over for
+  good and the best scored proof is locked by `stages.begin`, as the stages do it. For this the loop makes no
+  more proof rounds once `stages.json` exists, whether or not stages are planned (it was so only with stages).
+- `stages.json` of the runs of 24 November keeps their sizes as `{V: ..., n: ..., d: ...}`: read as the list
+  form (`sizes.stored`), never rewritten.
+
+Limits that stay: a run on one network (a run on several has no locked proof); the sizes are the whole-number
+entries of the size setting, so a size that is not one cannot be varied.
+
 ## Checked
 
-- Tests (`tests/test_scaling_steps.py`): the general session and the three sizes in order, a workspace compiled
+- Tests (`tests/test_scaling_steps.py`): the general session and the sizes in order, a workspace compiled
   beforehand and not charged, drafts and Python files carried, the links read and tabulated, the statement's
-  checker names, `--again` (with its own time, after steps that are done, the first sessions named as such);
-  a run opened by a later pipeline, and the changes that refuse it; the order, each step's time in its prompt, the proofs and their files
-  in the workspace, a lemma checked against both proofs' checkers, what carries over, `--only`, the refusals,
-  the report and the status; each model folder's sizes.
+  checker names, `--again` (with its own time, after sessions that are done, the first sessions named as
+  such); a run opened by a later pipeline, and the changes that refuse it; `--only`, the refusals, the report
+  and the status. Since the package: a run whose sizes have other names and whose steps leave the general
+  session out; a run that plans no stage (`--end-proof-rounds`, and no proof round after it); the sizes of
+  every model folder, read without a declaration; sizes the table does not name; the earlier state read as
+  the list; the steps expanded against the sizes; the texts name no size; and that nothing outside the
+  package is made for it (no import but `after_run.py`'s, no mention in a trusted file, in a model folder, in
+  the loop driver or the session).
 - A rehearsal on the cloud machine with the real Lean service: a finished run on max4-v64-s0 (the dry-start
-  probe as its proof), then the three steps, each submitting a lemma about the locked checker; Lean found the
+  probe as its proof), then the sessions, each submitting a lemma about the locked checker; Lean found the
   locked checker in each.
-- The two runs of 23 November (attn-max4-ptl-1 from ded98e7, linear-max4-ptl-1 from 451f296): their model
-  folders read back from git hash to what each run recorded, and differ from today's only in `open_lane`.
+- The two runs of 23 November (attn-max4-ptl-1 from ded98e7, linear-max4-ptl-1 from 451f296): with the model
+  folders restored, the pipeline's checker, sandbox and model folder hashes equal what each run recorded.
 
 ## Not done
 
 - No fixed theorem shapes: the service does not check that a lemma states a bill formula of the checker; the
   report shows the statement and a person reads it.
-- The steps run in one fixed order and do not change the plan of an earlier step; a step that finds nothing
+- The sessions run in one order and do not change the plan of an earlier one; a session that finds nothing
   leaves the next one to start from the proofs alone.

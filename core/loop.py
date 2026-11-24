@@ -4,6 +4,9 @@
     python -m core.loop resume --run <runs_dir>/<run_id>
     python -m core.loop status --run <runs_dir>/<run_id>
 
+What follows a finished run has subcommands of its own, each a package the driver knows only through
+core/open_lane/after_run.py.
+
 Round 0 replays the baselines the run config selects (all of the model
 folder's, none, or named ones such as brute force only, so the agent has to
 discover the rest); rounds 1 to rounds_max ask the run's backend for
@@ -267,109 +270,22 @@ def prepare_sandbox(cfg: dict, folder, run: RunDir, entries: list[dict], log=pri
     return sb, report
 
 
-def model_folder_at(commit: str, folder) -> dict[str, bytes] | None:
-    """The model folder's identity files (ModelFolder.identity_files) as they were at a pipeline commit, by
-    their path in the folder, read with git; None when git cannot show them (no repository, an unknown
-    commit, or a folder outside the repository)."""
-    import subprocess
-
-    try:
-        rel = folder.path.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
-        zoo = folder.zoo_dir().resolve().relative_to(folder.path.resolve()).as_posix()
-    except ValueError:
-        return None
-    listing = subprocess.run(["git", "ls-tree", "-r", "-z", "--name-only", commit, "--", rel], cwd=REPO_ROOT, capture_output=True)
-    if listing.returncode != 0:
-        return None
-    out = {}
-    for path in listing.stdout.decode("utf-8", "replace").split("\0"):
-        name = path[len(rel) + 1:] if path.startswith(rel + "/") else None
-        if not name:
-            continue
-        parts = name.split("/")
-        if any(p.startswith(".") for p in parts) or "__pycache__" in parts or name.endswith(".pyc"):
-            continue
-        if name.startswith(zoo + "/") and parts[-1] != "manifest.json":
-            continue  # weights and the like: the manifest names them by their hashes
-        blob = subprocess.run(["git", "show", f"{commit}:{path}"], cwd=REPO_ROOT, capture_output=True)
-        if blob.returncode != 0:
-            return None
-        out[name] = blob.stdout
-    return out or None
-
-
-def files_hash(files: dict[str, bytes]) -> str:
-    """ModelFolder.folder_hash of files given by their path in the folder and their bytes."""
-    import hashlib
-
-    h = hashlib.sha256()
-    for name in sorted(files):
-        h.update(name.encode() + b"\0" + hashlib.sha256(files[name]).hexdigest().encode() + b"\0")
-    return h.hexdigest()
-
-
-def after_run_refusal(started: dict, folder, bad: list[str], read=None) -> str | None:
-    """Why the steps after a finished run (the scaling proofs) may not open it with the pipeline as it is now,
-    or None. They add lemmas and never a score, so the pipeline's code may have changed since the run started
-    (its checker and sandbox code: the Lean checker must be the run's, which opening the run checks anyway).
-    The model folder may differ only in its open_lane block, which says what open-lane sessions are shown and
-    given: its networks, task and architecture must be the run's. The folder the run started with is read back
-    from the pipeline commit the run recorded, and must hash to what the run recorded."""
-    if "model_folder" not in bad:
-        return None
-    commit = (started.get("git") or {}).get("commit")
-    if not commit:
-        return "the run recorded no pipeline commit to read its model folder back from"
-    then = (read or model_folder_at)(commit, folder)
-    if then is None:
-        return f"git cannot show the model folder as it was at pipeline commit {commit[:12]}, which the run started from"
-    if files_hash(then) != started.get("model_folder"):
-        return (f"the model folder at pipeline commit {commit[:12]} is not the one the run recorded "
-                "(it started with changes that were not committed)")
-    now = {p.relative_to(folder.path).as_posix(): p.read_bytes() for p in folder.identity_files() if folder.path in p.parents}
-    if set(then) != set(now):
-        return "files of the model folder were added or removed since the run started: " + ", ".join(sorted(set(then) ^ set(now)))
-    for name in sorted(n for n in now if now[n] != then[n]):
-        if name != "config.yaml":
-            return f"the model folder's {name} changed since the run started"
-        import yaml
-
-        old, new = yaml.safe_load(then[name]), yaml.safe_load(now[name])
-        if not isinstance(old, dict) or not isinstance(new, dict):
-            return "the model folder's config.yaml is not a mapping"
-        outside = sorted(k for k in set(old) | set(new) if k != "open_lane" and old.get(k) != new.get(k))
-        if outside:
-            return f"the model folder's config.yaml changed outside its open_lane block ({', '.join(outside)})"
-    return None
-
-
-TRUSTED_WORDS = {"checker": "checker code", "sandbox": "sandbox code", "model_folder": "model folder"}
-
-
-def open_context(run: RunDir, cfg: dict, log=print, surface_checked: bool = False, after_run: bool = False) -> Context:
-    """Open a run to go on with it. With `after_run` (the steps after a finished run, which add lemmas and no
-    scores), the pipeline may have changed since the run started, as after_run_refusal says; the context's
-    versions are then the pipeline's as it is now, with what changed, so the new rounds' records say what ran."""
+def open_context(run: RunDir, cfg: dict, log=print, surface_checked: bool = False, changed_since=None) -> Context:
+    """Open a run to go on with it. A run refuses to go on when its checker code, sandbox code or model folder
+    changed since it started. `changed_since` is for a command that follows a finished run and adds no score
+    (core/open_lane/after_run.py): called with the run, what it recorded at its start, the model folder, what
+    changed and the log, it returns the versions the context goes on with, or raises a ValueError saying why
+    the run cannot be opened."""
     sys.dont_write_bytecode = True  # so compiled files that appear in trusted folders can only come from elsewhere
     folder = load_model_folder(resolve(cfg["model"]))
     started = read_json(run.path / "versions.json")
     bad = changed(started, folder)
     versions = started
-    if after_run:
-        why = after_run_refusal(started, folder, bad) if bad else None
-        if why:
-            raise LoopError(f"{', '.join(bad)} changed since run {run.run_id} started, and {why}. The scaling proofs "
-                            "need the run's networks, task and architecture: check out the pipeline commit the run started "
-                            f"from ({((started.get('git') or {}).get('commit') or '?')[:12]}) and run the command there")
-        from .versions import trusted
-
-        git = git_state()
-        versions = {**started, **trusted(folder), "git": git, "after_run": {"run_git": started.get("git"), "changed": bad}}
-        if bad:
-            log(f"note: the pipeline's {', '.join(TRUSTED_WORDS.get(b, b) for b in bad)} changed since run {run.run_id} started "
-                f"(pipeline {((started.get('git') or {}).get('commit') or '?')[:7]}, now {(git.get('commit') or '?')[:7]}); the steps "
-                "after a finished run add lemmas and no scores, so they go on"
-                + ("; the model folder differs from the run's only in its open_lane block" if "model_folder" in bad else ""))
+    if changed_since is not None:
+        try:
+            versions = changed_since(run, started, folder, bad, log)
+        except ValueError as exc:
+            raise LoopError(str(exc)) from exc
     elif bad:
         raise LoopError(
             f"{', '.join(bad)} changed since run {run.run_id} started; results would not be comparable. "
@@ -655,8 +571,8 @@ def inherit(run: RunDir, cfg: dict, log=print) -> dict:
         raise LoopError(f"run {run.run_id}: {exc}") from exc
 
 
-def resume(run_path: str | Path, log=print, budget_usd: float | None = None, after_run: bool = False) -> Context:
-    """Open a run to go on with it; `after_run` for the steps after a finished run (open_context)."""
+def resume(run_path: str | Path, log=print, budget_usd: float | None = None, changed_since=None) -> Context:
+    """Open a run to go on with it; `changed_since` for a command that follows a finished run (open_context)."""
     run_path = Path(run_path).expanduser().resolve()
     run = RunDir(run_path.parent, run_path.name)
     if not run.exists():
@@ -673,7 +589,7 @@ def resume(run_path: str | Path, log=print, budget_usd: float | None = None, aft
         before = api_budget.state(run.path, cfg["api_budget"])
         api_budget.set_run_budget(run.path, budget_usd)
         log(f"the run's API budget is now ${budget_usd:.2f} (was ${before['run_usd']:.2f}; ${before['spent']:.2f} counted so far)")
-    return open_context(run, cfg, log, after_run=after_run)
+    return open_context(run, cfg, log, changed_since=changed_since)
 
 
 def drive(ctx: Context) -> None:
@@ -700,7 +616,7 @@ def drive(ctx: Context) -> None:
     phased = workflow.is_phased(cfg)
     ended = f"the round limit ({cfg['rounds_max']})"  # why the proof rounds ended, when they ended for good
     k = max(run.next_round(), 1)
-    while k <= cfg["rounds_max"] and not (after and stages.started(run)):
+    while k <= cfg["rounds_max"] and not stages.started(run):
         first = (k - 1) * per_round
         fresh = not run.round_done(k) and run.read(k, "attempt_0/response.md") is None
         if fresh:
@@ -752,20 +668,14 @@ def drive(ctx: Context) -> None:
             raise LoopError(str(exc)) from exc
 
 
-
-def scale(ctx: Context, only: list[str] | None = None, again: list[str] | None = None, minutes: float | None = None,
-          usd: float | None = None) -> None:
-    """After a finished open-lane run: the scaling proofs (core.open_lane.scaling_steps). `again` (a list, which
-    may be empty) adds a further session for each named step first, with `minutes` and `usd` when given."""
-    if not (ctx.cfg.get("open_lane") or {}).get("enabled"):
-        raise LoopError("the scaling proofs are for open-lane runs")
-    from .open_lane import scaling_steps, stages
-
-    backend = make_backend(ctx.cfg, ctx.log)
+def follow(ctx: Context, command, args) -> None:
+    """Run a command that follows a finished run (core/open_lane/after_run.py) on a run opened for it. It gets
+    the run's backend and run_round, as the stages after the proof rounds do."""
     try:
-        scaling_steps.run_steps(ctx, backend, run_round, only=only, again=again, minutes=minutes, usd=usd)
-    except (scaling_steps.ScalingError, stages.StageError) as exc:
+        command.run(ctx, args, make_backend(ctx.cfg, ctx.log), run_round)
+    except command.Error as exc:
         raise LoopError(str(exc)) from exc
+
 
 # status ------------------------------------------------------------------------
 def status_text(run: RunDir, diagnostics: bool = False) -> str:
@@ -821,9 +731,10 @@ def status_text(run: RunDir, diagnostics: bool = False) -> str:
                          f"{rec['copied']}; none of its records counts here")
         lines += workflow.lines(run, records)
         lines += status_lines(run)
-        from .open_lane.scaling_steps import status_lines as scaling_status
+        from .open_lane import after_run
 
-        lines += scaling_status(run)
+        for command in after_run.commands().values():
+            lines += command.status_lines(run)
     return "\n".join(lines)
 
 
@@ -844,19 +755,14 @@ def main(argv=None):
     p_run.add_argument("--sandbox", help="auto, hardened, container, landlock, seatbelt or process (default: the config's)")
     p_run.add_argument("--budget-usd", type=float, help="auth api_key: what the whole run may spend, in dollars")
     sub.choices["resume"].add_argument("--budget-usd", type=float, help="auth api_key: a new budget for the whole run, in dollars")
-    p_scale = sub.add_parser("scale", help="after a finished open-lane run: the scaling proofs, the cost of its proofs "
-                                           "in each size as theorems (the general checker, then V, n, d; "
-                                           "core/open_lane/scaling_steps.py)")
-    p_scale.add_argument("--run", required=True, help="the run's folder, <runs_dir>/<run_id>")
-    p_scale.add_argument("--only", nargs="+", choices=("general", "V", "n", "d"),
-                         help="run only these steps now; they must be the next ones in order")
-    p_scale.add_argument("--again", nargs="*", choices=("general", "V", "n", "d"), default=None, metavar="STEP",
-                         help="once the steps are done: add a further session for each of these steps (general, V, n, d; "
-                              "none named: for each configured step) and run them; each starts from all that was accepted "
-                              "and from what the earlier sessions left")
-    p_scale.add_argument("--minutes", type=float, help="with --again: the session time of each added session")
-    p_scale.add_argument("--usd", type=float, help="with --again: the dollar cap of each added session")
-    p_scale.add_argument("--budget-usd", type=float, help="auth api_key: a new budget for the whole run, in dollars")
+    from .open_lane import after_run
+
+    following = after_run.commands()  # what follows a finished run: each a package of its own
+    for name, command in following.items():
+        p = sub.add_parser(name, help=command.HELP)
+        p.add_argument("--run", required=True, help="the run's folder, <runs_dir>/<run_id>")
+        p.add_argument("--budget-usd", type=float, help="auth api_key: a new budget for the whole run, in dollars")
+        command.add_arguments(p)
     args = ap.parse_args(argv)
     ctx = None
     try:
@@ -873,9 +779,9 @@ def main(argv=None):
             if args.budget_usd is not None:
                 overrides["api_budget.run_usd"] = args.budget_usd
             ctx = start(args.config, run_id=args.run_id, overrides=overrides)
-        elif args.cmd == "scale":
-            ctx = resume(args.run, budget_usd=args.budget_usd, after_run=True)
-            scale(ctx, only=args.only, again=args.again, minutes=args.minutes, usd=args.usd)
+        elif args.cmd in following:
+            ctx = resume(args.run, budget_usd=args.budget_usd, changed_since=following[args.cmd].changed_since)
+            follow(ctx, following[args.cmd], args)
             print(status_text(ctx.run))
             return 0
         else:
@@ -887,8 +793,8 @@ def main(argv=None):
         # the command as it can be pasted: a placeholder in angle brackets is a redirection to a shell
         import shlex
 
-        where = ctx.run.path if ctx is not None else Path(args.run).expanduser().resolve() if args.cmd in ("resume", "scale") else None
-        verb = "scale" if args.cmd == "scale" else "resume"
+        where = ctx.run.path if ctx is not None else Path(args.run).expanduser().resolve() if args.cmd in ("resume", *following) else None
+        verb = args.cmd if args.cmd in following else "resume"
         again = f"python -m core.loop {verb} --run {shlex.quote(str(where))}" if where else "python -m core.loop resume --run and the run's folder"
         print(f"stopped: {exc}\nFix the cause, then continue with: {again}", file=sys.stderr)
         return 3

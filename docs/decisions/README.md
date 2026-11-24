@@ -69,6 +69,8 @@ working from the repositories can read them. Each is dated; later decisions supe
 - [scaling-proofs.md](scaling-proofs.md) (23 and 24 November 2026): the scaling proofs after a run, `python3 -m
   core.loop scale --run <run>`: how the cost of every scored proof on the run's frontier grows with each size,
   as theorems. Four links per size (a general checker, its exact cost, the formula, brute force), a first
-  session for the general checker and one per size (V, n, d), further sessions with `--again`; each lemma
-  checked by Lean against the proofs' checkers, printed in full, and marked when its statement names none.
+  session for the general checker and one per size, further sessions with `--again`; each lemma checked by
+  Lean against the proofs' checkers, printed in full, and marked when its statement names none. A package of
+  its own (`core/open_lane/scaling`) that reads the sizes from the network's size setting, so that it can
+  follow any open-lane run on one network: no model folder declares anything for it.
 

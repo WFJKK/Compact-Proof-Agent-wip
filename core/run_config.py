@@ -295,17 +295,19 @@ OPEN_LANE_KEYS = {"enabled", "lean_project", "work_dir", "python", "compile_call
                   "max_turns", "worker_seconds", "notes_reserve_seconds", "python_workspace_mb", "python_workspace_files", "stall_rounds", "fake_scripts", "example", "extra_sources", "knowledge", "second_example", "notes",
                   "seed_check", "scaling", "code_review", "split_example", "workflow_mode", "discovery_rounds", "probe_compile_calls",
                   "probe_auxiliary_submissions", "probe_seconds", "research_workspace_mb", "research_workspace_files",
-                  "continue_from", "continue_note", "carried_replace", "instance", "start_drafts", "scaling_steps"}
-# The sizes the scaling proofs vary, one session each, in this order (core.open_lane.scaling_steps): the number of
-# token values, the number of positions, the width.
-SCALING_PARAMETERS = ("V", "n", "d")
-SCALING_GENERAL = "general"  # the session that writes the checker with its sizes as parameters, before the sizes'
-SCALING_STEPS = (SCALING_GENERAL,) + SCALING_PARAMETERS
+                  "continue_from", "continue_note", "carried_replace", "instance", "start_drafts", "scaling_steps", "scaling_names"}
+# The scaling proofs after a run (core/open_lane/scaling). A step is the session for the general checker, the
+# sessions for every size of the network (one each), or the session for one size, named by its symbol.
+SCALING_GENERAL = "general"
+SCALING_SIZES = "sizes"
+_SCALING_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
 
 def scaling_steps_errors(steps: object) -> list[str]:
-    """What is wrong with open_lane.scaling_steps: a list of {parameter, minutes, usd}, the parameters some of
-    general, V, n, d in that order, each once; minutes and dollars positive."""
+    """What is wrong with open_lane.scaling_steps: a list of {parameter, minutes, usd}; a parameter is `general`,
+    `sizes` (every size of the network that the list does not name) or the symbol of one size, each at most
+    once; minutes and dollars positive. Whether a symbol is one of the network's sizes is known only with the
+    network: the steps are checked against it when they are planned."""
     form = "open_lane.scaling_steps must be a list of {parameter, minutes, usd}"
     if not isinstance(steps, list) or not steps:
         return [form + ", at least one"]
@@ -314,16 +316,44 @@ def scaling_steps_errors(steps: object) -> list[str]:
         if not isinstance(s, dict) or set(s) != {"parameter", "minutes", "usd"}:
             errors.append(form)
             continue
-        if s["parameter"] not in SCALING_STEPS:
-            errors.append(f"open_lane.scaling_steps: parameter must be one of {', '.join(SCALING_STEPS)}, not {s['parameter']!r}")
+        if not isinstance(s["parameter"], str) or not _SCALING_NAME.match(s["parameter"]):
+            errors.append(f"open_lane.scaling_steps: parameter must be `{SCALING_GENERAL}`, `{SCALING_SIZES}` or the symbol of a "
+                          f"size, not {s['parameter']!r}")
             continue
         seen.append(s["parameter"])
         for key in ("minutes", "usd"):
             v = s[key]
             if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
                 errors.append(f"open_lane.scaling_steps: {s['parameter']}'s {key} must be a positive number")
-    if len(set(seen)) != len(seen) or seen != [p for p in SCALING_STEPS if p in seen]:
-        errors.append("open_lane.scaling_steps: each of general, V, n, d at most once, in that order")
+    if len(set(seen)) != len(seen):
+        errors.append("open_lane.scaling_steps: each parameter at most once")
+    return errors
+
+
+def scaling_names_errors(block: object) -> list[str]:
+    """What is wrong with open_lane.scaling_names: {names: [{name, symbol, words}, ...], together: [[names], ...]}.
+    A name is an entry of a size setting; names and symbols differ, a symbol is no step's name, and every name
+    under `together` is listed. (A list, so that its order is kept when a run's config is written out.)"""
+    form = "open_lane.scaling_names must be {names: [{name, symbol, words}, ...], together: [[<names>], ...]}"
+    if not isinstance(block, dict) or set(block) - {"names", "together"} or not isinstance(block.get("names", []), list):
+        return [form]
+    entries, errors = block.get("names", []), []
+    for entry in entries:
+        if (not isinstance(entry, dict) or set(entry) != {"name", "symbol", "words"} or not all(isinstance(v, str) and v for v in entry.values())
+                or not _SCALING_NAME.match(entry["symbol"])):
+            errors.append(f"open_lane.scaling_names: {entry!r} must be a name with a symbol (letters, digits, _) and words")
+    if errors:
+        return errors
+    names, symbols = [e["name"] for e in entries], [e["symbol"] for e in entries]
+    if len(set(names)) != len(names) or len(set(symbols)) != len(symbols) or set(symbols) & {SCALING_GENERAL, SCALING_SIZES}:
+        errors.append(f"open_lane.scaling_names: names and symbols must differ, and no symbol may be `{SCALING_GENERAL}` or `{SCALING_SIZES}`")
+    groups = block.get("together", [])
+    if not isinstance(groups, list) or not all(isinstance(g, list) and len(g) > 1 and all(isinstance(n, str) for n in g) for g in groups):
+        errors.append(form)
+    else:
+        flat = [n for g in groups for n in g]
+        if len(set(flat)) != len(flat) or any(n not in names for n in flat):
+            errors.append("open_lane.scaling_names: a name under `together` is listed under `names`, and stands in one group")
     return errors
 
 
@@ -430,6 +460,8 @@ def open_lane_errors(cfg: dict) -> list[str]:
         errors.append("open_lane.code_review must be true or false")
     if "scaling_steps" in ol:
         errors += scaling_steps_errors(ol["scaling_steps"])
+    if "scaling_names" in ol:
+        errors += scaling_names_errors(ol["scaling_names"])
     if ol.get("instance", "kernel") not in INSTANCES:
         errors.append(f"open_lane.instance must be one of {', '.join(INSTANCES)}")
     elif ol.get("instance") == "compiled" and ol.get("workflow_mode", "interleaved") != "python_then_lean":
