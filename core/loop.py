@@ -753,15 +753,17 @@ def drive(ctx: Context) -> None:
 
 
 
-def scale(ctx: Context, only: list[str] | None = None) -> None:
-    """After a finished open-lane run: the scaling proofs, one session per size (core.open_lane.scaling_steps)."""
+def scale(ctx: Context, only: list[str] | None = None, again: list[str] | None = None, minutes: float | None = None,
+          usd: float | None = None) -> None:
+    """After a finished open-lane run: the scaling proofs (core.open_lane.scaling_steps). `again` (a list, which
+    may be empty) adds a further session for each named step first, with `minutes` and `usd` when given."""
     if not (ctx.cfg.get("open_lane") or {}).get("enabled"):
         raise LoopError("the scaling proofs are for open-lane runs")
     from .open_lane import scaling_steps, stages
 
     backend = make_backend(ctx.cfg, ctx.log)
     try:
-        scaling_steps.run_steps(ctx, backend, run_round, only=only)
+        scaling_steps.run_steps(ctx, backend, run_round, only=only, again=again, minutes=minutes, usd=usd)
     except (scaling_steps.ScalingError, stages.StageError) as exc:
         raise LoopError(str(exc)) from exc
 
@@ -842,11 +844,18 @@ def main(argv=None):
     p_run.add_argument("--sandbox", help="auto, hardened, container, landlock, seatbelt or process (default: the config's)")
     p_run.add_argument("--budget-usd", type=float, help="auth api_key: what the whole run may spend, in dollars")
     sub.choices["resume"].add_argument("--budget-usd", type=float, help="auth api_key: a new budget for the whole run, in dollars")
-    p_scale = sub.add_parser("scale", help="after a finished open-lane run: the scaling proofs, one session per size "
-                                           "(V, then n, then d; core/open_lane/scaling_steps.py)")
+    p_scale = sub.add_parser("scale", help="after a finished open-lane run: the scaling proofs, the cost of its proofs "
+                                           "in each size as theorems (the general checker, then V, n, d; "
+                                           "core/open_lane/scaling_steps.py)")
     p_scale.add_argument("--run", required=True, help="the run's folder, <runs_dir>/<run_id>")
-    p_scale.add_argument("--only", nargs="+", choices=("V", "n", "d"),
+    p_scale.add_argument("--only", nargs="+", choices=("general", "V", "n", "d"),
                          help="run only these steps now; they must be the next ones in order")
+    p_scale.add_argument("--again", nargs="*", choices=("general", "V", "n", "d"), default=None, metavar="STEP",
+                         help="once the steps are done: add a further session for each of these steps (general, V, n, d; "
+                              "none named: for each configured step) and run them; each starts from all that was accepted "
+                              "and from what the earlier sessions left")
+    p_scale.add_argument("--minutes", type=float, help="with --again: the session time of each added session")
+    p_scale.add_argument("--usd", type=float, help="with --again: the dollar cap of each added session")
     p_scale.add_argument("--budget-usd", type=float, help="auth api_key: a new budget for the whole run, in dollars")
     args = ap.parse_args(argv)
     ctx = None
@@ -866,7 +875,7 @@ def main(argv=None):
             ctx = start(args.config, run_id=args.run_id, overrides=overrides)
         elif args.cmd == "scale":
             ctx = resume(args.run, budget_usd=args.budget_usd, after_run=True)
-            scale(ctx, only=args.only)
+            scale(ctx, only=args.only, again=args.again, minutes=args.minutes, usd=args.usd)
             print(status_text(ctx.run))
             return 0
         else:

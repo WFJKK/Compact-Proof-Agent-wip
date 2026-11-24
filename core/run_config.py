@@ -299,11 +299,13 @@ OPEN_LANE_KEYS = {"enabled", "lean_project", "work_dir", "python", "compile_call
 # The sizes the scaling proofs vary, one session each, in this order (core.open_lane.scaling_steps): the number of
 # token values, the number of positions, the width.
 SCALING_PARAMETERS = ("V", "n", "d")
+SCALING_GENERAL = "general"  # the session that writes the checker with its sizes as parameters, before the sizes'
+SCALING_STEPS = (SCALING_GENERAL,) + SCALING_PARAMETERS
 
 
 def scaling_steps_errors(steps: object) -> list[str]:
     """What is wrong with open_lane.scaling_steps: a list of {parameter, minutes, usd}, the parameters some of
-    V, n, d in that order, each once; minutes and dollars positive."""
+    general, V, n, d in that order, each once; minutes and dollars positive."""
     form = "open_lane.scaling_steps must be a list of {parameter, minutes, usd}"
     if not isinstance(steps, list) or not steps:
         return [form + ", at least one"]
@@ -312,16 +314,16 @@ def scaling_steps_errors(steps: object) -> list[str]:
         if not isinstance(s, dict) or set(s) != {"parameter", "minutes", "usd"}:
             errors.append(form)
             continue
-        if s["parameter"] not in SCALING_PARAMETERS:
-            errors.append(f"open_lane.scaling_steps: parameter must be one of {', '.join(SCALING_PARAMETERS)}, not {s['parameter']!r}")
+        if s["parameter"] not in SCALING_STEPS:
+            errors.append(f"open_lane.scaling_steps: parameter must be one of {', '.join(SCALING_STEPS)}, not {s['parameter']!r}")
             continue
         seen.append(s["parameter"])
         for key in ("minutes", "usd"):
             v = s[key]
             if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
                 errors.append(f"open_lane.scaling_steps: {s['parameter']}'s {key} must be a positive number")
-    if len(set(seen)) != len(seen) or seen != [p for p in SCALING_PARAMETERS if p in seen]:
-        errors.append("open_lane.scaling_steps: each of V, n, d at most once, in that order")
+    if len(set(seen)) != len(seen) or seen != [p for p in SCALING_STEPS if p in seen]:
+        errors.append("open_lane.scaling_steps: each of general, V, n, d at most once, in that order")
     return errors
 
 

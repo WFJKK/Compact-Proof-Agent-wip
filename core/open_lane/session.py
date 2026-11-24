@@ -566,6 +566,8 @@ class Session:
                                       or (start_drafts(cfg) if k == 1 and not session.state.get("stage") else []))
             if session.state.get("carried") == "pending":  # interrupted while compiling them: do it again
                 session._carry(carried_modules(Path(run_path), k), log)
+            if session.state.get("prebuilt") == "pending":  # a stage session's workspace: the same
+                session._prebuild()
             return session
         ol = cfg["open_lane"]
         work = ol["work_dir"] or str(run_path / "open_lane_work")
@@ -614,6 +616,8 @@ class Session:
         session = cls(path)
         if stage:
             session._seed_stage()
+            if stage.get("prebuild"):
+                session._prebuild()
         else:
             if python:
                 session._place_python(python)
@@ -721,15 +725,22 @@ class Session:
 
     def _seed_stage(self) -> None:
         """The locked proof in the workspace: its locked modules as they were submitted, and its other
-        modules (the instance for the network it was proved on) to read and adapt. Nothing is compiled. Its
-        certificate and plan go into the Python workspace (`_locked_proof`)."""
+        modules (the instance for the network it was proved on) to read and adapt. Nothing is compiled here
+        (a stage that asks for it has its workspace compiled next: `_prebuild`). Its certificate and plan go
+        into the Python workspace (`_locked_proof`)."""
         stage = self.state["stage"]
         given = [g for g in [self._locked_proof(stage)] if g is not None]
         # a scaling step after the run (core.open_lane.scaling_steps) gives more: files for the Python workspace
         # (every scored proof's certificate and plan) and modules to read and import (the run's other scored
         # proofs', and the lemmas an earlier step had accepted); none of it is locked
         for item in stage.get("python_given") or []:
-            data = item["text"].encode()
+            if "source" in item:  # a file as an earlier session left it (it may not be text)
+                src = Path(item["source"])
+                if not src.is_file() or src.is_symlink():
+                    continue
+                data = src.read_bytes()
+            else:
+                data = item["text"].encode()
             given.append({"path": item["path"], "data": data, "bytes": len(data), "sha256": _sha(data)})
         if given and self._python_enabled():
             self._place_python(given)
@@ -749,6 +760,79 @@ class Session:
             dst = self.workspace / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_text(text)
+
+    PREBUILD_SECONDS = 1200.0  # for compiling a stage session's workspace before it begins, all modules together
+    PREBUILD_DRAFT_SECONDS = 180.0  # of it, for one module an earlier session left without having it accepted
+
+    def _prebuild(self) -> None:
+        """Compile the workspace a stage session starts with, when the stage asks for it (`prebuild`: the scaling
+        proofs after a run): every module put there, in import order, as a lean_check of it with no edits would
+        (the lock applied), at no charge to the session's budgets and before its clock starts. A module that
+        does not compile, imports one that did not, or comes after the time for this is used up, is left as
+        it is, and session.json's `prebuilt` says so, as it says what compiled. A draft of an earlier session
+        (stage.drafts: its path, and whether its last compile there succeeded) is not tried when that compile
+        failed, and gets a short limit otherwise: one of the first drafts held a kernel computation that ran
+        into Lean's own limit after eight minutes. (The first scaling sessions spent a third of their
+        compiles on building the locked proof's modules one at a time.) Only in a run whose checkers the
+        service runs compiled: elsewhere a compile names a claimed count."""
+        if not self.compiled:
+            self.state["prebuilt"] = []
+            self._save()
+            return
+        self.state["prebuilt"] = "pending"
+        self._save()
+        network = sorted(self.state["networks"])[0]
+        root = self.workspace / "Candidate"
+        files = sorted(f.relative_to(self.workspace).as_posix() for f in root.rglob("*.lean")) if root.is_dir() else []
+        names = {module_name(rel): rel for rel in files if MODULE_PATH.match(rel)}
+        deps = {n: [i for i in module_imports((self.workspace / rel).read_text()) if i in names] for n, rel in names.items()}
+        order: list[str] = []
+        seen: dict[str, int] = {}
+
+        def visit(n: str) -> None:
+            if seen.get(n):  # done, or on the current path (a cycle, which the compiler will report)
+                return
+            seen[n] = 1
+            for dep in deps[n]:
+                visit(dep)
+            seen[n] = 2
+            order.append(n)
+
+        for n in sorted(names):
+            visit(n)
+        try:
+            self._apply_lock(network, 0, None, None)
+        except ToolError as exc:
+            self.state["prebuilt"] = [{"path": names[n], "compiled": False, "seconds": 0.0, "errors": [f"the lock could not be applied: {exc}"]}
+                                      for n in order]
+            self._save()
+            return
+        drafts = (self.state.get("stage") or {}).get("drafts") or {}
+        out, failed, start = [], set(), time.monotonic()
+        for n in order:
+            rel = names[n]
+            entry = {"path": rel, "compiled": False, "seconds": 0.0, "errors": []}
+            broken = [d for d in deps[n] if d in failed]
+            left = self.PREBUILD_SECONDS - (time.monotonic() - start)
+            if broken:
+                entry["errors"] = [f"it imports {', '.join(broken)}, which did not compile"]
+            elif drafts.get(rel) is False:
+                entry["errors"] = ["not tried: a draft whose last compile, in the session that left it, did not succeed"]
+            elif left <= 0:
+                entry["errors"] = ["not tried: the time for compiling before the session was used up"]
+            else:
+                t0 = time.monotonic()
+                limit = min(left, self.PREBUILD_DRAFT_SECONDS if rel in drafts else self.compile_seconds())
+                res = self._service(["compile", str(self.workspace), rel, "--model", self.state["model"], "--network", network,
+                                     "--claimed", "0"], limit)
+                text = shorten_paths((res.get("messages") or res.get("error") or "").strip(), self.run_dir())
+                entry.update(compiled=bool(res.get("ok")), seconds=round(time.monotonic() - t0, 1),
+                             errors=[] if res.get("ok") else (error_lines(text, 3) or [text[:300] or "no message"]))
+            if not entry["compiled"]:
+                failed.add(n)
+            out.append(entry)
+        self.state["prebuilt"] = out
+        self._save()
 
     def _apply_lock(self, network: str, claimed_count: int, certificate: list | None, plan: list | None = None) -> dict | None:
         """Before anything is compiled or submitted in a session with a lock: every locked module is written

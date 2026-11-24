@@ -443,25 +443,51 @@ A pilot run is about one network and has two more sessions after its proof round
 The scaling proofs (since 23 November 2026) come after a finished run and never during one: a person starts
 them once the run's proofs have been looked at,
 
-    python3 -m core.loop scale --run <run folder> [--only V] [--budget-usd 300]
+    python3 -m core.loop scale --run <run folder> [--only general] [--again V n] [--budget-usd 300]
 
-One session per size, in this order: the number of token values V, the number of positions n, the width d,
-each with the other two held at the network's values (`core/open_lane/scaling_steps.py`). The model folder
-says which of its sizes each one is (`open_lane.scaling_sizes`; an attention model's width and head width
-vary together), and `open_lane.scaling_steps` gives each step's minutes and dollars (by default V 60 minutes
-and $20, n and d 30 minutes and $10 each). The sessions are about every scored proof on the run's frontier,
-not only the locked one: the locked proof's modules are in the workspace, locked, as in the scaling question;
-the other proofs' modules are there to read and import where they do not clash with the locked ones; every
-proof's certificate and plan are in `py/handed_in_proofs.json`. Each session asks, for its size, the formula
-of each proof's length part by part, brute force's, the verdict, and what the proof certifies at other values
-of the size; and in Lean, as lemmas, the bill at this size for every weight, the bill as an exact formula in
-the size, and its leading order against brute force's. Where a cost depends on something other than the
-sizes (how many pieces a plan makes), that is a parameter of the formula, with its value on this network. A
-step carries the modules of the lemmas the earlier steps had accepted and their answers. For each accepted
-lemma Lean is asked which of the proofs' checkers the modules the service compiled hold, term for term (for
-the locked proof in the session, for the others after it); the report prints each statement in full beside
-that answer. The steps are rounds of the run after its last; `stages.json` keeps them under
-`scaling_proofs`, and running the command again goes on with the steps not done. Nothing is scored.
+They ask, as theorems of Lean, how the cost of the run's scored proofs grows with each size of the network
+(the number of token values V, the number of positions n, the width d) against brute force's
+(`core/open_lane/scaling_steps.py`). The result for a size is four links, each a theorem the service accepted
+or missing:
+
+- `general`: a checker with the size as a parameter, proved to be the submitted checker at the network's
+  value. A submitted checker has the network's sizes written into its loops, or tests them against the
+  network's own graph, and then refuses every other value: a lemma with that test among its hypotheses holds
+  at the network's value only, whatever it quantifies over.
+- `cost`: the exact bill of that checker's run at every value, as a function defined in Lean.
+- `formula`: that function in closed form, or between proved bounds.
+- `brute`: brute force's cost as a function of the size, and the comparison.
+
+A formula worked out by hand, a Python model or a Lean function evaluated at a few sizes is not a link. The
+sessions, in the order of `open_lane.scaling_steps` (by default `general` 90 minutes and $30, then V, n and d
+45 minutes and $15 each): `general` is for the first two links, for all three sizes at once, since that work
+is shared; each size's session is for the other two, and for the first two where they are missing. The model
+folder says which of its sizes each one is (`open_lane.scaling_sizes`; an attention model's width and head
+width vary together). The sessions are about every scored proof on the run's frontier, not only the locked
+one: the locked proof's modules are in the workspace, locked, as in the scaling question; the other proofs'
+modules are there to read and import where they do not clash with the locked ones; every proof's certificate
+and plan are in `py/handed_in_proofs.json`.
+
+A session starts with the modules of the lemmas the earlier sessions had accepted, the modules they left
+without submitting them (drafts), their Python files and their answers; and every module of its workspace is
+compiled before it begins, in import order, at no charge to its budgets (`Session._prebuild`). Its prompt
+says its time so that it cannot be subtracted twice: the minutes of tool time, then the minutes for the
+answer, and that `remaining.seconds` is the tool time left.
+
+What is recorded, and shown in the status and the report: for each accepted lemma, its statement in full,
+which of the proofs' checkers Lean finds in the modules the service compiled for it (term for term; for the
+locked proof in the session, for the others after it), and which of the proofs' checkers its statement
+names. Only a lemma whose statement names a checker that Lean found says anything about a submitted proof;
+one that names none may compare two formulas of the agent's own. The answer's THEOREMS section names, per
+size and link, the accepted theorem that holds it (`V formula: Candidate.Module.theorem`, `as submitted`
+for a checker general as it is, `none`); the pipeline checks that the theorem is the named theorem of an
+accepted submission and tabulates the links per size. That a theorem says what its link asks stays the
+agent's account: a person reads the statement.
+
+The steps are rounds of the run after its last; `stages.json` keeps them under `scaling_proofs`, and running
+the command again goes on with the steps not done. `--again [steps]` adds a further session for each named
+step (none named: for each configured step) to a run whose steps are done, with `--minutes` and `--usd` in
+place of the configured ones when given; it starts from all that was accepted and left. Nothing is scored.
 
 The steps run with the pipeline as it is when the person starts them, usually later than the run's (the
 pull that brought them changed the checker code and the model folders' open_lane blocks). A resume refuses a
