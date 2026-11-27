@@ -8,6 +8,10 @@ networks; in the open lane every proof is checked by Lean. The design is in `doc
 
 To be written.
 
+### Pareto Frontier of a compact proof
+
+To be written.
+
 ## Reward function
 
 The score of a run is
@@ -25,6 +29,10 @@ $$R = \frac{B}{\mathrm{length} + c \cdot (\mathrm{right} - \mathrm{certified})}$
 
 R is the value of the run's best proof and never below 1: brute force alone scores 1. A proof counts only if
 the Lean service accepts it.
+
+## Agentic setup / Auto-research
+
+To be written.
 
 ## Results
 
@@ -69,24 +77,17 @@ the Lean service accepts it.
 
 ##### Scores
 
-On seed 0, from the Lean service's receipts. The network is right on 16,743,886 of the 16,777,216 inputs
-(99.80%); the percentages in the table are shares of these right inputs. B and c are costs, counted in
-operations: c = 671 is one forward pass, and B = 11,257,513,024 is one forward pass on every input
-(671 × 16,777,216) plus one per weight (1,088).
+On seed 0, from the Lean service's receipts. For this network B = 11,257,513,024 and c = 671, and the network
+is right on 16,743,886 inputs. The table starts at round 3 because that is the first round in which the agent
+submitted an actual compact proof. The previous rounds were used for discovery, "proofs" in Python and general
+lemmas in Lean, which were useful for the proofs.
 
-| Proof | Round | Right inputs certified | Length | B / length | R |
+| Proof | Round | Accuracy lower bound | Length | B / length | R |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Brute force (the network itself) | | 16,743,886 (100%) | 11,257,513,024 | 1 | 1 |
-| Tree.D | 3 | 15,836,170 (94.6%) | 29,705,220 | 379 | 17.6 |
-| TreeP.D | 4 | 16,520,886 (98.7%) | 69,289,128 | 162 | 51.4 |
-| TreeQ.D, locked | 5 | 16,677,894 (99.6%) | 92,356,844 | 122 | 82.4 |
-
-The run's score is that of its best proof, TreeQ.D, which the pipeline locked as the run's result: R = 82.4.
-
-The table starts at round 3 because that is the first round with a proof about the network's accuracy. In round
-1, the discovery round, the agent worked out the network's mechanism in Python and submitted nothing. In round 2
-it proved four general lemmas, which Lean accepted and the later proofs are built on, but a lemma alone
-certifies no inputs, so it has no score.
+| Brute force (the network itself) | | 99.80% (16,743,886 inputs) | 11,257,513,024 | 1 | 1 |
+| Tree.D | 3 | 94.39% (15,836,170 inputs) | 29,705,220 | 379 | 17.6 |
+| TreeP.D | 4 | 98.47% (16,520,886 inputs) | 69,289,128 | 162 | 51.4 |
+| TreeQ.D, locked | 5 | 99.41% (16,677,894 inputs) | 92,356,844 | 122 | 82.4 |
 
 ##### Evaluation
 
