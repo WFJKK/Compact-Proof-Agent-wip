@@ -84,10 +84,10 @@ lemmas in Lean, which were useful for the proofs.
 
 | Proof | Round | Accuracy lower bound | Length (% of brute force) | B / length | R |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Brute force (the network itself) | | 99.80% (16,743,886 inputs) | 100% (11,257,513,024) | 1 | 1 |
-| Tree.D | 3 | 94.39% (15,836,170 inputs) | 0.264% (29,705,220) | 379 | 17.6 |
-| TreeP.D | 4 | 98.47% (16,520,886 inputs) | 0.615% (69,289,128) | 162 | 51.4 |
-| TreeQ.D, locked | 5 | 99.41% (16,677,894 inputs) | 0.820% (92,356,844) | 122 | 82.4 |
+| Brute force (the network itself) | | 99.80% | 100% | 1 | 1 |
+| Tree.D | 3 | 94.39% | 0.264% | 379 | 17.6 |
+| TreeP.D | 4 | 98.47% | 0.615% | 162 | 51.4 |
+| TreeQ.D, locked | 5 | 99.41% | 0.820% | 122 | 82.4 |
 
 ##### Evaluation
 
@@ -136,9 +136,9 @@ For comparison, three proofs that are not the agent's:
 
 | Proof | Obtained by | Accuracy lower bound | Length (% of brute force) | B / length | R |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Pure convexity | Lean, accepted by the Lean service | 71.55% (12,003,766 inputs) | 0.0051% (573,767) | 19,620 | 3.5 |
-| Convexity, bad tokens fixed | Lean, accepted by the Lean service | 99.80% (16,743,886 inputs) | 0.190% (21,369,059) | 527 | 527 |
-| Best known proof (Ref.D) | Lean, accepted by the Lean service | 99.80% (16,743,886 inputs) | 0.0067% (757,364) | 14,864 | 14,864 |
+| Pure convexity | Lean, accepted by the Lean service | 71.55% | 0.0051% | 19,620 | 3.5 |
+| Convexity, bad tokens fixed | Lean, accepted by the Lean service | 99.80% | 0.190% | 527 | 527 |
+| Best known proof (Ref.D) | Lean, accepted by the Lean service | 99.80% | 0.0067% | 14,864 | 14,864 |
 
 They use three further ideas:
 
