@@ -69,8 +69,10 @@ the Lean service accepts it.
 
 ##### Scores
 
-On seed 0, from the Lean service's receipts. For this network B = 11,257,513,024 and c = 671, and the network
-is right on 16,743,886 inputs.
+On seed 0, from the Lean service's receipts. The network is right on 16,743,886 of the 16,777,216 inputs
+(99.80%); the percentages in the table are shares of these right inputs. B and c are costs, counted in
+operations: c = 671 is one forward pass, and B = 11,257,513,024 is one forward pass on every input
+(671 × 16,777,216) plus one per weight (1,088).
 
 | Proof | Round | Right inputs certified | Length | B / length | R |
 | --- | ---: | ---: | ---: | ---: | ---: |
