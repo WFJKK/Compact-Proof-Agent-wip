@@ -232,15 +232,15 @@ so for each of them R = B / length.
 
 | Proof | Round | Accuracy lower bound | Length (% of brute force) | B / length | R |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Brute force (the network itself) | | 99.99% (16,775,920 inputs) | 100% (220,771,393,664) | 1 | 1 |
-| Checker.D, window 2 everywhere | 3 | 99.99% (16,775,920 inputs) | 0.00563% (12,434,510) | 17,755 | 17,755 |
-| Checker.D, windows from the plan | 3 | 99.99% (16,775,920 inputs) | 0.00474% (10,464,107) | 21,098 | 21,098 |
-| Checker2.D | 4 | 99.99% (16,775,920 inputs) | 0.00387% (8,541,983) | 25,845 | 25,845 |
-| Checker3.D | 4 | 99.99% (16,775,920 inputs) | 0.00331% (7,304,735) | 30,223 | 30,223 |
-| Checker4.D | 4 | 99.99% (16,775,920 inputs) | 0.00313% (6,919,742) | 31,905 | 31,905 |
-| Checker5.D | 5 | 99.99% (16,775,920 inputs) | 0.00305% (6,726,671) | 32,820 | 32,820 |
-| Checker6.D | 5 | 99.99% (16,775,920 inputs) | 0.00281% (6,212,845) | 35,535 | 35,535 |
-| Checker7.D, locked | 5 | 99.99% (16,775,920 inputs) | 0.00279% (6,157,945) | 35,851 | 35,851 |
+| Brute force (the network itself) | | 99.99% | 100% | 1 | 1 |
+| Checker.D, window 2 everywhere | 3 | 99.99% | 0.00563% | 17,755 | 17,755 |
+| Checker.D, windows from the plan | 3 | 99.99% | 0.00474% | 21,098 | 21,098 |
+| Checker2.D | 4 | 99.99% | 0.00387% | 25,845 | 25,845 |
+| Checker3.D | 4 | 99.99% | 0.00331% | 30,223 | 30,223 |
+| Checker4.D | 4 | 99.99% | 0.00313% | 31,905 | 31,905 |
+| Checker5.D | 5 | 99.99% | 0.00305% | 32,820 | 32,820 |
+| Checker6.D | 5 | 99.99% | 0.00281% | 35,535 | 35,535 |
+| Checker7.D, locked | 5 | 99.99% | 0.00279% | 35,851 | 35,851 |
 
 ##### Evaluation
 
@@ -286,30 +286,21 @@ wrong are exactly those whose tokens are all 5 or less. The reading of the locke
 network written into its code: every number comes from the weights, the only literal in its arithmetic is 4 (the
 number of positions), and the plan gives only the window widths.
 
-**Against the known proofs.** Gross et al.'s cubic proof uses the same three paths: the QK circuit (EQKE, EQKP),
-the OV circuit (EVOU, PVOU) and the direct path (EU). It rests on convexity: it checks only pure sequences, made of
-the largest token, the query token and copies of one other token, and proves that a mixed sequence is right when the
+**Against Gross et al.'s cubic proof.** The cubic proof uses the same three paths: the QK circuit (EQKE, EQKP), the
+OV circuit (EVOU, PVOU) and the direct path (EU). It rests on convexity: it checks only pure sequences, made of the
+largest token, the query token and copies of one other token, and proves that a mixed sequence is right when the
 pure sequences of its tokens are. It pessimises positions, which costs little because the positional parts are
 small: equal tokens are taken to sit together, and the attention is bounded by two extreme orderings. Its loops over
 the largest token, the query token, the other token and the number of its copies give a cost of order V³ n². The
-pessimisation costs accuracy: a lower bound of 95.3% on their networks, and 97.5% of the right inputs on ours.
+paper reports a lower bound of 95.3% for max of 4 on its own networks.
 
 The agent's proof bounds a group differently. Multiplied by the softmax denominator, the lead becomes a sum of one
 term per position, so each position's worst token is taken with that position's own QK and OV terms. Near the
 largest token this is exact, with no pure sequences and no orderings pessimised; smaller tokens share one bound.
+Both proofs are of order V³ n², so neither is sub-cubic.
 
-| Proof | Obtained by | Accuracy lower bound | Length (% of brute force) | B / length | R |
-| --- | --- | ---: | ---: | ---: | ---: |
-| Gross et al.'s cubic proof | their code on our network | about 97.5% | 0.0081% (B / 12,283) | 12,283 | about 40 |
-| token_convex, version 2 | built by hand by us | 99.99% (16,775,920 inputs) | 0.0067% (B / 14,836) | 14,836 | 14,836 |
-| Checker7.D (the agent's) | Lean, accepted by the Lean service | 99.99% (16,775,920 inputs) | 0.00279% (6,157,945) | 35,851 | 35,851 |
-
-The first two were measured in the pipeline's earlier lane, which counts operations its own way, and not by
-today's Lean service, so their lengths are only indicative; our Lean version of the cubic proof costs about 5.6
-million at this size. The agent's proof is about as long as that and certifies every right input. The cubic proof
-misses 2.5% of them, which under R costs about 5.5 billion, so its R is about 40. The agent's proof also scores 2.4
-times more than the best proof we had built by hand. It and the cubic proof are both of order V³ n², so neither is
-sub-cubic.
+The cubic proof has not yet been run in Lean by the Lean service on this network, as the agent's proofs are, so its
+length, certified inputs and R are not given here.
 
 **What the agent had but did not finish.** From its notes:
 
