@@ -302,9 +302,6 @@ Both proofs are of order V³ n², so neither is sub-cubic.
 Their sub-cubic proofs avoid the loop over a third token: tokens far enough below the largest one are bounded
 together through a gap, and the QK circuit is replaced by a low-rank approximation with an error bound.
 
-The cubic proof has been run in Lean by the Lean service on this network, in the same setting as the agent's proofs.
-The sub-cubic proof has not yet; that is being done separately, and until then its row is a best guess:
-
 | Proof | Obtained by | Accuracy lower bound | Length (% of brute force) | B / length | R |
 | --- | --- | ---: | ---: | ---: | ---: |
 | Gross et al.'s cubic proof | Lean, accepted by the Lean service | 97.29% | 0.00255% | 39,256 | 36.9 |
