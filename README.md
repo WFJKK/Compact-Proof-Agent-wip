@@ -132,11 +132,12 @@ coarsely far below.
 The three proofs differ only in where the tree cuts: by a fixed rule (Tree.D), by a list of cuts for each m
 (TreeP.D), and by finer lists from a search on the weights (TreeQ.D).
 
-For comparison, two proofs that are not the agent's:
+For comparison, three proofs that are not the agent's:
 
 | Proof | Obtained by | Accuracy lower bound | Length (% of brute force) | B / length | R |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Pure convexity | Python, not Lean | 71.55% (12,003,766 inputs) | 0.0051% (about 570,000) | about 19,750 | 3.5 |
+| Pure convexity | Lean, accepted by the Lean service | 71.55% (12,003,766 inputs) | 0.0051% (573,767) | 19,620 | 3.5 |
+| Convexity, bad tokens fixed | Lean, accepted by the Lean service | 99.80% (16,743,886 inputs) | 0.190% (21,369,059) | 527 | 527 |
 | Best known proof (Ref.D) | Lean, accepted by the Lean service | 99.80% (16,743,886 inputs) | 0.0067% (757,364) | 14,864 | 14,864 |
 
 They use three further ideas:
@@ -149,7 +150,8 @@ $$\mathrm{margin}_j(x) = \frac{1}{r}\sum_{i=1}^{r} P_j(a_i), \qquad P_j(a) = k \
 
 So a token a is good when $P_j(a) > 0$ for every competitor j, and every input whose other tokens are all good is
 right. Pure convexity is this alone: about 6,000 pure inputs settle 71.7% of the right inputs, and it misses the
-inputs that contain a bad token.
+inputs that contain a bad token. Fixing each bad token and testing again covers every right input with convexity
+alone, at R 527, 6.4 times the agent's best.
 
 **5. Symmetry.** The scores depend only on how often each token occurs, $c_t(x)$, not on the order:
 
@@ -242,4 +244,80 @@ so for each of them R = B / length.
 
 ##### Evaluation
 
-To be written.
+As for the linear network, we compare what the agent handed in with the best known proofs, and we separate the
+ideas it had, read from the run's records, from what it submitted in Lean. All eight proofs rest on the same three
+ideas, in place from round 3 on:
+
+**1. The three paths.** The output is read at the last position, which attends to all four. As in
+[Gross et al.](https://arxiv.org/abs/2406.11779), the score of answer j splits into the direct path of the last
+token and, for each position, the OV circuit's value of that position's token, weighted by the attention the QK
+circuit gives it:
+
+$$s_j(x) = \mathrm{dir}_j(x_4) + \sum_{i=1}^{4} w_i(x) \cdot \mathrm{OV}_{i, x_i, j}$$
+
+Here the weights $w_i(x)$ are the softmax of the four positions' QK scores for the query $x_4$.
+
+**2. Groups with an exact test.** The inputs are grouped by their last token, their largest token m and the last
+position that holds m. Multiplying the lead of m over a competitor j by the softmax denominator $Z(x)$ turns it into
+a sum of one term per position, each depending on that position's token alone:
+
+$$Z(x) \cdot (s_m(x) - s_j(x)) = \sum_{i=1}^{4} T_{j,i}(x_i)$$
+
+Since $Z(x)$ is positive, the worst input of a group takes each position's worst token, so the test of a group is
+exact, as the box test is for the linear network.
+
+**3. A window near the largest token.** Tokens within $W_m$ of m are handled one by one; smaller tokens share one
+bound, from running maxima and minima. The plan gives $W_m$: 2 for ten values of m, 1 for the others.
+
+The proof costs about 2,460 operations for each pair of last token and largest token, over 2,079 pairs, plus about
+0.8 million for its tables. The scaling sessions after the run proved in Lean that this cost grows like V³ against
+brute force's V⁵, like n² against 64ⁿ, and like d³ against d². The d³ comes from one table product, $W_V W_O$;
+multiplying in another order would make it d².
+
+**Understanding and inference optimisation.** The method was the agent's first candidate in round 1, estimated at
+22 million, and its first proofs in round 3: 12.4 million, then 10.5 million with the windows from the plan. Rounds 4
+and 5 made it 1.7 times shorter by arithmetic alone: one product per term, tables that do not depend on the last
+token built once, one comparison with the smallest lead, shared partial sums, and each exponential bound computed
+once. So the understanding is in round 3's proof, and the rest is inference optimisation. The network works as
+Gross et al. describe: the attention score rises with the token (here by 1.2 to 8 per step), so the largest token
+takes most of the attention, and the OV circuit copies the attended token (about +28 on its own score). The window
+rests on this: only tokens close to the largest one draw comparable attention. The 1,296 inputs the network gets
+wrong are exactly those whose tokens are all 5 or less. The reading of the locked checker found nothing of the
+network written into its code: every number comes from the weights, the only literal in its arithmetic is 4 (the
+number of positions), and the plan gives only the window widths.
+
+**Against the known proofs.** Gross et al.'s cubic proof uses the same three paths: the QK circuit (EQKE, EQKP),
+the OV circuit (EVOU, PVOU) and the direct path (EU). It rests on convexity: it checks only pure sequences, made of
+the largest token, the query token and copies of one other token, and proves that a mixed sequence is right when the
+pure sequences of its tokens are. It pessimises positions, which costs little because the positional parts are
+small: equal tokens are taken to sit together, and the attention is bounded by two extreme orderings. Its loops over
+the largest token, the query token, the other token and the number of its copies give a cost of order V³ n². The
+pessimisation costs accuracy: a lower bound of 95.3% on their networks, and 97.5% of the right inputs on ours.
+
+The agent's proof bounds a group differently. Multiplied by the softmax denominator, the lead becomes a sum of one
+term per position, so each position's worst token is taken with that position's own QK and OV terms. Near the
+largest token this is exact, with no pure sequences and no orderings pessimised; smaller tokens share one bound.
+
+| Proof | Obtained by | Accuracy lower bound | Length (% of brute force) | B / length | R |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Gross et al.'s cubic proof | their code on our network | about 97.5% | 0.0081% (B / 12,283) | 12,283 | about 40 |
+| token_convex, version 2 | built by hand by us | 99.99% (16,775,920 inputs) | 0.0067% (B / 14,836) | 14,836 | 14,836 |
+| Checker7.D (the agent's) | Lean, accepted by the Lean service | 99.99% (16,775,920 inputs) | 0.00279% (6,157,945) | 35,851 | 35,851 |
+
+The first two were measured in the pipeline's earlier lane, which counts operations its own way, and not by
+today's Lean service, so their lengths are only indicative; our Lean version of the cubic proof costs about 5.6
+million at this size. The agent's proof is about as long as that and certifies every right input. The cubic proof
+misses 2.5% of them, which under R costs about 5.5 billion, so its R is about 40. The agent's proof also scores 2.4
+times more than the best proof we had built by hand. It and the cubic proof are both of order V³ n², so neither is
+sub-cubic.
+
+**What the agent had but did not finish.** From its notes:
+
+- One far exponential factor per wrong answer over all positions: about 260,000 fewer operations, but the group with
+  m = 37 then fails unless its window is 2.
+- No exact window for five values of m: about 80,000 fewer.
+- A bigger cut, it noted, needs a new idea for the near terms (756 operations per pair) and for the flag sums (570
+  per pair), and sharing work across last tokens is blocked because the direct path and the exponential factors
+  depend on the last token.
+
+No proof better than the agent's is known for this network, so how far it is from the best is open.
