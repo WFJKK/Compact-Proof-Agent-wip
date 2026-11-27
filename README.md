@@ -181,4 +181,65 @@ Every session ended early by the agent's choice, and the run used about a fifth 
 
 ### Experiment 2: Attention
 
+#### Attention max of 4
+
+##### Architecture and training
+
+- Sizes: 64 tokens, 4 slots per input, width 32.
+- Weights: seven matrices and no biases: a token embedding (64 × 32), a position embedding (4 × 32), the query,
+  key and value matrices (32 × 32 each), an output matrix (32 × 32) and an unembedding (32 × 64). One layer with
+  one attention head and nothing else: no MLP and no layer norm. The last position attends to all four
+  positions, and the output is read there. This is the network of Gross et al.
+- Task: output the largest of the four tokens.
+- Inputs: four tokens, each uniformly random from 0 to 63, drawn fresh at every step.
+- Loss and optimiser: cross-entropy on the output at the last position, with AdamW (learning rate 0.001, betas
+  0.9 and 0.999, weight decay 0.01), batch 512, float32.
+- Starting weights: uniform in ±1/√k, where k is the matrix's first dimension (64 for the token embedding, 4 for
+  the position embedding, 32 for the others).
+- Stopping: a fixed 4,000 steps.
+- Networks: ten, from seeds 0 to 9, 1 to 2 minutes each. They give the largest token on 99.970% to 99.998% of all
+  64⁴ inputs. The run is on seed 0, which is right on 16,775,920 of the 16,777,216 inputs (99.992%); the 1,296
+  inputs it gets wrong are exactly those whose tokens are all 5 or less.
+
+##### Price, runtime, agent, internet, inference
+
+- Price: $89.42 for the run (one discovery round, four proof rounds and the reading of the checker), $52.15
+  for the seven scaling sessions after it.
+- Runtime: 4 h 5 min for the run's six sessions, 2 h 28 min for the seven scaling sessions. Both include the
+  Lean service's checks, which run inside the sessions.
+- Agent: Claude Fable 5.1 (`claude-fable-5-1`), thinking effort extra high (Claude Code's `--effort xhigh`).
+- Agent tools: `run_python` (runs Python in a sandbox, with the network's weights), `lean_check` (compiles a
+  Lean module against the network's protected modules), `read_file` and `search_library` (read the workspace
+  and search the Lean library the run offers), `submit_candidate` (hands a checker and its soundness proof to
+  the Lean service, which checks and scores it), and in the proof rounds `research_write` and
+  `research_list` (a research folder kept across sessions).
+- Hyperparameters: money cap $40 a round and $200 a run; 5 rounds (1 discovery, 4 proof) of at most 90
+  minutes; per session 60 Lean compiles, 40 Python runs and 4 submissions. The scaling sessions had 30 to 90
+  minutes and $10 to $30 each.
+- Internet: not used (Claude Code's own tools are switched off, so there are no web tools, and the agent's
+  Python runs with the network blocked).
+- Inference: not counted (the pipeline does not record how often the agent's Python ran the network).
+
+##### Scores
+
+On seed 0, from the Lean service's receipts. For this network B = 220,771,393,664 and c = 13,159, and the network
+is right on 16,775,920 inputs. The table starts at round 3 because that is the first round in which the agent
+submitted an actual compact proof. The previous rounds were used for discovery, "proofs" in Python and general
+lemmas in Lean, which were useful for the proofs. All eight proofs certify every input the network gets right,
+so for each of them R = B / length.
+
+| Proof | Round | Accuracy lower bound | Length (% of brute force) | B / length | R |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Brute force (the network itself) | | 99.99% (16,775,920 inputs) | 100% (220,771,393,664) | 1 | 1 |
+| Checker.D, window 2 everywhere | 3 | 99.99% (16,775,920 inputs) | 0.00563% (12,434,510) | 17,755 | 17,755 |
+| Checker.D, windows from the plan | 3 | 99.99% (16,775,920 inputs) | 0.00474% (10,464,107) | 21,098 | 21,098 |
+| Checker2.D | 4 | 99.99% (16,775,920 inputs) | 0.00387% (8,541,983) | 25,845 | 25,845 |
+| Checker3.D | 4 | 99.99% (16,775,920 inputs) | 0.00331% (7,304,735) | 30,223 | 30,223 |
+| Checker4.D | 4 | 99.99% (16,775,920 inputs) | 0.00313% (6,919,742) | 31,905 | 31,905 |
+| Checker5.D | 5 | 99.99% (16,775,920 inputs) | 0.00305% (6,726,671) | 32,820 | 32,820 |
+| Checker6.D | 5 | 99.99% (16,775,920 inputs) | 0.00281% (6,212,845) | 35,535 | 35,535 |
+| Checker7.D, locked | 5 | 99.99% (16,775,920 inputs) | 0.00279% (6,157,945) | 35,851 | 35,851 |
+
+##### Evaluation
+
 To be written.
