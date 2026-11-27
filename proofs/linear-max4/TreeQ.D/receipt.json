@@ -1,0 +1,228 @@
+{
+ "schema": "open-lane-receipt-v1",
+ "candidate_id": "attempt_0-s000",
+ "status": "accepted",
+ "reason": null,
+ "claim_kind": "performance",
+ "certified_count": 16677894,
+ "domain_size": 16777216,
+ "claimed_count": null,
+ "network": "max4-v64-s0",
+ "theorem": "Candidate.TreeQ.D_sound",
+ "statement": null,
+ "axioms": [
+  "propext",
+  "Classical.choice",
+  "Quot.sound"
+ ],
+ "isolation": "seatbelt",
+ "steps": [
+  {
+   "step": "protected",
+   "module": "Protected.N_max4_v64_s0_c0_p1b86f603917a654d",
+   "network_module": "Protected.N_max4_v64_s0",
+   "cached": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.Linear",
+   "rc": 0,
+   "seconds": 1.3,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LinearSum",
+   "rc": 0,
+   "seconds": 1.2,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.Boxes",
+   "rc": 0,
+   "seconds": 1.2,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.BoxCorrect",
+   "rc": 0,
+   "seconds": 1.2,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.CountedLin",
+   "rc": 0,
+   "seconds": 1.3,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.CountedMat",
+   "rc": 0,
+   "seconds": 1.3,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.TreeCheck",
+   "rc": 0,
+   "seconds": 1.8,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.TreeD",
+   "rc": 0,
+   "seconds": 2.4,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.TreeQ",
+   "rc": 0,
+   "seconds": 1.6,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "closure",
+   "rc": 0,
+   "seconds": 0.8,
+   "timed_out": false
+  },
+  {
+   "step": "kernel",
+   "rc": 0,
+   "seconds": 1.2,
+   "timed_out": false,
+   "scores": true
+  },
+  {
+   "step": "run",
+   "rc": 0,
+   "seconds": 1578.0,
+   "timed_out": false,
+   "status": "ok"
+  }
+ ],
+ "digests": {
+  "commit": "eab37d359a997b6c8b96ea5ad13dd9383b8ecdb8",
+  "toolchain": "lean:d1d9c26a539f54fe",
+  "lean_project": "77ee1f51c43e9a19",
+  "policy": "c64ba6cd71eb43a8",
+  "acceptcheck": "f59c36ec70897a70",
+  "modules": {
+   "Candidate.TreeQ": "84661441af0f97478185e4df485698850a4727fc2d0f55e9c05f4e8df3b32f4f",
+   "Candidate.TreeD": "44a7fde651c6b62ca902f9049038b4f30148d602eca463ad1cca3af27a69aa12",
+   "Candidate.TreeCheck": "590cb5d5e19a1d667f024ef3e250e03ed44217fc8cab81e918230cf9e37a2487",
+   "Candidate.CountedMat": "2ccf29b8e3d264281b230b0090de11b013d72a6dd0588a735a6a25c0f29faee1",
+   "Candidate.BoxCorrect": "64494373337a004a20f6e20663493cb9ba04267c1305d648d4ead370314282ab",
+   "Candidate.Boxes": "03a9fea51a44a0ece3d19d4dd9254636aa817bf18bf602b6f89fe9fce30a984f",
+   "Candidate.LinearSum": "0379f2c52ea4b28feab956a6b37cabc39f87e28593963ab1144ffb1c6b28ad50",
+   "Candidate.Linear": "b65970a02dccf5a958e2be55cb6a202d0e78058272a32f89036f1ebb29897be2",
+   "Candidate.CountedLin": "ab54279fd3d0b263bbb655c367e573ac0ef09a49e3c3e7fabe441069197ac9bd"
+  },
+  "network_file": "11e4eb8fe4ec6a19f32dcad75d558b8f0478b02072ac9c9ab9a679e27662772b"
+ },
+ "score_eligible": true,
+ "execution_assurance": "compiled_instance",
+ "run": "compiled",
+ "cost_model": "cost-v3",
+ "policy_version": "open-lane-policy-v15",
+ "knowledge": "minimal",
+ "scoring": {
+  "status": "scored",
+  "reason": null,
+  "cost_model": "cost-v3",
+  "run": "compiled",
+  "assurance": "compiled_instance",
+  "bill": 92355756,
+  "extract": 1088,
+  "read": 0,
+  "length": 92356844,
+  "plan_entries": 491,
+  "plan_bits": 1539,
+  "plan_bits_budget": 6534,
+  "measured_bill": 92355756,
+  "measured_length": 92356844,
+  "description_size": 12933,
+  "weight_bits": 26138,
+  "size_budget": 13069,
+  "general_kernel_ms": 204,
+  "general_kernel_budget_ms": 120000,
+  "rest_kernel_ms": 46,
+  "last_bits": {
+   "levels": [
+    20,
+    16
+   ],
+   "recorded": [
+    12,
+    8
+   ],
+   "copies": 2,
+   "keep": "9/10",
+   "runs": [
+    {
+     "level": 20,
+     "count": 16677894
+    },
+    {
+     "level": 20,
+     "count": 16677894
+    },
+    {
+     "level": 16,
+     "count": 16677846
+    },
+    {
+     "level": 16,
+     "count": 16677894
+    },
+    {
+     "level": 12,
+     "count": 16677942
+    },
+    {
+     "level": 12,
+     "count": 16677810
+    },
+    {
+     "level": 8,
+     "count": 16580554
+    },
+    {
+     "level": 8,
+     "count": 16614674
+    }
+   ],
+   "least_share": 1.0,
+   "holds_to": 8,
+   "passed": true
+  },
+  "axioms": [
+   "propext",
+   "Classical.choice",
+   "Quot.sound"
+  ],
+  "closure_visited": 201,
+  "general_constants": 235,
+  "checker_constants": 86
+ },
+ "seconds": 1597.5,
+ "time": "2026-11-23T12:43:47+0000",
+ "replayed_constants": 455,
+ "receipt_path": "/Users/kames/auto-research-compact-proof-runs/linear-max4-ptl-1/open_lane_work/receipts/attempt_0-s000-1795437827.json",
+ "submission": 0
+}

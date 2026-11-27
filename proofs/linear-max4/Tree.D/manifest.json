@@ -1,0 +1,23 @@
+{
+ "schema": "open-lane-candidate-v1",
+ "candidate_id": "attempt_0-s000",
+ "kind": "performance",
+ "model": "models/max4",
+ "network": "max4-v64-s0",
+ "modules": [
+  "Candidate/TreeD.lean",
+  "Candidate/TreeCheck.lean",
+  "Candidate/CountedMat.lean",
+  "Candidate/BoxCorrect.lean",
+  "Candidate/Boxes.lean",
+  "Candidate/LinearSum.lean",
+  "Candidate/Linear.lean",
+  "Candidate/CountedLin.lean"
+ ],
+ "scored": {
+  "checker": "Candidate.Tree.D",
+  "sound": "Candidate.Tree.D_sound",
+  "certificate": [],
+  "run": "compiled"
+ }
+}

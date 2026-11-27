@@ -36,6 +36,8 @@ the Lean service accepts it.
 
 ## Results
 
+The Lean files, manifests and receipts of the proofs in the tables below are in [`proofs/`](proofs/).
+
 ### Experiment 1: Linear
 
 #### Linear max of 4

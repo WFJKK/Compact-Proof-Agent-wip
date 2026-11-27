@@ -1,0 +1,282 @@
+{
+ "schema": "open-lane-receipt-v1",
+ "candidate_id": "attempt_0-s003",
+ "status": "accepted",
+ "reason": null,
+ "claim_kind": "performance",
+ "certified_count": 16775920,
+ "domain_size": 16777216,
+ "claimed_count": null,
+ "network": "attn-max4-v64-s0",
+ "theorem": "Candidate.Checker.D_sound",
+ "statement": null,
+ "axioms": [
+  "propext",
+  "Classical.choice",
+  "Quot.sound"
+ ],
+ "isolation": "seatbelt",
+ "steps": [
+  {
+   "step": "protected",
+   "module": "Protected.N_attn_max4_v64_s0_c0_pbb50be0ef5c390b9",
+   "network_module": "Protected.N_attn_max4_v64_s0",
+   "cached": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.Formula",
+   "rc": 0,
+   "seconds": 2.4,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.FormulaCor",
+   "rc": 0,
+   "seconds": 1.3,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.Margin",
+   "rc": 0,
+   "seconds": 1.4,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.Bridge",
+   "rc": 0,
+   "seconds": 1.4,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.Bounds",
+   "rc": 0,
+   "seconds": 1.5,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.Loops",
+   "rc": 0,
+   "seconds": 1.8,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.Count",
+   "rc": 0,
+   "seconds": 1.6,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.Tables",
+   "rc": 0,
+   "seconds": 1.7,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.Checker",
+   "rc": 0,
+   "seconds": 1.6,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.Inputs",
+   "rc": 0,
+   "seconds": 2.0,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.TabSpec",
+   "rc": 0,
+   "seconds": 1.5,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.ScanSpec",
+   "rc": 0,
+   "seconds": 2.2,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.TabSpec2",
+   "rc": 0,
+   "seconds": 3.3,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.GroupSpec",
+   "rc": 0,
+   "seconds": 2.4,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.Sound",
+   "rc": 0,
+   "seconds": 2.3,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "closure",
+   "rc": 0,
+   "seconds": 1.0,
+   "timed_out": false
+  },
+  {
+   "step": "kernel",
+   "rc": 0,
+   "seconds": 3.0,
+   "timed_out": false,
+   "scores": true
+  },
+  {
+   "step": "run",
+   "rc": 0,
+   "seconds": 450.9,
+   "timed_out": false,
+   "status": "ok"
+  }
+ ],
+ "digests": {
+  "commit": "eab37d359a997b6c8b96ea5ad13dd9383b8ecdb8",
+  "toolchain": "lean:d1d9c26a539f54fe",
+  "lean_project": "77ee1f51c43e9a19",
+  "policy": "c64ba6cd71eb43a8",
+  "acceptcheck": "f59c36ec70897a70",
+  "modules": {
+   "Candidate.Sound": "94047adf199fffdf6165c7b1aaffe89d47bcfe6fea7814fbee6c38ba96bc5818",
+   "Candidate.GroupSpec": "004b899e18b49cc9074bacf0ee0e33d44708436ed0414e14af10b8f3e4760af0",
+   "Candidate.TabSpec2": "7be2d2c1b0e3b0655bc38ab7b7897630b9ea3e036533600f8f1ab1f094188b7a",
+   "Candidate.Checker": "92cf9ac44f2d2635648db100a631b8b2c09b712dd1dfed1a04421c907718f711",
+   "Candidate.Tables": "208cd55a428b9ad2aa514b3cae214d3b0c92f893d1f83e1656470ce0b5eb5089",
+   "Candidate.Count": "dff48793c6daaae1f69ce7dfb85b88fd5a8c62a826c5f053c8a024c3b558ab22",
+   "Candidate.Loops": "61a843183b20467397dc6effd7a233ee17d5d777066b6c63db44463ed94270fe",
+   "Candidate.ScanSpec": "96a72ce01bdc8b33c2550946613c2f1983ec742802af9a8672b1166fe3d41041",
+   "Candidate.TabSpec": "5eb59acab641a6d09d3cb1d67027e62c09300618f4ff7d2cb1e125b9c539ef79",
+   "Candidate.Inputs": "f40f7be46a19d8dad3e208cf35123686c560fbeb46f52eabb342b8854cd05822",
+   "Candidate.Bounds": "6b4f32b9edd479e5f497e115fad71d3d5b46253bb2ff283a5abc02571de64b5a",
+   "Candidate.Bridge": "9caa7171ff9878526c0216b30d8b96d8d4136bbf45656e54a4a9a7b070f6e901",
+   "Candidate.Margin": "162721328877ce2433de03e1eb008aa6c69eb756eddd6b04d92de394ec55dff4",
+   "Candidate.FormulaCor": "e9786e2c0ee183d2e10fa0d7ba745ccd7005a9612cd6703e9f00a1753fdb1ff1",
+   "Candidate.Formula": "67d66df5e1c404a2ef6d4b0028c2f80dc25983cd8048a1467bacbe8c3b6b3534"
+  },
+  "network_file": "548025081ce24b06579a14b5585ca6255902befe850a2609ddb29341689619b1"
+ },
+ "score_eligible": true,
+ "execution_assurance": "compiled_instance",
+ "run": "compiled",
+ "cost_model": "cost-v3",
+ "policy_version": "open-lane-policy-v15",
+ "knowledge": "minimal",
+ "scoring": {
+  "status": "scored",
+  "reason": null,
+  "cost_model": "cost-v3",
+  "run": "compiled",
+  "assurance": "compiled_instance",
+  "bill": 10455787,
+  "extract": 8320,
+  "read": 0,
+  "length": 10464107,
+  "plan_entries": 66,
+  "plan_bits": 206,
+  "plan_bits_budget": 49927,
+  "measured_bill": 10455787,
+  "measured_length": 10464107,
+  "description_size": 15647,
+  "weight_bits": 199710,
+  "size_budget": 24576,
+  "general_kernel_ms": 1610,
+  "general_kernel_budget_ms": 120000,
+  "rest_kernel_ms": 62,
+  "last_bits": {
+   "levels": [
+    20,
+    16
+   ],
+   "recorded": [
+    12,
+    8
+   ],
+   "copies": 2,
+   "keep": "9/10",
+   "runs": [
+    {
+     "level": 20,
+     "count": 16775920
+    },
+    {
+     "level": 20,
+     "count": 16775920
+    },
+    {
+     "level": 16,
+     "count": 16775920
+    },
+    {
+     "level": 16,
+     "count": 16775920
+    },
+    {
+     "level": 12,
+     "count": 16775920
+    },
+    {
+     "level": 12,
+     "count": 16775920
+    },
+    {
+     "level": 8,
+     "count": 16774514
+    },
+    {
+     "level": 8,
+     "count": 16773180
+    }
+   ],
+   "least_share": 1.0,
+   "holds_to": 8,
+   "passed": true
+  },
+  "axioms": [
+   "propext",
+   "Classical.choice",
+   "Quot.sound"
+  ],
+  "closure_visited": 145,
+  "general_constants": 476,
+  "checker_constants": 50
+ },
+ "seconds": 496.2,
+ "time": "2026-11-23T16:57:40+0000",
+ "replayed_constants": 686,
+ "receipt_path": "/Users/kames/auto-research-compact-proof-runs/attn-max4-ptl-1/open_lane_work/receipts/attempt_0-s003-1795453060.json",
+ "submission": 3
+}
