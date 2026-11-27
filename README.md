@@ -32,7 +32,7 @@ the Lean service accepts it.
 
 ## Agentic setup / Auto-research
 
-To be written.
+![The agentic flow of a run in the open lane](docs/figures/open-lane-flow.png)
 
 ## Results
 
