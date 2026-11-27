@@ -94,7 +94,27 @@ lemmas in Lean, which were useful for the proofs.
 While we have given the Pareto frontier above, we now want to evaluate the proofs in more detail. We want to
 understand in detail what the proofs understood about the structure present in these networks and what they
 used. Moreover, we want to distinguish between mere inference optimisation and understanding that is
-"mechanistic".
+"mechanistic". Most importantly, we want to compare what the agent handed in as a proof with the best known
+proof, which mixes ideas from Louis Jaburi's tutorial notebook
+([LouisYRYJ/Proof_based_approach_tutorial](https://github.com/LouisYRYJ/Proof_based_approach_tutorial)) with
+ideas of the author, worked out with Claude. There is also a distinction to make between the ideas the agent had,
+which we read from the run's records (the notes it kept in its research folder in every round, the candidate
+proofs it described there with costs estimated in Python, and the transcripts of its sessions), and the ones the
+agent actually submitted in Lean. All the proofs the agent handed in in the 5 rounds are based on the same three
+ideas:
+
+1. Linearity. The network is linear in the token counts, so each output's score is a sum of four entries of one
+   64 × 64 table, M = ULE, which the checker computes once.
+2. Boxes. Against each other answer j, the margin of the right answer m (the difference of their two scores) is
+   a sum of one part per position. Over a box, which allows a range of tokens at each position, the smallest
+   margin is therefore the sum of the smallest parts, so one test covers every input in the box. A box passes
+   exactly when all its inputs are right, and with each range's minimum computed once, the test costs the same
+   however large the box is.
+3. A tree of boxes. The inputs are split by their largest token m, by the first position that holds m, and into
+   ranges of tokens that are cut finely near m, where the network's mistakes are, and coarsely far below.
+
+The three proofs differ only in where the tree cuts: by a fixed rule (Tree.D), by a list of cuts for each m
+(TreeP.D), and by finer lists from a search on the weights (TreeQ.D).
 
 ### Experiment 2: Attention
 
