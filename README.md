@@ -103,46 +103,51 @@ proofs it described there with costs estimated in Python, and the transcripts of
 agent actually submitted in Lean. All the proofs the agent handed in in the 5 rounds are based on the same three
 ideas:
 
-**1. Linearity.** The embedding adds up the one-hot vectors of the four tokens x = (x₁, x₂, x₃, x₄) and there is
-no nonlinearity, so the score of each output j is a sum of four entries of one 64 × 64 table, which the checker
-computes once:
+**1. Linearity.** The embedding adds up the one-hot vectors of the tokens x = (x₁, x₂, x₃, x₄), and there is no
+nonlinearity, so each output's score is a sum of four entries of one 64 × 64 table, computed once:
 
 $$s_j(x) = \sum_{i=1}^{4} M_{j, x_i}, \qquad M = ULE$$
 
-The network answers the output with the highest score.
-
-**2. Boxes.** Let m be the largest token of x. The network is right on x when m beats every other answer j, that
-is, when all 63 margins are positive:
+**2. Boxes.** If m is the largest token of x, the network is right when m beats every other answer j, that is,
+when every margin is positive. By linearity the margin is a sum of one part per token, with
+$D_j(t) = M_{m,t} - M_{j,t}$:
 
 $$\mathrm{margin}_j(x) = s_m(x) - s_j(x) = \sum_{i=1}^{4} D_j(x_i)$$
 
-where $D_j(t) = M_{m,t} - M_{j,t}$ says how much a token t, in any position, helps m against j. For the input
-(5, 35, 40, 38) the score of 40 is 84.01 and its closest rival, 41, scores 73.73: a margin of 10.28.
-
-A box is a set of inputs given by a set of allowed tokens for each position,
-$T_1 \times T_2 \times T_3 \times T_4$. For example, tokens 0 to 7 in position 1, 33 to 39 in position 2, 40 in
-position 3 and 38 to 39 in position 4 give a box of 112 inputs. One position holds m, the positions before it allow
-only tokens below m and those after it tokens up to m, so every input in the box has largest token m. Since each
-part of the margin depends on one position only, the worst input in the box takes the worst token at each position
-separately:
+A box is a set of inputs with largest token m, given by a set of allowed tokens $T_i$ for each position. Since
+each part depends on one position only, the smallest margin in the box is the sum of the smallest parts:
 
 $$\min_{x \in \mathrm{box}} \mathrm{margin}_j(x) = \sum_{i=1}^{4} \min_{t \in T_i} D_j(t)$$
 
-In the example box the worst case against 41, the tightest of the 63, is 0.08 − 2.74 + 9.35 − 2.74 = 3.94. All 63
-worst cases are positive, so all 112 inputs are right; if one were not positive, some input in the box would not be
-right, so the test is exact. It saves work because the box holds the product of the numbers of allowed tokens (8 ×
-7 × 1 × 2 = 112 inputs), while the test only looks at their sum (8 + 7 + 1 + 2 = 18 values of $D_j$ for each
-competitor). The same set of tokens appears in many boxes, so the checker computes each set's minimum once; a box
-test is then four stored minima added and compared with zero for each competitor, about as much work as checking a
-single input.
+If this is positive for all 63 competitors, every input in the box is right, and no input's margin is computed.
+For example, with $T_1 = \{30, 31, 32\}$, $T_2 = \{10, 11\}$, $T_3 = \{40\}$ and $T_4 = \{5\}$, the worst case
+against 43 is −0.14 − 0.76 + 8.03 − 0.70 = 6.43, from the input (32, 10, 40, 5). A box holds the product of its
+set sizes in inputs, but with each set's minimum stored, its test adds only four numbers per competitor.
 
-**3. A tree of boxes.** All 16.8 million inputs are split into boxes: by the largest token m, by the first
-position that holds m, and by cutting the tokens of every other position into ranges, finely near m, where $D_j$
-changes quickly and the network's mistakes are, and coarsely far below m, where $D_j$ hardly changes. Every
-combination of one range per position is one box. TreeQ.D has about 243,000 boxes, 69 inputs each on average.
+**3. A tree of boxes.** All 16.8 million inputs are split into boxes: by m, by the first position that holds m,
+and by ranges of tokens cut finely near m, where the parts change quickly and the network's mistakes are, and
+coarsely far below.
 
 The three proofs differ only in where the tree cuts: by a fixed rule (Tree.D), by a list of cuts for each m
 (TreeP.D), and by finer lists from a search on the weights (TreeQ.D).
+
+For comparison, two proofs that are not the agent's:
+
+| Proof | Obtained by | Accuracy lower bound | Length (% of brute force) | B / length | R |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Pure convexity | Python, not Lean | 71.55% (12,003,766 inputs) | 0.0051% (about 570,000) | about 19,750 | 3.5 |
+| Best known proof (Ref.D) | Lean, accepted by the Lean service | 99.80% (16,743,886 inputs) | 0.0067% (757,364) | 14,864 | 14,864 |
+
+- Pure convexity. For each m and number k of its copies, a token a is good when the pure input with k copies of
+  m and 4 − k copies of a is right. An input whose other tokens are all good is then right too, because by
+  linearity its margin is an average of pure inputs' margins: the margin of (a, b, c, m) is the average of those
+  of (a, a, a, m), (b, b, b, m) and (c, c, c, m). About 6,000 pure inputs settle 71.7% of the right inputs. It is
+  the shortest proof here, but R charges each of the other right inputs a forward pass, so it scores only 3.5.
+- Best known proof (Ref.D). Written by us in Lean. It keeps the agent's linearity and box test (four of its ten
+  Lean modules are the agent's, unchanged) and adds three ideas: convexity, with the bad tokens fixed and tested
+  again, so that every right input is covered; only neighbours compete, so that for each m and number of its
+  copies a competitor whose worst case still loses is dismissed once, leaving about 3 of the 63 to test; and
+  symmetry, since order does not matter, so that one test covers every ordering of a box.
 
 ### Experiment 2: Attention
 
