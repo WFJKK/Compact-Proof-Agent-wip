@@ -1,0 +1,30 @@
+{
+ "schema": "open-lane-candidate-v1",
+ "candidate_id": "gross-cubic-v64-s0",
+ "kind": "performance",
+ "model": "models/attn-max4",
+ "network": "attn-max4-v64-s0",
+ "modules": [
+  "Candidate/Cubic.lean",
+  "Candidate/LibCubicSound.lean",
+  "Candidate/LibCubicCorrect.lean",
+  "Candidate/LibCubicCount.lean",
+  "Candidate/LibCubicCheck.lean",
+  "Candidate/LibCubicRuns.lean",
+  "Candidate/LibCubicBound.lean",
+  "Candidate/LibCubicChecker.lean",
+  "Candidate/LibAttnSound.lean",
+  "Candidate/LibAttnCheck.lean",
+  "Candidate/LibAttnRuns.lean",
+  "Candidate/LibAttnFamily.lean",
+  "Candidate/LibAttnChecker.lean",
+  "Candidate/LibAttnOps.lean",
+  "Candidate/LibCommonBasic.lean"
+ ],
+ "scored": {
+  "checker": "Candidate.Cubic.D",
+  "sound": "Candidate.Cubic.D_sound",
+  "certificate": [],
+  "run": "compiled"
+ }
+}

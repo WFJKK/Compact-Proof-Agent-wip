@@ -1,0 +1,388 @@
+{
+ "schema": "open-lane-receipt-v1",
+ "candidate_id": "gross-sub1-v64-s0",
+ "status": "accepted",
+ "reason": null,
+ "claim_kind": "performance",
+ "certified_count": 13181814,
+ "domain_size": 16777216,
+ "claimed_count": null,
+ "network": "attn-max4-v64-s0",
+ "theorem": "Candidate.Sub.D_sound",
+ "statement": null,
+ "axioms": [
+  "propext",
+  "Classical.choice",
+  "Quot.sound"
+ ],
+ "isolation": "landlock",
+ "steps": [
+  {
+   "step": "protected",
+   "module": "Protected.N_attn_max4_v64_s0_c0_h961006dc2f2a10b5_pad4703b88851cde7",
+   "network_module": "Protected.N_attn_max4_v64_s0",
+   "cached": true
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibCommonBasic",
+   "rc": 0,
+   "seconds": 2.2,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibAttnOps",
+   "rc": 0,
+   "seconds": 2.8,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibAttnChecker",
+   "rc": 0,
+   "seconds": 1.9,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibAttnFamily",
+   "rc": 0,
+   "seconds": 3.5,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibAttnRuns",
+   "rc": 0,
+   "seconds": 4.8,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibAttnCheck",
+   "rc": 0,
+   "seconds": 2.2,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibAttnSound",
+   "rc": 0,
+   "seconds": 4.5,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibCubicBound",
+   "rc": 0,
+   "seconds": 1.9,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibCubicChecker",
+   "rc": 0,
+   "seconds": 2.3,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibCubicRuns",
+   "rc": 0,
+   "seconds": 5.8,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibCubicCheck",
+   "rc": 0,
+   "seconds": 2.0,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibCubicCount",
+   "rc": 0,
+   "seconds": 2.0,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibCubicCorrect",
+   "rc": 0,
+   "seconds": 4.2,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibCubicSound",
+   "rc": 0,
+   "seconds": 3.7,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibSubChecker",
+   "rc": 0,
+   "seconds": 2.7,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibSubLin",
+   "rc": 0,
+   "seconds": 2.2,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibSubPsd",
+   "rc": 0,
+   "seconds": 6.1,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibSubSort",
+   "rc": 0,
+   "seconds": 2.0,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibSubRuns",
+   "rc": 0,
+   "seconds": 6.1,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibSubErr",
+   "rc": 0,
+   "seconds": 3.4,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibSubSpec",
+   "rc": 0,
+   "seconds": 3.3,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibSubSteps",
+   "rc": 0,
+   "seconds": 4.4,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibSubClass",
+   "rc": 0,
+   "seconds": 7.9,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibSubSound",
+   "rc": 0,
+   "seconds": 2.4,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibSubCheck",
+   "rc": 0,
+   "seconds": 4.5,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.SubOne",
+   "rc": 0,
+   "seconds": 1.7,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.Sub",
+   "rc": 0,
+   "seconds": 1.8,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "closure",
+   "rc": 0,
+   "seconds": 1.0,
+   "timed_out": false
+  },
+  {
+   "step": "kernel",
+   "rc": 0,
+   "seconds": 6.7,
+   "timed_out": false,
+   "scores": true
+  },
+  {
+   "step": "run",
+   "rc": 0,
+   "seconds": 50.0,
+   "timed_out": false,
+   "status": "ok"
+  }
+ ],
+ "digests": {
+  "commit": "eab37d359a997b6c8b96ea5ad13dd9383b8ecdb8",
+  "toolchain": "lean:bf8d54e4714cc4b0",
+  "lean_project": "77ee1f51c43e9a19",
+  "policy": "c64ba6cd71eb43a8",
+  "acceptcheck": "206dbd19fdd2f10d",
+  "modules": {
+   "Candidate.Sub": "64866c4a088fd7129a3b72c93a7b28349b85aa2f74d37ce4695a1ad72ed1fb8e",
+   "Candidate.SubOne": "f41677787152ab4738a479aac027923980a25983f005d7ffb179cde384c552d4",
+   "Candidate.LibSubCheck": "79efcffe644c0d42307f152ecf4a6f733b1b1a4d3c883989d87f124455ac664c",
+   "Candidate.LibSubSound": "3d6d94348bb4dcb87d9c211e9f2dff58e76a9934b7c7b9aa4850a45e8076924e",
+   "Candidate.LibSubClass": "fb4cc40d0bc37f8222d32512544897ec9757aec8c31ad6f1b23143ff21c4492a",
+   "Candidate.LibSubSteps": "d5a9d1ad3b8a41cb1a6dc15e8cc48e0ec22cb1769857c8cd44ff34ee20d10120",
+   "Candidate.LibSubSpec": "1aa662ceb332dc370624015f341bc29c9e3bf0fb2eaf4dca3dac3686c2172596",
+   "Candidate.LibSubErr": "5aee4af76356163f721b2c5557edb5b8c8505c36ff5094edc234c823b3348ff3",
+   "Candidate.LibSubRuns": "40e50aa585fb55bb2843fd3483696d88d43da719a4f8a35afc2022079eb708d9",
+   "Candidate.LibSubSort": "f3eba871f1c1cca239e5df5a66e026846762a0e7ef939fc7b6583a86a79d659a",
+   "Candidate.LibSubPsd": "fe50ed36a17e4f999efc3a5ff39355563ae6c4a99678f4bd1a31df826a7b1171",
+   "Candidate.LibSubLin": "635f48e0d91e52ed1ec708a892085c31c83479d0d37148474c153cec9edb771f",
+   "Candidate.LibSubChecker": "53c8de727d051b1068999fc56c0e1174faf8fff401d58276bda27424843b469d",
+   "Candidate.LibCubicSound": "29eb7a5edb074c3c7b1c6c6fcda8fb3f602897194c739ceb2912c6f81b891c8b",
+   "Candidate.LibCubicCorrect": "2794857aef005fa08e3e6801df893f30d36b450c7620cc1bdabd568283c1e375",
+   "Candidate.LibCubicCount": "fc80793ba09fecf25234cfafb0f256f560462e0ca5cfda20bcfbdb64e2015348",
+   "Candidate.LibCubicCheck": "bda94b5009c57e1af0725cb7edc1cdfd3e6282d107bd07018c7bafaf4cd22af9",
+   "Candidate.LibCubicRuns": "366210153d495daf1ba6634b6995414b27478cea290dac9fe5c35cf24c7a90cd",
+   "Candidate.LibCubicBound": "fc1c15be9f481ca2edc09229b96a0b2971a307dcc9cb45fb55734701c37c55a4",
+   "Candidate.LibCubicChecker": "ea5a3ae583a8d527f1ba55433d92c161d6a7122a6588db8ddb4bb46971a79d41",
+   "Candidate.LibAttnSound": "362f5a8a11e59db2990fc8ef588ad665019b48f6cd92e7901a178dd9869e0e90",
+   "Candidate.LibAttnCheck": "d25de569a27c362bba3baeefad8e7767896379e13e076b336dfd5f43fd6c79fa",
+   "Candidate.LibAttnRuns": "fb4ec92db54a61bd4a7e275911d47ab6299ed675c25f34cb74de49d8a646398d",
+   "Candidate.LibAttnFamily": "e728c44ff3bc4d85adae13324897feccce908e0a067d5df39992008466f796d6",
+   "Candidate.LibAttnChecker": "2519eb9fba97f36ee509688706fa5c84ea3b3908898e32d3e64d88ead4cc6b64",
+   "Candidate.LibAttnOps": "6c0afaf157b63199ecd6d124e6501bd123dd0aec525a6bd2fad24f3fed023f51",
+   "Candidate.LibCommonBasic": "becbd150a885afc45f058d90f0df197fdcd0f541c36ae54c846a150344106678"
+  },
+  "network_file": "548025081ce24b06579a14b5585ca6255902befe850a2609ddb29341689619b1"
+ },
+ "score_eligible": true,
+ "execution_assurance": "compiled_instance",
+ "run": "compiled",
+ "cost_model": "cost-v3",
+ "policy_version": "open-lane-policy-v15",
+ "knowledge": "minimal",
+ "scoring": {
+  "status": "scored",
+  "reason": null,
+  "cost_model": "cost-v3",
+  "run": "compiled",
+  "assurance": "compiled_instance",
+  "bill": 1130129,
+  "extract": 8320,
+  "read": 736,
+  "length": 1139185,
+  "plan_entries": 16384,
+  "plan_bits": 28772,
+  "plan_bits_budget": 49927,
+  "measured_bill": 1130129,
+  "measured_length": 1139185,
+  "description_size": 16643,
+  "weight_bits": 199710,
+  "size_budget": 24576,
+  "general_kernel_ms": 3157,
+  "general_kernel_budget_ms": 120000,
+  "rest_kernel_ms": 1620,
+  "last_bits": {
+   "levels": [
+    20,
+    16
+   ],
+   "recorded": [
+    12,
+    8
+   ],
+   "copies": 2,
+   "keep": "9/10",
+   "runs": [
+    {
+     "level": 20,
+     "count": 13181814
+    },
+    {
+     "level": 20,
+     "count": 13181814
+    },
+    {
+     "level": 16,
+     "count": 13181814
+    },
+    {
+     "level": 16,
+     "count": 13181814
+    },
+    {
+     "level": 12,
+     "count": 13088193
+    },
+    {
+     "level": 12,
+     "count": 13198012
+    },
+    {
+     "level": 8,
+     "count": 12918644
+    },
+    {
+     "level": 8,
+     "count": 12860942
+    }
+   ],
+   "least_share": 1.0,
+   "holds_to": 8,
+   "passed": true
+  },
+  "axioms": [
+   "propext",
+   "Classical.choice",
+   "Quot.sound"
+  ],
+  "closure_visited": 166,
+  "general_constants": 872,
+  "checker_constants": 64
+ },
+ "seconds": 152.4,
+ "time": "2026-11-27T17:29:35+0000",
+ "replayed_constants": 1322
+}

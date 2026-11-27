@@ -1,0 +1,280 @@
+{
+ "schema": "open-lane-receipt-v1",
+ "candidate_id": "gross-cubic-v64-s0",
+ "status": "accepted",
+ "reason": null,
+ "claim_kind": "performance",
+ "certified_count": 16321802,
+ "domain_size": 16777216,
+ "claimed_count": null,
+ "network": "attn-max4-v64-s0",
+ "theorem": "Candidate.Cubic.D_sound",
+ "statement": null,
+ "axioms": [
+  "propext",
+  "Classical.choice",
+  "Quot.sound"
+ ],
+ "isolation": "landlock",
+ "steps": [
+  {
+   "step": "protected",
+   "module": "Protected.N_attn_max4_v64_s0_c0",
+   "network_module": "Protected.N_attn_max4_v64_s0",
+   "cached": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibCommonBasic",
+   "rc": 0,
+   "seconds": 3.1,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibAttnChecker",
+   "rc": 0,
+   "seconds": 2.4,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibCubicChecker",
+   "rc": 0,
+   "seconds": 2.2,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibAttnOps",
+   "rc": 0,
+   "seconds": 3.2,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibAttnFamily",
+   "rc": 0,
+   "seconds": 4.1,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibAttnRuns",
+   "rc": 0,
+   "seconds": 6.8,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibAttnCheck",
+   "rc": 0,
+   "seconds": 2.5,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibAttnSound",
+   "rc": 0,
+   "seconds": 5.4,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibCubicRuns",
+   "rc": 0,
+   "seconds": 6.2,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibCubicCheck",
+   "rc": 0,
+   "seconds": 2.2,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibCubicBound",
+   "rc": 0,
+   "seconds": 2.1,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibCubicCount",
+   "rc": 0,
+   "seconds": 2.3,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibCubicCorrect",
+   "rc": 0,
+   "seconds": 4.5,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.LibCubicSound",
+   "rc": 0,
+   "seconds": 4.1,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "compile",
+   "module": "Candidate.Cubic",
+   "rc": 0,
+   "seconds": 1.6,
+   "timed_out": false,
+   "kernel": false
+  },
+  {
+   "step": "closure",
+   "rc": 0,
+   "seconds": 1.3,
+   "timed_out": false
+  },
+  {
+   "step": "kernel",
+   "rc": 0,
+   "seconds": 4.9,
+   "timed_out": false,
+   "scores": true
+  },
+  {
+   "step": "run",
+   "rc": 0,
+   "seconds": 209.9,
+   "timed_out": false,
+   "status": "ok"
+  }
+ ],
+ "digests": {
+  "commit": "eab37d359a997b6c8b96ea5ad13dd9383b8ecdb8",
+  "toolchain": "lean:bf8d54e4714cc4b0",
+  "lean_project": "77ee1f51c43e9a19",
+  "policy": "c64ba6cd71eb43a8",
+  "acceptcheck": "206dbd19fdd2f10d",
+  "modules": {
+   "Candidate.Cubic": "585abe4ad32e31653fd4cfc3c77499275500a96986fe13517ed997649e019427",
+   "Candidate.LibCubicSound": "29eb7a5edb074c3c7b1c6c6fcda8fb3f602897194c739ceb2912c6f81b891c8b",
+   "Candidate.LibCubicCorrect": "2794857aef005fa08e3e6801df893f30d36b450c7620cc1bdabd568283c1e375",
+   "Candidate.LibCubicCount": "fc80793ba09fecf25234cfafb0f256f560462e0ca5cfda20bcfbdb64e2015348",
+   "Candidate.LibCubicCheck": "bda94b5009c57e1af0725cb7edc1cdfd3e6282d107bd07018c7bafaf4cd22af9",
+   "Candidate.LibCubicRuns": "366210153d495daf1ba6634b6995414b27478cea290dac9fe5c35cf24c7a90cd",
+   "Candidate.LibCubicBound": "fc1c15be9f481ca2edc09229b96a0b2971a307dcc9cb45fb55734701c37c55a4",
+   "Candidate.LibCubicChecker": "ea5a3ae583a8d527f1ba55433d92c161d6a7122a6588db8ddb4bb46971a79d41",
+   "Candidate.LibAttnSound": "362f5a8a11e59db2990fc8ef588ad665019b48f6cd92e7901a178dd9869e0e90",
+   "Candidate.LibAttnCheck": "d25de569a27c362bba3baeefad8e7767896379e13e076b336dfd5f43fd6c79fa",
+   "Candidate.LibAttnRuns": "fb4ec92db54a61bd4a7e275911d47ab6299ed675c25f34cb74de49d8a646398d",
+   "Candidate.LibAttnFamily": "e728c44ff3bc4d85adae13324897feccce908e0a067d5df39992008466f796d6",
+   "Candidate.LibAttnChecker": "2519eb9fba97f36ee509688706fa5c84ea3b3908898e32d3e64d88ead4cc6b64",
+   "Candidate.LibAttnOps": "6c0afaf157b63199ecd6d124e6501bd123dd0aec525a6bd2fad24f3fed023f51",
+   "Candidate.LibCommonBasic": "becbd150a885afc45f058d90f0df197fdcd0f541c36ae54c846a150344106678"
+  },
+  "network_file": "548025081ce24b06579a14b5585ca6255902befe850a2609ddb29341689619b1"
+ },
+ "score_eligible": true,
+ "execution_assurance": "compiled_instance",
+ "run": "compiled",
+ "cost_model": "cost-v3",
+ "policy_version": "open-lane-policy-v15",
+ "knowledge": "minimal",
+ "scoring": {
+  "status": "scored",
+  "reason": null,
+  "cost_model": "cost-v3",
+  "run": "compiled",
+  "assurance": "compiled_instance",
+  "bill": 5615521,
+  "extract": 8320,
+  "read": 0,
+  "length": 5623841,
+  "plan_entries": null,
+  "plan_bits": null,
+  "plan_bits_budget": 49927,
+  "measured_bill": 5615521,
+  "measured_length": 5623841,
+  "description_size": 8398,
+  "weight_bits": 199710,
+  "size_budget": 24576,
+  "general_kernel_ms": 1806,
+  "general_kernel_budget_ms": 120000,
+  "rest_kernel_ms": 884,
+  "last_bits": {
+   "levels": [
+    20,
+    16
+   ],
+   "recorded": [
+    12,
+    8
+   ],
+   "copies": 2,
+   "keep": "9/10",
+   "runs": [
+    {
+     "level": 20,
+     "count": 16321802
+    },
+    {
+     "level": 20,
+     "count": 16321802
+    },
+    {
+     "level": 16,
+     "count": 16321802
+    },
+    {
+     "level": 16,
+     "count": 16321802
+    },
+    {
+     "level": 12,
+     "count": 16321973
+    },
+    {
+     "level": 12,
+     "count": 16322006
+    },
+    {
+     "level": 8,
+     "count": 16317933
+    },
+    {
+     "level": 8,
+     "count": 16304002
+    }
+   ],
+   "least_share": 1.0,
+   "holds_to": 8,
+   "passed": true
+  },
+  "axioms": [
+   "propext",
+   "Classical.choice",
+   "Quot.sound"
+  ],
+  "closure_visited": 120,
+  "general_constants": 518,
+  "checker_constants": 38
+ },
+ "seconds": 389.8,
+ "time": "2026-11-27T16:59:01+0000",
+ "replayed_constants": 762
+}

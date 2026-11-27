@@ -31,6 +31,8 @@ open-lane-policy-v15, cost-v3, knowledge minimal, the checker run by compiled co
 | [`attn-max4/Checker5.D`](attn-max4/Checker5.D) | agent, round 5 | `Candidate.Checker5.D` | 99.99% | 0.00305% | 32,820 |
 | [`attn-max4/Checker6.D`](attn-max4/Checker6.D) | agent, round 5 | `Candidate.Checker6.D` | 99.99% | 0.00281% | 35,535 |
 | [`attn-max4/Checker7.D`](attn-max4/Checker7.D) | agent, round 5, locked | `Candidate.Checker7.D` | 99.99% | 0.00279% | 35,851 |
+| [`attn-max4/gross-cubic`](attn-max4/gross-cubic) | reference: Gross et al.'s cubic proof | `Candidate.Cubic.D` | 97.29% | 0.00255% | 36.9 |
+| [`attn-max4/gross-sub-cubic`](attn-max4/gross-sub-cubic) | reference: Gross et al.'s sub-cubic proof | `Candidate.Sub.D` | 78.57% | 0.00052% | 4.67 |
 
 - The agent's proofs are the submissions of the runs `linear-max4-ptl-1` and `attn-max4-ptl-1`, checked on the
   run's machine (macOS, seatbelt). Their receipts are the service's reply as the run kept it, which adds
@@ -39,7 +41,6 @@ open-lane-policy-v15, cost-v3, knowledge minimal, the checker run by compiled co
   seen them.
 - The two convexity proofs are one checker with two plans. It was built from Ref.D's modules and kept the Lean
   name `Candidate.Ref.D`.
-- Gross et al.'s cubic and sub-cubic proofs on `attn-max4-v64-s0` are to be added.
 
 To check one again, submit its folder from a clone of Compact-Proof-Checker at eab37d3:
 
