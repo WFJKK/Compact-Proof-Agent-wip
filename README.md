@@ -286,7 +286,7 @@ wrong are exactly those whose tokens are all 5 or less. The reading of the locke
 network written into its code: every number comes from the weights, the only literal in its arithmetic is 4 (the
 number of positions), and the plan gives only the window widths.
 
-**Against Gross et al.'s cubic proof.** The cubic proof uses the same three paths: the QK circuit (EQKE, EQKP), the
+**Against the known proofs.** Gross et al.'s cubic proof uses the same three paths: the QK circuit (EQKE, EQKP), the
 OV circuit (EVOU, PVOU) and the direct path (EU). It rests on convexity: it checks only pure sequences, made of the
 largest token, the query token and copies of one other token, and proves that a mixed sequence is right when the
 pure sequences of its tokens are. It pessimises positions, which costs little because the positional parts are
@@ -299,8 +299,29 @@ term per position, so each position's worst token is taken with that position's 
 largest token this is exact, with no pure sequences and no orderings pessimised; smaller tokens share one bound.
 Both proofs are of order V³ n², so neither is sub-cubic.
 
-The cubic proof has not yet been run in Lean by the Lean service on this network, as the agent's proofs are, so its
-length, certified inputs and R are not given here.
+Their sub-cubic proofs avoid the loop over a third token: tokens far enough below the largest one are bounded
+together through a gap, and the QK circuit is replaced by a low-rank approximation with an error bound. token_convex
+is a checker rule we wrote by hand in October for the pipeline's earlier lane, where proofs were checked in Python.
+Version 1 bounds an attention-weighted sum by its exact minimum over a box of tokens, the same step as the agent's
+group test; version 2 adds Gross et al.'s gap idea, bounding the attention for every query token at once from exact
+score tables.
+
+None of the three has been run in Lean by the Lean service on this network yet; that is being done separately. Until
+then the table gives best guesses:
+
+| Proof | Obtained by | Accuracy lower bound | Length (% of brute force) | B / length | R |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Gross et al.'s cubic proof | best guess | about 97.3% | about 0.0025% | about 39,000 | about 37 |
+| Gross et al.'s sub-cubic proof, best of their 100 configurations | best guess | about 78.6% | about 0.0005% | about 194,000 | about 4.7 |
+| token_convex, version 2 | best guess | 99.99% | about 0.0067% | about 14,800 | about 14,800 |
+| Checker7.D (the agent's) | Lean, accepted by the Lean service | 99.99% | 0.00279% | 35,851 | 35,851 |
+
+- Cubic: the count of their code on this network, which our Lean version of the proof (library entry 7)
+  reproduces, and that version's cost formula.
+- Sub-cubic: the best of their 100 configurations with their step 4 made sound (as published it is not sound on 36
+  of the 100 here), counted in floats. The length is our Lean version's cost formula; it does not charge their plan,
+  which the Lean service would refuse on size.
+- token_convex: a full proof checked in Python in October, with that lane's count of operations.
 
 **What the agent had but did not finish.** From its notes:
 
