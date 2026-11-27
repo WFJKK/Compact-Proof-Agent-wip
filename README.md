@@ -138,16 +138,45 @@ For comparison, two proofs that are not the agent's:
 | Pure convexity | Python, not Lean | 71.55% (12,003,766 inputs) | 0.0051% (about 570,000) | about 19,750 | 3.5 |
 | Best known proof (Ref.D) | Lean, accepted by the Lean service | 99.80% (16,743,886 inputs) | 0.0067% (757,364) | 14,864 | 14,864 |
 
-- Pure convexity. For each m and number k of its copies, a token a is good when the pure input with k copies of
-  m and 4 − k copies of a is right. An input whose other tokens are all good is then right too, because by
-  linearity its margin is an average of pure inputs' margins: the margin of (a, b, c, m) is the average of those
-  of (a, a, a, m), (b, b, b, m) and (c, c, c, m). About 6,000 pure inputs settle 71.7% of the right inputs. It is
-  the shortest proof here, but R charges each of the other right inputs a forward pass, so it scores only 3.5.
-- Best known proof (Ref.D). Written by us in Lean. It keeps the agent's linearity and box test (four of its ten
-  Lean modules are the agent's, unchanged) and adds three ideas: convexity, with the bad tokens fixed and tested
-  again, so that every right input is covered; only neighbours compete, so that for each m and number of its
-  copies a competitor whose worst case still loses is dismissed once, leaving about 3 of the 63 to test; and
-  symmetry, since order does not matter, so that one test covers every ordering of a box.
+They use three further ideas:
+
+**4. Convexity.** Let x have largest token m, k copies of it, and other tokens a₁, …, a_r with r = 4 − k. By
+linearity its margin is the average of the margins of pure inputs, each made of the k copies of m and r copies of
+one token a:
+
+$$\mathrm{margin}_j(x) = \frac{1}{r}\sum_{i=1}^{r} P_j(a_i), \qquad P_j(a) = k\,D_j(m) + r\,D_j(a)$$
+
+So a token a is good when $P_j(a) > 0$ for every competitor j, and every input whose other tokens are all good is
+right. Pure convexity is this alone: about 6,000 pure inputs settle 71.7% of the right inputs, and it misses the
+inputs that contain a bad token.
+
+**5. Symmetry.** The scores depend only on how often each token occurs, $c_t(x)$, not on the order:
+
+$$s_j(x) = \sum_{t=0}^{63} c_t(x)\, M_{j,t}$$
+
+So one test covers every ordering of an input or a box: the 16.8 million inputs are only 766,480 multisets.
+
+**6. Only neighbours compete.** For given m and k, a competitor j is safe when even its worst case loses:
+
+$$k\,D_j(m) + (4-k)\min_{t<m} D_j(t) > 0$$
+
+A safe competitor loses on every input of that class and needs no further test. Here only about 3 of the 63
+competitors per m and k are not safe, mostly tokens just above and just below m.
+
+Ref.D combines ideas 1, 2 and 4 to 6, with the bad tokens of convexity fixed and tested again, so that every right
+input is covered. Four of its ten Lean modules are the agent's, unchanged.
+
+**What the agent had but did not finish.** Its notes contain ideas 5 and 6, but not 4:
+
+- Symmetry: its round 1 candidates c001 and c002 are boxes of multisets with fewer competitor checks, estimated
+  at 0.43 and 3.24 million operations for every right input. It built neither: c001's plan was too large for the
+  plan budget, and both need a Lean proof that counts the orderings of a multiset box.
+- Only neighbours compete: in round 4 it designed testing each competitor once at the root of a subtree, since
+  only about 7 competitors per subtree come close, estimated at 8.6 times fewer operations and R about 200, and
+  judged that the soundness proof needs about one session. Round 5 refined the plan instead.
+- Convexity: it appears nowhere in its notes, code or session transcripts.
+
+Every session ended early by the agent's choice, and the run used about a fifth of its budget.
 
 ### Experiment 2: Attention
 
