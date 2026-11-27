@@ -82,12 +82,12 @@ is right on 16,743,886 inputs. The table starts at round 3 because that is the f
 submitted an actual compact proof. The previous rounds were used for discovery, "proofs" in Python and general
 lemmas in Lean, which were useful for the proofs.
 
-| Proof | Round | Accuracy lower bound | Length | B / length | R |
+| Proof | Round | Accuracy lower bound | Length (% of brute force) | B / length | R |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Brute force (the network itself) | | 99.80% (16,743,886 inputs) | 11,257,513,024 | 1 | 1 |
-| Tree.D | 3 | 94.39% (15,836,170 inputs) | 29,705,220 | 379 | 17.6 |
-| TreeP.D | 4 | 98.47% (16,520,886 inputs) | 69,289,128 | 162 | 51.4 |
-| TreeQ.D, locked | 5 | 99.41% (16,677,894 inputs) | 92,356,844 | 122 | 82.4 |
+| Brute force (the network itself) | | 99.80% (16,743,886 inputs) | 100% (11,257,513,024) | 1 | 1 |
+| Tree.D | 3 | 94.39% (15,836,170 inputs) | 0.264% (29,705,220) | 379 | 17.6 |
+| TreeP.D | 4 | 98.47% (16,520,886 inputs) | 0.615% (69,289,128) | 162 | 51.4 |
+| TreeQ.D, locked | 5 | 99.41% (16,677,894 inputs) | 0.820% (92,356,844) | 122 | 82.4 |
 
 ##### Evaluation
 
