@@ -302,17 +302,17 @@ Both proofs are of order V³ n², so neither is sub-cubic.
 Their sub-cubic proofs avoid the loop over a third token: tokens far enough below the largest one are bounded
 together through a gap, and the QK circuit is replaced by a low-rank approximation with an error bound.
 
-Neither has been run in Lean by the Lean service on this network yet; that is being done separately. Until then the
-table gives best guesses:
+The cubic proof has been run in Lean by the Lean service on this network, in the same setting as the agent's proofs.
+The sub-cubic proof has not yet; that is being done separately, and until then its row is a best guess:
 
 | Proof | Obtained by | Accuracy lower bound | Length (% of brute force) | B / length | R |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Gross et al.'s cubic proof | best guess | about 97.3% | about 0.0025% | about 39,000 | about 37 |
+| Gross et al.'s cubic proof | Lean, accepted by the Lean service | 97.29% | 0.00255% | 39,256 | 36.9 |
 | Gross et al.'s sub-cubic proof | best guess | about 78.6% | about 0.0005% | about 194,000 | about 4.7 |
 | Checker7.D (the agent's) | Lean, accepted by the Lean service | 99.99% | 0.00279% | 35,851 | 35,851 |
 
-- Cubic: the count of their code on this network, which our Lean version of the proof (library entry 7)
-  reproduces, and that version's cost formula.
+- Cubic: our Lean version of their proof (library entry 7). It certifies as many inputs as their code, is about 9%
+  shorter than the agent's proof, and misses 2.7% of the right inputs, so its R is 36.9 against 35,851.
 - Sub-cubic: the best of their 100 configurations with their step 4 made sound (as published it is not sound on 36
   of the 100 here), counted in floats. The length is our Lean version's cost formula; it does not charge their plan,
   which the Lean service would refuse on size.
