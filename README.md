@@ -136,11 +136,11 @@ The three proofs differ only in where the tree cuts: by a fixed rule (Tree.D), b
 
 For comparison, three proofs that are not the agent's:
 
-| Proof | Obtained by | Accuracy lower bound | Length (% of brute force) | B / length | R |
-| --- | --- | ---: | ---: | ---: | ---: |
-| Pure convexity | Lean, accepted by the Lean service | 71.55% | 0.0051% | 19,620 | 3.5 |
-| Convexity, bad tokens fixed | Lean, accepted by the Lean service | 99.80% | 0.190% | 527 | 527 |
-| Best known proof (Ref.D) | Lean, accepted by the Lean service | 99.80% | 0.0067% | 14,864 | 14,864 |
+| Proof | Accuracy lower bound | Length (% of brute force) | B / length | R |
+| --- | ---: | ---: | ---: | ---: |
+| Pure convexity | 71.55% | 0.0051% | 19,620 | 3.5 |
+| Convexity, bad tokens fixed | 99.80% | 0.190% | 527 | 527 |
+| Best known proof (Ref.D) | 99.80% | 0.0067% | 14,864 | 14,864 |
 
 They use three further ideas:
 
@@ -309,11 +309,11 @@ order V³ n², so neither is sub-cubic.
 Their sub-cubic proofs avoid the loop over a third token: tokens far enough below the largest one are bounded
 together through a gap, and the QK circuit is replaced by a low-rank approximation with an error bound.
 
-| Proof | Obtained by | Accuracy lower bound | Length (% of brute force) | B / length | R |
-| --- | --- | ---: | ---: | ---: | ---: |
-| Gross et al.'s cubic proof | Lean, accepted by the Lean service | 97.29% | 0.00255% | 39,256 | 36.9 |
-| Gross et al.'s sub-cubic proof | Lean, accepted by the Lean service | 78.57% | 0.00052% | 193,798 | 4.67 |
-| Checker7.D (the agent's) | Lean, accepted by the Lean service | 99.99% | 0.00279% | 35,851 | 35,851 |
+| Proof | Accuracy lower bound | Length (% of brute force) | B / length | R |
+| --- | ---: | ---: | ---: | ---: |
+| Gross et al.'s cubic proof | 97.29% | 0.00255% | 39,256 | 36.9 |
+| Gross et al.'s sub-cubic proof | 78.57% | 0.00052% | 193,798 | 4.67 |
+| Checker7.D (the agent's) | 99.99% | 0.00279% | 35,851 | 35,851 |
 
 - Cubic: our Lean version of their proof (library entry 7). It certifies as many inputs as their code, is about 9%
   shorter than the agent's proof, and misses 2.7% of the right inputs, so its R is 36.9 against 35,851.
