@@ -274,30 +274,35 @@ The proof costs about 2,460 operations for each pair of last token and largest t
 brute force's V⁵, like n² against 64ⁿ, and like d³ against d². The d³ comes from one table product, $W_V W_O$;
 multiplying in another order would make it d².
 
-**Understanding and inference optimisation.** The method was the agent's first candidate in round 1, estimated at
-22 million, and its first proofs in round 3: 12.4 million, then 10.5 million with the windows from the plan. Rounds 4
-and 5 made it 1.7 times shorter by arithmetic alone: one product per term, tables that do not depend on the last
-token built once, one comparison with the smallest lead, shared partial sums, and each exponential bound computed
-once. So the understanding is in round 3's proof, and the rest is inference optimisation. The network works as
-Gross et al. describe: the attention score rises with the token (here by 1.2 to 8 per step), so the largest token
-takes most of the attention, and the OV circuit copies the attended token (about +28 on its own score). The window
-rests on this: only tokens close to the largest one draw comparable attention. The 1,296 inputs the network gets
-wrong are exactly those whose tokens are all 5 or less. The reading of the locked checker found nothing of the
-network written into its code: every number comes from the weights, the only literal in its arithmetic is 4 (the
-number of positions), and the plan gives only the window widths.
+**Understanding and inference optimisation.** The method is already in round 3's proofs; rounds 4 and 5 only made
+its arithmetic 1.7 times cheaper. The understanding is the mechanism of Gross et al., which on this network holds
+from token 6 up. With $a_q(i, t)$ the attention score of token t at position i for the query q, and
+$\mathrm{OV}_{i,t}$ what attending to it adds to the scores, for every q, i and every t ≥ 6:
 
-**Against the known proofs.** Gross et al.'s cubic proof uses the same three paths: the QK circuit (EQKE, EQKP), the
-OV circuit (EVOU, PVOU) and the direct path (EU). It rests on convexity: it checks only pure sequences, made of the
-largest token, the query token and copies of one other token, and proves that a mixed sequence is right when the
-pure sequences of its tokens are. It pessimises positions, which costs little because the positional parts are
-small: equal tokens are taken to sit together, and the attention is bounded by two extreme orderings. Its loops over
-the largest token, the query token, the other token and the number of its copies give a cost of order V³ n². The
-paper reports a lower bound of 95.3% for max of 4 on its own networks.
+$$a_q(i, t+1) - a_q(i, t) \ge 0.67$$
 
-The agent's proof bounds a group differently. Multiplied by the softmax denominator, the lead becomes a sum of one
-term per position, so each position's worst token is taken with that position's own QK and OV terms. Near the
-largest token this is exact, with no pure sequences and no orderings pessimised; smaller tokens share one bound.
-Both proofs are of order V³ n², so neither is sub-cubic.
+$$\mathrm{OV}_{i,t,t} > \max_{j \ne t} \mathrm{OV}_{i,t,j}$$
+
+So the largest token draws the most attention and the head copies it, which is what the window rests on. The
+copying fails exactly for the tokens 0 to 5, where all of the network's mistakes are. The locked checker reads every
+number from the weights; its only literal is n = 4.
+
+**Against the known proofs.** Gross et al.'s cubic proof uses the same three paths (QK: EQKE, EQKP; OV: EVOU, PVOU;
+direct: EU) but rests on convexity: attention weights are nonnegative and sum to 1, so
+
+$$\min_i v_i \le \sum_i w_i(x) \cdot v_i \le \max_i v_i$$
+
+It checks only pure sequences (the largest token, the query and copies of one other token) and bounds every other
+input by them, pessimising positions: equal tokens are taken to sit together, and the attention is bounded by two
+extreme orderings. On its own networks the paper reports 95.3%.
+
+The agent's proof instead bounds a group $G = S_1 \times \dots \times S_4$ exactly, with each position's own QK and
+OV terms:
+
+$$\min_{x \in G} Z(x) \cdot (s_m(x) - s_j(x)) = \sum_{i=1}^{4} \min_{t \in S_i} T_{j,i}(t)$$
+
+It computes this exactly for tokens near m and bounds it for the rest, with nothing pessimised. Both proofs are of
+order V³ n², so neither is sub-cubic.
 
 Their sub-cubic proofs avoid the loop over a third token: tokens far enough below the largest one are bounded
 together through a gap, and the QK circuit is replaced by a low-rank approximation with an error bound.
