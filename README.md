@@ -79,8 +79,12 @@ is right on 16,743,886 inputs.
 | TreeP.D | 4 | 16,520,886 (98.7%) | 69,289,128 | 162 | 51.4 |
 | TreeQ.D, locked | 5 | 16,677,894 (99.6%) | 92,356,844 | 122 | 82.4 |
 
-The run's score is the locked proof's, R = 82.4. Rounds 1 and 2 (discovery, then four general lemmas) produced
-no scored proof.
+The run's score is that of its best proof, TreeQ.D, which the pipeline locked as the run's result: R = 82.4.
+
+The table starts at round 3 because that is the first round with a proof about the network's accuracy. In round
+1, the discovery round, the agent worked out the network's mechanism in Python and submitted nothing. In round 2
+it proved four general lemmas, which Lean accepted and the later proofs are built on, but a lemma alone
+certifies no inputs, so it has no score.
 
 ##### Evaluation
 
