@@ -310,14 +310,14 @@ together through a gap, and the QK circuit is replaced by a low-rank approximati
 | Proof | Obtained by | Accuracy lower bound | Length (% of brute force) | B / length | R |
 | --- | --- | ---: | ---: | ---: | ---: |
 | Gross et al.'s cubic proof | Lean, accepted by the Lean service | 97.29% | 0.00255% | 39,256 | 36.9 |
-| Gross et al.'s sub-cubic proof | best guess | about 78.6% | about 0.0005% | about 194,000 | about 4.7 |
+| Gross et al.'s sub-cubic proof | Lean, accepted by the Lean service | 78.57% | 0.00052% | 193,798 | 4.67 |
 | Checker7.D (the agent's) | Lean, accepted by the Lean service | 99.99% | 0.00279% | 35,851 | 35,851 |
 
 - Cubic: our Lean version of their proof (library entry 7). It certifies as many inputs as their code, is about 9%
   shorter than the agent's proof, and misses 2.7% of the right inputs, so its R is 36.9 against 35,851.
-- Sub-cubic: the best of their 100 configurations with their step 4 made sound (as published it is not sound on 36
-  of the 100 here), counted in floats. The length is our Lean version's cost formula; it does not charge their plan,
-  which the Lean service would refuse on size.
+- Sub-cubic: our Lean version (library entry 9) of the best of their 100 configurations, with their step 4 made
+  sound (as published it is not sound on 36 of the 100 here). It is about 5.4 times shorter than the agent's proof
+  but misses 21% of the right inputs, so its R is 4.67.
 
 **What the agent had but did not finish.** From its notes:
 
