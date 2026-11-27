@@ -119,10 +119,11 @@ each part depends on one position only, the smallest margin in the box is the su
 
 $$\min_{x \in \mathrm{box}} \mathrm{margin}_j(x) = \sum_{i=1}^{4} \min_{t \in T_i} D_j(t)$$
 
-If this is positive for all 63 competitors, every input in the box is right, and no input's margin is computed.
-For example, with $T_1 = \{30, 31, 32\}$, $T_2 = \{10, 11\}$, $T_3 = \{40\}$ and $T_4 = \{5\}$, the worst case
-against 43 is −0.14 − 0.76 + 8.03 − 0.70 = 6.43, from the input (32, 10, 40, 5). A box holds the product of its
-set sizes in inputs, but with each set's minimum stored, its test adds only four numbers per competitor.
+If this is positive for all 63 competitors, every input in the box is right, and no input's margin is computed. For
+example, with $T_1 = \lbrace 30, 31, 32 \rbrace$, $T_2 = \lbrace 10, 11 \rbrace$, $T_3 = \lbrace 40 \rbrace$ and
+$T_4 = \lbrace 5 \rbrace$, the worst case against 43 is −0.14 − 0.76 + 8.03 − 0.70 = 6.43, from the input (32, 10,
+40, 5). A box holds the product of its set sizes in inputs, but with each set's minimum stored, its test adds only
+four numbers per competitor.
 
 **3. A tree of boxes.** All 16.8 million inputs are split into boxes: by m, by the first position that holds m,
 and by ranges of tokens cut finely near m, where the parts change quickly and the network's mistakes are, and
@@ -144,7 +145,7 @@ They use three further ideas:
 linearity its margin is the average of the margins of pure inputs, each made of the k copies of m and r copies of
 one token a:
 
-$$\mathrm{margin}_j(x) = \frac{1}{r}\sum_{i=1}^{r} P_j(a_i), \qquad P_j(a) = k\,D_j(m) + r\,D_j(a)$$
+$$\mathrm{margin}_j(x) = \frac{1}{r}\sum_{i=1}^{r} P_j(a_i), \qquad P_j(a) = k \cdot D_j(m) + r \cdot D_j(a)$$
 
 So a token a is good when $P_j(a) > 0$ for every competitor j, and every input whose other tokens are all good is
 right. Pure convexity is this alone: about 6,000 pure inputs settle 71.7% of the right inputs, and it misses the
@@ -152,13 +153,13 @@ inputs that contain a bad token.
 
 **5. Symmetry.** The scores depend only on how often each token occurs, $c_t(x)$, not on the order:
 
-$$s_j(x) = \sum_{t=0}^{63} c_t(x)\, M_{j,t}$$
+$$s_j(x) = \sum_{t=0}^{63} c_t(x) \cdot M_{j,t}$$
 
 So one test covers every ordering of an input or a box: the 16.8 million inputs are only 766,480 multisets.
 
 **6. Only neighbours compete.** For given m and k, a competitor j is safe when even its worst case loses:
 
-$$k\,D_j(m) + (4-k)\min_{t<m} D_j(t) > 0$$
+$$k \cdot D_j(m) + (4-k) \cdot \min_{t \lt m} D_j(t) > 0$$
 
 A safe competitor loses on every input of that class and needs no further test. Here only about 3 of the 63
 competitors per m and k are not safe, mostly tokens just above and just below m.
