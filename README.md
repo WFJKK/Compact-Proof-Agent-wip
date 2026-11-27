@@ -91,40 +91,10 @@ lemmas in Lean, which were useful for the proofs.
 
 ##### Evaluation
 
-For each proof: how it works, whether it is a proof idea or only inference optimisation (caching or memorising
-parts of the network's computation instead of explaining it), and whether it is mechanistic (uses how the
-network computes its answer). The three proofs share one argument and differ only in how finely they cut.
-
-- Linearity (all three). The embedding sums the one-hot vectors and there is no nonlinearity, so each logit is a
-  sum of one entry per position of the 64 × 64 table M = ULE, computed once (36,864 operations). This is caching,
-  so inference optimisation, as are the tables of each competitor's minimum on each interval that the checker
-  builds for each m. Both are computed from the weights inside the checker and counted in its length, and the
-  linearity comes from the architecture, not from training.
-- Boxes (all three). For an input with largest token m, the margin against another answer j is a sum of one term
-  per position, D_j(t) = M[m,t] − M[j,t]. Over a box (a range of tokens per position, the largest fixed at m)
-  the smallest margin is the sum of the per-position minima, so one test against the 63 other answers certifies
-  every input in the box. This is a proof idea, not inference optimisation: TreeQ.D covers the 16.8 million
-  inputs with about 243,000 boxes, about 69 inputs per test without running the network on any of them, and this
-  is where its compression to 0.82% of brute force comes from. The cost grows like V³ against brute force's V⁵
-  (proved for Tree.D, and for the other two when the cuts per level stay bounded). It is a standard tool
-  (interval bounds with branch and bound), not new mathematics.
-- Cuts (where they differ). Tree.D cuts each position's range at 1, 2, 4, 8, 16 and 32 below m, the same for every
-  m, by a fixed rule. TreeP.D has its own cuts for each m (128 numbers), TreeQ.D finer ones from a greedy search
-  on the weights (491 numbers). TreeP.D and TreeQ.D add no idea to Tree.D: their plans are fitted to this seed
-  and mark where the margins are tight, not why, so the climb from R = 17.6 to 82.4 is fitting rather than
-  explaining. Whether a plan carries over to another seed has not been tested.
-- Memorising: none found. A language model's reading of the checker found no numbers of the network written
-  into it; the count does not change when the lowest bits of the weights change; the plan (1,539 bits) is too
-  small to hold the weights (26,138 bits); and soundness is proved for every plan, so no plan can make the
-  checker over-count.
-- Mechanistic: partly. Beyond the architecture the proofs use one learned property: the margins are tight only
-  when other tokens are close to m, so the boxes can be coarse far below m and must be fine near it. The plan
-  marks where, but it was found by search, and the proofs do not say why the network outputs the largest token.
-  They also test all 63 other answers in every box and treat reorderings of an input separately.
-- Not built: the agent's candidates c001 and c002 add the symmetry of the input (boxes of multisets, since order
-  does not matter) and check fewer competitors, at an estimated 0.43 and 3.24 million operations; c001's plan was
-  too large, and c002 needs a proof that counts the reorderings, which the agent did not write. Convexity (pure
-  inputs such as (a, a, a, m) bound the others) appears nowhere in the agent's notes.
+While we have given the Pareto frontier above, we now want to evaluate the proofs in more detail. We want to
+understand in detail what the proofs understood about the structure present in these networks and what they
+used. Moreover, we want to distinguish between mere inference optimisation and understanding that is
+"mechanistic".
 
 ### Experiment 2: Attention
 
