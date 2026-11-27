@@ -33,16 +33,21 @@ open-lane-policy-v15, cost-v3, knowledge minimal, the checker run by compiled co
 | [`attn-max4/Checker7.D`](attn-max4/Checker7.D) | agent, round 5, locked | `Candidate.Checker7.D` | 99.99% | 0.00279% | 35,851 |
 
 - The agent's proofs are the submissions of the runs `linear-max4-ptl-1` and `attn-max4-ptl-1`, checked on the
-  run's machine (macOS, seatbelt). The reference proofs were written by us, not by the agent, and checked in the
-  cloud (Linux, Landlock); the agent has never seen them.
+  run's machine (macOS, seatbelt). Their receipts are the service's reply as the run kept it, which adds
+  `receipt_path` (where the service wrote the receipt) and `submission` (its number in the round). The reference
+  proofs were written by us, not by the agent, and checked in the cloud (Linux, Landlock); the agent has never
+  seen them.
 - The two convexity proofs are one checker with two plans. It was built from Ref.D's modules and kept the Lean
   name `Candidate.Ref.D`.
 - Gross et al.'s cubic and sub-cubic proofs on `attn-max4-v64-s0` are to be added.
 
-To check one again, copy its folder somewhere else (the service writes its own files into the folder it is
-given) and, from a clone of Compact-Proof-Checker at eab37d3, submit the copy:
+To check one again, submit its folder from a clone of Compact-Proof-Checker at eab37d3:
 
-    python3 scripts/accept.py submit <the copy> --repo <this repo> --work <a work folder> \
+    python3 scripts/accept.py submit <the folder> --repo <this repo> --work <a work folder> \
         --mode landlock --knowledge minimal
 
-with `--mode seatbelt` on macOS. The new receipt should agree with `receipt.json`.
+with `--mode seatbelt` on macOS. The service only reads the folder; it writes the new receipt to
+`<a work folder>/receipts/`. The new receipt should agree with `receipt.json` in the status, the count, the bill,
+the length and the modules' digests. The times differ, and on another machine also the isolation and the digests
+of the Lean and acceptcheck binaries. Ref.D was checked again this way on 27 November 2026, on the machine that
+first checked it: every field agreed except the times.
