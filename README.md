@@ -67,6 +67,25 @@ the Lean service accepts it.
   Python runs with the network blocked).
 - Inference: not counted (the pipeline does not record how often the agent's Python ran the network).
 
+##### Scores
+
+On seed 0, from the Lean service's receipts. For this network B = 11,257,513,024 and c = 671, and the network
+is right on 16,743,886 inputs.
+
+| Proof | Round | Right inputs certified | Length | B / length | R |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Brute force (the network itself) | | 16,743,886 (100%) | 11,257,513,024 | 1 | 1 |
+| Tree.D | 3 | 15,836,170 (94.6%) | 29,705,220 | 379 | 17.6 |
+| TreeP.D | 4 | 16,520,886 (98.7%) | 69,289,128 | 162 | 51.4 |
+| TreeQ.D, locked | 5 | 16,677,894 (99.6%) | 92,356,844 | 122 | 82.4 |
+
+The run's score is the locked proof's, R = 82.4. Rounds 1 and 2 (discovery, then four general lemmas) produced
+no scored proof.
+
+##### Evaluation
+
+To be written.
+
 ### Experiment 2: Attention
 
 To be written.
